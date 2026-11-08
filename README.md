@@ -1,0 +1,150 @@
+# LiquidScribe
+
+A local-first multimodal note workspace built around the LFM3 model trinity — **Omni 2B** for the live
+conversation, **d1-Omni-2B** as a zero-output-token supervisor, and **LFM3-VL-2B** as the tool-calling
+worker.
+
+Talk, show a slide, and watch the note change. Every edit is routed, grounded to an exact line span,
+generated as XML, verified by the critic, and then applied atomically to a snapshot stack.
+
+```
+npm install
+npm run dev      # http://localhost:5173
+npm run build
+npm run typecheck
+```
+
+## What is in the build
+
+- **Visual context panel** — synthetic operating-review slide by default, with opt-in device camera
+  or screen share preview. d1 ROI overlays and crop previews apply to the synthetic frame; live capture
+  is labelled preview-only. Includes a live waveform, VAD state, and 2 fps metadata.
+- **Live session** — transcript, voice capture (where the browser supports SpeechRecognition),
+  spoken replies (opt-in), a four-command guided demo, and inline worker delegation cards linked to
+  the decision trace.
+- **Note workspace** — line-numbered Markdown document, supervisor target-span highlights, animated
+  diffs, document/source views, a real source editor with commit/discard, and a snapshot history.
+- **Supervisor rail** — the model roster, live routing / grounding / critic state, context budgets for
+  all three views, and clickable snapshots.
+- **Decision trace** — routing probabilities, pruned tool set, grounded span, ROI crop, worker
+  `<think>` + raw XML, critic check matrix, execution diff, and a timing bar.
+- **Execution engine** — real `add_text`, `edit_text`, `remove_text` and `extract_visual_to_note`
+  tools with anchor checks, blast-radius checks, XML round-tripping and undo/redo.
+- **Inputs** — synthetic slide, real camera/screen, typed commands, voice, or the guided demo.
+
+## Runtime honesty
+
+The app talks to **real local LFM3 servers** (llama.cpp, started by
+`~/Documents/Models/lfm3.sh`):
+
+- **Voice ASR** — the mic is captured locally as 16 kHz WAV and transcribed by
+  `LFM3-Omni-2B` (`/v1/audio/transcriptions` on :8083). The browser's
+  SpeechRecognition is not used.
+- **Chat replies** — conversational turns go to `LFM3-Omni-2B`
+  (`/v1/chat/completions`), with the rasterized review slide attached so the
+  model answers from actual pixels.
+- **Routing** — `d1-Omni-2B` classifies every command (action + tool) over
+  `/v1/systemone` in one zero-output-token forward pass, watching the slide.
+- **Worker** — `LFM3-VL-2B` decodes the XML tool call live (ROI crop attached
+  for visual extraction); the parser round-trips its output.
+- **Critic** — deterministic local gates (anchor exactness, blast radius, range
+  bounds) are hard checks; when they pass, `d1-Omni-2B` adds a semantic
+  zero-token verdict.
+- **Grounding** — a deterministic local span search (exact quotes, line
+  numbers, headings, keywords); **execution** is the real in-tab diff engine
+  with anchor checks and undo/redo.
+
+The **Runtime truth** card in the supervisor rail continuously probes every
+endpoint (10 s cadence, refresh button) and labels each surface LIVE,
+FALLBACK or ENGINE. The decision trace records which path each stage took per
+run. If a model server is down, the affected stage falls back to a local
+deterministic layer and the UI says so — nothing silently fakes a model call.
+Stage timings are measured, and context budgets show real prompt-token usage
+when models answer. The visual frame is the fixed synthetic slide rendered to
+pixels; passing a live camera/screen frame into the bridge is still future
+work (plan.md §10).
+
+## Try these
+
+| Say / type | What happens |
+| --- | --- |
+| `Update the Q3 revenue row to $1.45M Final` | d1 grounds line 17, the worker emits `edit_text`, the critic verifies, the table row changes. |
+| `Remove the bullet about Redis` | Destructive safety check, then one exact line removed. |
+| `Pull the LTV/CAC formula from the slide into Revenue` | ROI crop → LaTeX block inserted under section 2. |
+| `What can you see?` | Omni answers from the demo review frame; no mutation. |
+| `Delete that part` | Ambiguity gate: d1 asks which span, with quick reply chips. |
+| `Undo that` | Snapshot rollback bypasses the worker entirely. |
+| `Add a note about the support backlog` | Pinned insertion at the document tail. |
+| `Change the deadline in the second paragraph to Friday` | The critic holds an over-broad replacement; nothing is written. |
+
+Use the **Demo** button in the Live session header to run a four-command guided sequence.
+
+## Keyboard
+
+| Keys | Action |
+| --- | --- |
+| `⌘ / Ctrl K` | Focus the command bar |
+| `Enter` | Send a command |
+| `⌘ / Ctrl Z` | Restore previous snapshot |
+| `⌘ / Ctrl ⇧ Z` | Reapply next snapshot |
+| `⌘ / Ctrl Enter` | Apply a Markdown source draft |
+| `Esc` | Close the trace drawer or help dialog |
+
+## Architecture
+
+```
+src/
+  components/   visual stage, session, note workspace, supervisor rail, trace drawer
+  data/         seed note, synthetic scene, model roster, tool catalog
+  lib/          supervisor heuristics, worker XML, tool engine, markdown parser, speech
+  state/        orchestrator hook, history stack, context accounting
+  styles/       design tokens + application styles
+```
+
+The document execution engine never regenerates the whole file. Each tool call is checked against the
+grounded span and the exact anchor before the line range is spliced. A failed anchor or a critic
+rejection leaves the note untouched. Snapshots are kept in memory for undo/redo; source edits create
+their own snapshots.
+
+## Limits
+
+- The model servers are not started by this repo — start the trinity first:
+  `~/Documents/Models/lfm3.sh omni`, `… vl`, `… d1-omni` (or `all` for the whole family;
+  `./lfm3.sh status` shows what is up). Without them the affected stages run their local
+  deterministic fallbacks and the rail's Runtime truth card shows what is down.
+- Camera/screen capture requires browser permissions and a secure context (localhost works).
+  A live camera or screen feed is a local preview only: model calls still use the rasterized
+  synthetic review frame.
+- Voice capture records locally and is transcribed by the local Omni model; typing always works.
+  Spoken replies use the browser's `speechSynthesis` (presentation only, no inference).
+- Notes live in this browser tab. The app does not upload them and does not persist them across
+  reloads in this demo build.
+- The synthetic visual scene is a fixed prop: revenue table, north-star formula, quarterly bars and a
+  finance sticky note.
+- The runtime rail shows the default visual worker (`LFM3-VL-2B`). The optional 256K
+  `LFM3-1.7B` worker swap for 64K+ text refactors is specified in `plan.md` but not wired into this
+  simulated build.
+- Below 820px the layout collapses to the note workspace. The Markdown editor remains usable, but
+  the live session, command bar and runtime rail are desktop/tablet affordances in this build.
+
+## Verification
+
+`npm run typecheck` and `npm run build` pass. On 2026-11-08 the live bridge was exercised in
+headless Chrome (CDP-driven) against the running trinity servers:
+
+- Conversational turn answered by Omni-2B from the rasterized slide (correct table values,
+  formula, sticky note) — the canned-template reply did not appear.
+- "Update the Q3 revenue row to $1.45M Final": d1 routed live (`file mutation` P 0.60),
+  grounding repair re-picked `edit_text` after d1's `add_text` pick failed to ground, VL-2B
+  decoded the XML, d1 critic verified, the row changed, and Ctrl+Z restored it.
+- Voice: a WAV fed through Chrome's fake microphone was captured (16 kHz), auto-stopped on
+  silence, transcribed by Omni (`/v1/audio/transcriptions`) and drove the same pipeline to a
+  committed edit, recorded as `VOICE · 0:20` in the transcript.
+- Runtime truth card probed 3/3 endpoints LIVE; a fresh page load recorded zero console
+  errors. Killing a server flips the card to FALLBACK and the affected stage uses its local
+  deterministic path.
+
+See [`plan.md`](./plan.md) for the full product and architecture plan.
+
+The workspace is optimised for a desktop viewport around 1280–1600px wide. Narrower viewports collapse
+the supervisor rail first, then the visual/session column; the note editor stays interactive.

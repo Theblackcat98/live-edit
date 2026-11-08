@@ -1,0 +1,281 @@
+/* ── Responsive adjustments ────────────────────────────────────────────── */
+
+@media (max-width: 1350px) {
+  :root {
+    --left-column: 388px;
+    --right-column: 294px;
+  }
+
+  .note-footer-snapshot {
+    display: none;
+  }
+
+  .note-save-state {
+    display: none;
+  }
+
+  .workspace-file .eyebrow {
+    display: none;
+  }
+
+  .trinity-label {
+    display: none;
+  }
+}
+
+@media (max-width: 1200px) {
+  :root {
+    --left-column: 374px;
+    --right-column: 280px;
+  }
+
+  .note-format-chip {
+    display: none;
+  }
+
+  .trinity-summary {
+    display: none;
+  }
+}
+
+@media (max-width: 1120px) {
+  :root {
+    --right-column: 0px;
+  }
+
+  .right-column {
+    display: none;
+  }
+
+  .source-toolbar-meta {
+    display: none;
+  }
+}
+
+@media (min-width: 821px) and (max-width: 1120px) {
+  .workspace-grid {
+    grid-template-columns: var(--left-column) minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 900px) {
+  :root {
+    --left-column: 344px;
+    --app-pad: 10px;
+    --gap: 10px;
+  }
+
+  .workspace-file-name {
+    font-size: 11px;
+  }
+
+  .local-status {
+    display: none;
+  }
+
+  .live-clock {
+    display: none;
+  }
+
+  .topbar {
+    gap: 8px;
+    padding: 0 10px;
+  }
+
+  .topbar-actions {
+    margin-left: auto;
+  }
+
+  .note-header {
+    gap: 8px;
+  }
+
+  .view-tab {
+    padding: 0 6px;
+  }
+
+  .view-tab span:not(.view-dirty-dot) {
+    display: none;
+  }
+
+  .view-tab {
+    width: 25px;
+    justify-content: center;
+  }
+
+  .doc-paper {
+    padding: 22px 24px 24px 20px;
+  }
+
+  .note-footer-stat:nth-of-type(2),
+  .note-footer-sep:nth-of-type(2) {
+    display: none;
+  }
+
+  .session-compose {
+    padding: 7px 9px 8px;
+  }
+
+  .composer-shortcut {
+    display: none;
+  }
+}
+
+@media (max-width: 780px) {
+  .shell {
+    height: auto;
+    min-height: 100dvh;
+    overflow: auto;
+    grid-template-rows: var(--topbar-height) minmax(0, 1fr);
+  }
+
+  .workspace-grid {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 8px;
+  }
+
+  .left-column {
+    display: none;
+  }
+
+  .center-column {
+    min-height: 78vh;
+  }
+
+  .statusbar {
+    display: none;
+  }
+
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+  }
+
+  .workspace-file,
+  .topbar-divider {
+    display: none;
+  }
+
+  .brand {
+    flex: 1;
+  }
+
+  .doc-paper {
+    max-width: 100%;
+  }
+
+  .note-header-actions {
+    gap: 3px;
+  }
+
+  .note-header-divider {
+    display: none;
+  }
+
+  .note-history-buttons .icon-button {
+    width: 24px;
+  }
+}
+
+@media (max-width: 560px) {
+  .trace-overlay {
+    padding: 6px;
+  }
+
+  .trace-drawer {
+    width: calc(100vw - 12px);
+    border-radius: var(--radius-card);
+  }
+
+  .trace-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .trace-query-row {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+
+  .trace-checks .trace-check {
+    grid-template-columns: 15px 100px minmax(0, 1fr);
+  }
+
+  .trace-bbox-card {
+    flex-direction: column;
+  }
+
+  .trace-bbox-preview {
+    width: 100%;
+  }
+
+  .about-shortcuts {
+    grid-template-columns: 1fr;
+  }
+
+  .about-shortcut {
+    min-height: 24px;
+  }
+
+  .toast {
+    left: 10px;
+    right: 10px;
+    max-width: none;
+    transform: none;
+  }
+
+  .note-title-line h2 {
+    max-width: 150px;
+  }
+
+  .note-footer {
+    padding: 0 10px;
+    gap: 7px;
+  }
+
+  .doc-paper {
+    padding: 18px 16px 20px 14px;
+  }
+
+  .doc-block,
+  .doc-hr {
+    grid-template-columns: 19px minmax(0, 1fr);
+    column-gap: 7px;
+  }
+
+  .doc-table-row {
+    grid-template-columns: 22px repeat(var(--table-columns, 3), minmax(0, 1fr));
+  }
+
+  .doc-h1 h1 {
+    font-size: 23px;
+  }
+
+  .doc-h2 .doc-heading-body {
+    gap: 6px;
+  }
+
+  .doc-h2 h2 {
+    font-size: 15.5px;
+  }
+
+  .doc-table-cell {
+    padding: 6px;
+    font-size: 10px;
+  }
+}
+
+/* Touch devices should not retain button hover backgrounds. */
+@media (hover: none) {
+  .icon-button:hover,
+  .button:hover,
+  .source-tab:hover,
+  .message-action:hover,
+  .suggestion-chip:hover,
+  .snapshot-row:hover,
+  .model-row:hover,
+  .supervisor-trace-button:hover {
+    background: inherit;
+    color: inherit;
+  }
+}
