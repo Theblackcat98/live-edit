@@ -103,10 +103,15 @@ export default function App() {
             micOn={workspace.micOn}
             asrBusy={workspace.asrBusy}
             demoRunning={workspace.demoRunning}
+            speaking={workspace.speaking}
+            ttsBusy={workspace.ttsBusy}
+            suggestions={workspace.suggestions}
             commandInput={workspace.commandInput}
             onInputChange={workspace.setCommandInput}
             onSubmit={handleSubmit}
             onToggleMic={workspace.toggleMic}
+            onStopSpeech={workspace.stopSpeech}
+            onResetChat={workspace.resetChat}
             onRunDemo={() => void workspace.runDemo()}
             onOpenTrace={handleOpenTrace}
           />
@@ -164,6 +169,8 @@ export default function App() {
       <TraceDrawer
         open={workspace.traceOpen}
         trace={workspace.selectedTrace}
+        runs={workspace.runs}
+        onSelectRun={(id) => workspace.openTrace(id)}
         onClose={workspace.closeTrace}
       />
 

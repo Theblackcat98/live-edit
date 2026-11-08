@@ -201,15 +201,20 @@ export function speechSynthesisAvailable(): boolean {
   return typeof window !== 'undefined' && 'speechSynthesis' in window
 }
 
-export function speak(text: string, handlers?: { onStart?: () => void; onEnd?: () => void }): void {
-  if (!speechSynthesisAvailable()) return
-  const clean = text
+/** Strip markup so both TTS paths (model + browser) speak clean prose. */
+export function cleanSpeechText(text: string): string {
+  return text
     .replace(/```[\s\S]*?```/g, ' code block ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/[*_#>`]/g, '')
     .replace(/\[(.*?)\]\(.*?\)/g, '$1')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+export function speak(text: string, handlers?: { onStart?: () => void; onEnd?: () => void }): void {
+  if (!speechSynthesisAvailable()) return
+  const clean = cleanSpeechText(text)
   if (!clean) return
   window.speechSynthesis.cancel()
   const utterance = new SpeechSynthesisUtterance(clean)

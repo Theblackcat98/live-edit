@@ -6,14 +6,15 @@ import {
   LoaderCircle,
   Mic,
   MicOff,
+  MessageSquarePlus,
   MinusCircle,
   Play,
   ScanLine,
   Square,
+  StopCircle,
   Table2,
 } from 'lucide-react'
-import type { Message } from '../types'
-import { SUGGESTIONS } from '../data/note'
+import type { Message, Suggestion } from '../types'
 import { cx, formatElapsed } from '../lib/utils'
 import { MessageBubble } from './MessageBubble'
 
@@ -24,10 +25,15 @@ interface SessionPanelProps {
   micOn: boolean
   asrBusy: boolean
   demoRunning: boolean
+  speaking: boolean
+  ttsBusy: boolean
+  suggestions: Suggestion[]
   commandInput: string
   onInputChange: (value: string) => void
   onSubmit: (command: string) => void
   onToggleMic: () => void
+  onStopSpeech: () => void
+  onResetChat: () => void
   onRunDemo: () => void
   onOpenTrace: (runId?: string) => void
 }
@@ -46,10 +52,15 @@ export function SessionPanel({
   micOn,
   asrBusy,
   demoRunning,
+  speaking,
+  ttsBusy,
+  suggestions,
   commandInput,
   onInputChange,
   onSubmit,
   onToggleMic,
+  onStopSpeech,
+  onResetChat,
   onRunDemo,
   onOpenTrace,
 }: SessionPanelProps) {
@@ -101,12 +112,32 @@ export function SessionPanel({
         <div className="card-header-spacer" />
         <button
           type="button"
+          className={cx('button button-quiet session-demo', speaking || ttsBusy ? 'is-running' : '')}
+          onClick={onStopSpeech}
+          disabled={!speaking && !ttsBusy}
+          title={ttsBusy ? 'Stop generating audio' : speaking ? 'Stop audio playback' : 'Nothing playing'}
+        >
+          <StopCircle size={11} />
+          Stop audio
+        </button>
+        <button
+          type="button"
           className={cx('button button-quiet session-demo', demoRunning && 'is-running')}
           onClick={onRunDemo}
           title={demoRunning ? 'Stop the guided demo' : 'Run a guided four-command demo'}
         >
           {demoRunning ? <Square size={10} /> : <Play size={11} />}
           {demoRunning ? 'Stop' : 'Demo'}
+        </button>
+        <button
+          type="button"
+          className="button button-quiet session-demo"
+          onClick={onResetChat}
+          disabled={busy}
+          title="Clear the conversation and decision traces (the note and snapshots stay)"
+        >
+          <MessageSquarePlus size={11} />
+          New chat
         </button>
       </header>
 
@@ -124,16 +155,20 @@ export function SessionPanel({
 
       <div className="session-compose">
         <div className="suggestion-row" aria-label="Suggested commands">
-          {SUGGESTIONS.slice(0, 3).map((suggestion) => {
-            const Icon = SUGGESTION_ICONS[suggestion.icon as keyof typeof SUGGESTION_ICONS]
+          {suggestions.slice(0, 3).map((suggestion) => {
+            const Icon = SUGGESTION_ICONS[suggestion.icon]
             return (
               <button
                 key={suggestion.label}
                 type="button"
                 className="suggestion-chip"
-                onClick={() => onSubmit(suggestion.command)}
+                onClick={() =>
+                  suggestion.mode === 'draft'
+                    ? onInputChange(suggestion.command)
+                    : onSubmit(suggestion.command)
+                }
                 disabled={busy}
-                title={suggestion.command}
+                title={suggestion.mode === 'draft' ? suggestion.command : `Send: ${suggestion.command}`}
               >
                 <Icon size={11} />
                 {suggestion.label}

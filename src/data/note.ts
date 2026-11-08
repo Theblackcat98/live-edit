@@ -45,29 +45,6 @@ The Q3 figure is waiting on the final enterprise invoice reconciliation. Finance
 - Complete the SSO audit with IT.
 `
 
-export const SUGGESTIONS = [
-  {
-    label: 'Update Q3 revenue',
-    command: 'Update the Q3 revenue row to $1.45M Final',
-    icon: 'table',
-  },
-  {
-    label: 'Remove Redis bullet',
-    command: 'Remove the bullet about Redis',
-    icon: 'remove',
-  },
-  {
-    label: 'Pull the slide formula',
-    command: 'Pull the LTV/CAC formula from the slide into Revenue',
-    icon: 'scan',
-  },
-  {
-    label: 'Ask what Omni sees',
-    command: 'What can you see?',
-    icon: 'eye',
-  },
-]
-
 export const DEMO_SEQUENCE = [
   { command: 'Update the Q3 revenue row to $1.45M Final', source: 'demo' as const },
   { command: 'What can you see?', source: 'demo' as const },

@@ -16,6 +16,7 @@ import type {
   SpanTarget,
   StageId,
   StageState,
+  Suggestion,
   Toast,
   ToolName,
   Trace,
@@ -23,7 +24,6 @@ import type {
   WorkerCall,
 } from '../types'
 import { DEMO_SEQUENCE, INITIAL_NOTE, NOTE_PATH, NOTE_TITLE } from '../data/note'
-import { CONVERSATIONAL_SCENE_DESCRIPTION } from '../data/scene'
 import { TOOL_BY_NAME } from '../data/tools'
 import {
   buildClarification,
@@ -37,13 +37,15 @@ import {
 import { buildWorkerCall, buildWorkerMessages, renderToolCallXml } from '../lib/worker'
 import { executeTool } from '../lib/tools'
 import { parseToolCallXml, type ParsedToolCall } from '../lib/xml'
-import { speak, stopSpeaking, VoiceRecorder } from '../lib/speech'
+import { speak, stopSpeaking, cleanSpeechText, VoiceRecorder } from '../lib/speech'
 import { sceneFrame } from '../lib/frame'
+import { buildSuggestions } from '../lib/suggestions'
 import {
   chatComplete,
   d1Decide,
   endpointUp,
   probeRuntime,
+  synthesizeSpeech,
   transcribeAudio,
   type ChatMessage,
 } from '../lib/bridge'
@@ -280,16 +282,17 @@ function buildChatMessages(
   imageDataUrl: string | null,
 ): ChatMessage[] {
   const system = [
-    'You are Omni, the live interface of a local-first multimodal note workspace.',
-    'You watch the operating-review slide and the note the user is editing.',
-    'Reply conversationally in one to three sentences, grounded in what you actually see or the note content.',
-    'This is a conversational turn only: never claim to have edited the note. Edits run through a separate grounded pipeline.',
+    'You are Omni — the conversational interface of a local multimodal note workspace.',
+    'The user talks to you; a separate worker pipeline performs all file edits, so never claim to have edited or promise to edit anything in this chat.',
+    'Style: brief and natural, one or two sentences unless more is genuinely needed.',
+    'Greetings, thanks and small talk: answer like a person — "Hey!", "Anytime." — and do NOT describe the note, the slide, or any statuses unless the user explicitly asks about them.',
+    'Reference the note or the attached slide only when the question is actually about them. When asked what you can see, describe the slide image.',
   ].join(' ')
 
   const textParts = [
     imageDataUrl
       ? 'Attached is the current operating-review slide frame.'
-      : `Scene: ${CONVERSATIONAL_SCENE_DESCRIPTION}`,
+      : 'No slide frame is attached for this turn.',
     `Current note (${NOTE_PATH}):\n${truncate(note, 3600)}`,
     lastRun
       ? `Last completed run: "${lastRun.command}" → ${lastRun.status}${
@@ -401,6 +404,10 @@ export interface WorkspaceApi {
   asrBusy: boolean
   getMicLevel: () => number
   speaking: boolean
+  ttsBusy: boolean
+  stopSpeech: () => void
+  resetChat: () => void
+  suggestions: Suggestion[]
   activeModel: ActiveModel
   elapsedSeconds: number
   nowTick: number
@@ -455,6 +462,7 @@ export function useWorkspace(): WorkspaceApi {
   const [sessionStart] = useState(() => Date.now())
   const [runtimeHealth, setRuntimeHealth] = useState<RuntimeHealth | null>(null)
   const [asrBusy, setAsrBusy] = useState(false)
+  const [ttsBusy, setTtsBusy] = useState(false)
 
   const noteRef = useRef(note)
   const historyRef = useRef(history)
@@ -476,6 +484,9 @@ export function useWorkspace(): WorkspaceApi {
   const healthRef = useRef<RuntimeHealth | null>(null)
   const asrSourceRef = useRef<RuntimeSource>('fallback')
   const lastVoiceSecondsRef = useRef<number | undefined>(undefined)
+  const ttsAudioRef = useRef<HTMLAudioElement | null>(null)
+  const ttsAbortRef = useRef<AbortController | null>(null)
+  const ttsUrlRef = useRef<string | null>(null)
 
   useEffect(() => {
     noteRef.current = note
@@ -681,19 +692,96 @@ export function useWorkspace(): WorkspaceApi {
     [addMessage, commitNote, notify],
   )
 
-  const speakReply = useCallback((text: string) => {
-    if (!speakerOnRef.current) return
+  const stopSpeech = useCallback(() => {
     speechTokenRef.current += 1
-    const token = speechTokenRef.current
-    speak(text, {
-      onStart: () => {
-        if (speechTokenRef.current === token) setSpeaking(true)
-      },
-      onEnd: () => {
-        if (speechTokenRef.current === token) setSpeaking(false)
-      },
-    })
+    ttsAbortRef.current?.abort()
+    ttsAbortRef.current = null
+    if (ttsAudioRef.current) {
+      ttsAudioRef.current.pause()
+      ttsAudioRef.current = null
+    }
+    if (ttsUrlRef.current) {
+      URL.revokeObjectURL(ttsUrlRef.current)
+      ttsUrlRef.current = null
+    }
+    stopSpeaking()
+    setSpeaking(false)
+    setTtsBusy(false)
   }, [])
+
+  const speakReply = useCallback(
+    (text: string) => {
+      if (!speakerOnRef.current) return
+      speechTokenRef.current += 1
+      const token = speechTokenRef.current
+      const clean = cleanSpeechText(text)
+      if (!clean) return
+
+      // Live path: the Omni model speaks its own reply over /tts (24 kHz WAV).
+      if (endpointUp(healthRef.current, 'omni')) {
+        setTtsBusy(true)
+        const controller = new AbortController()
+        ttsAbortRef.current = controller
+        void (async () => {
+          try {
+            const blob = await synthesizeSpeech(clean, { signal: controller.signal })
+            if (speechTokenRef.current !== token) return
+            const url = URL.createObjectURL(blob)
+            ttsUrlRef.current = url
+            const audio = new Audio(url)
+            ttsAudioRef.current = audio
+            audio.onended = () => {
+              if (speechTokenRef.current !== token) return
+              setSpeaking(false)
+              URL.revokeObjectURL(url)
+              if (ttsUrlRef.current === url) ttsUrlRef.current = null
+              ttsAudioRef.current = null
+            }
+            audio.onerror = () => {
+              if (speechTokenRef.current !== token) return
+              setSpeaking(false)
+              // Model audio failed mid-playback — finish with the browser voice.
+              speak(clean, {
+                onStart: () => {
+                  if (speechTokenRef.current === token) setSpeaking(true)
+                },
+                onEnd: () => {
+                  if (speechTokenRef.current === token) setSpeaking(false)
+                },
+              })
+            }
+            setSpeaking(true)
+            await audio.play()
+          } catch (error) {
+            if (controller.signal.aborted || speechTokenRef.current !== token) return
+            // TTS request failed — fall back to the browser voice.
+            speak(clean, {
+              onStart: () => {
+                if (speechTokenRef.current === token) setSpeaking(true)
+              },
+              onEnd: () => {
+                if (speechTokenRef.current === token) setSpeaking(false)
+              },
+            })
+          } finally {
+            if (speechTokenRef.current === token) setTtsBusy(false)
+          }
+        })()
+        return
+      }
+
+      // Fallback: browser speechSynthesis.
+      speak(clean, {
+        onStart: () => {
+          if (speechTokenRef.current === token) setSpeaking(true)
+        },
+        onEnd: () => {
+          if (speechTokenRef.current === token) setSpeaking(false)
+        },
+      })
+    },
+    [],
+  )
 
   const toggleSpeaker = useCallback(() => {
     setSpeakerOn((previous) => {
@@ -916,10 +1004,15 @@ export function useWorkspace(): WorkspaceApi {
             }
           : null
         let reply: string | null = null
-        // Live path: LFM3-Omni-2B over /v1/chat/completions, watching the slide.
+        // Live path: LFM3-Omni-2B over /v1/chat/completions. The slide frame is
+        // attached only for visual-relevant turns — small talk stays fast.
         if (endpointUp(healthRef.current, 'omni')) {
           try {
-            const frame = await sceneFrame('full').catch(() => null)
+            const wantsVisual =
+              /\b(see|look|slide|screen|camera|show|image|frame|describe|chart|table|formula|sticky|whiteboard|visual|read)\b/i.test(
+                command,
+              )
+            const frame = wantsVisual ? await sceneFrame('full').catch(() => null) : null
             const completion = await chatComplete(
               'omni',
               buildChatMessages(command, noteAtStart, lastRun, frame),
@@ -1401,6 +1494,33 @@ export function useWorkspace(): WorkspaceApi {
 
   const getMicLevel = useCallback(() => recorderRef.current?.getLevel() ?? 0, [])
 
+  const resetChat = useCallback(() => {
+    if (busyRef.current) {
+      notify(
+        'Worker is busy',
+        'Wait for the current verified call to finish before starting a new chat.',
+        'neutral',
+      )
+      return
+    }
+    stopSpeech()
+    stopMic()
+    setMessages(initialMessages())
+    runsRef.current = []
+    setRuns([])
+    setSelectedTraceId(null)
+    setTrace(null)
+    setStage('idle')
+    setStageStates({ A: 'idle', B: 'idle', C: 'idle' })
+    setFlowModel(null)
+    setCommandInput('')
+    notify(
+      'New chat',
+      'The conversation and decision traces were cleared. The note and its snapshots stay.',
+      'success',
+    )
+  }, [notify, stopMic, stopSpeech])
+
   const openTrace = useCallback(
     (id?: string) => {
       setSelectedTraceId(id ?? traceRef.current?.id ?? null)
@@ -1417,6 +1537,8 @@ export function useWorkspace(): WorkspaceApi {
     }
     return trace
   }, [runs, selectedTraceId, trace])
+
+  const suggestions = useMemo(() => buildSuggestions(note), [note])
 
   const runDemo = useCallback(async () => {
     if (demoRunningRef.current) {
@@ -1446,6 +1568,7 @@ export function useWorkspace(): WorkspaceApi {
     return () => {
       recorderRef.current?.abort()
       recorderRef.current = null
+      ttsAbortRef.current?.abort()
       stopSpeaking()
       if (idleTimerRef.current) window.clearTimeout(idleTimerRef.current)
       if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current)
@@ -1486,6 +1609,10 @@ export function useWorkspace(): WorkspaceApi {
     asrBusy,
     getMicLevel,
     speaking,
+    ttsBusy,
+    stopSpeech,
+    resetChat,
+    suggestions,
     activeModel,
     elapsedSeconds,
     nowTick,

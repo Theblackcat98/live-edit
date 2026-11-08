@@ -946,3 +946,65 @@
   font-size: 10px;
   line-height: 1.55;
 }
+
+/* --- run history strip --- */
+.trace-run-strip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  margin-bottom: 4px;
+  scrollbar-width: thin;
+}
+
+.trace-run-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.25));
+  background: transparent;
+  color: var(--muted, #6b7686);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.trace-run-chip:hover {
+  background: rgba(128, 128, 128, 0.08);
+}
+
+.trace-run-chip.is-active {
+  border-color: var(--accent, #5a6f8f);
+  color: var(--fg, inherit);
+  background: color-mix(in srgb, var(--accent, #5a6f8f) 12%, transparent);
+}
+
+.trace-run-status {
+  font-size: 9px;
+  letter-spacing: 0.4px;
+}
+
+.trace-run-status.st-verified,
+.trace-run-status.st-conversational {
+  color: var(--success, #3f8f6f);
+}
+
+.trace-run-status.st-rejected,
+.trace-run-status.st-failed {
+  color: var(--error, #c0503c);
+}
+
+.trace-run-status.st-clarify {
+  color: var(--warning, #b0761e);
+}
+
+.trace-run-status.st-running {
+  color: var(--accent, #5a6f8f);
+}
+
+.trace-run-clock {
+  color: var(--muted, #6b7686);
+  font-size: 9.5px;
+}

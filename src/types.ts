@@ -164,6 +164,16 @@ export interface MessageAction {
   command: string
 }
 
+export type SuggestionIcon = 'table' | 'remove' | 'scan' | 'eye'
+
+export interface Suggestion {
+  label: string
+  command: string
+  icon: SuggestionIcon
+  /** 'submit' sends the command; 'draft' fills the composer for the user to finish. */
+  mode: 'submit' | 'draft'
+}
+
 export interface DelegationInfo {
   runId: string
   tool: ToolName

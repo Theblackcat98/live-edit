@@ -217,6 +217,28 @@ export async function transcribeAudio(blob: Blob): Promise<TranscriptResult> {
   }
 }
 
+// --- TTS (Omni) --------------------------------------------------------------
+
+export async function synthesizeSpeech(
+  text: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<Blob> {
+  const spec = ENDPOINTS.find((candidate) => candidate.id === 'omni')
+  if (!spec) throw new BridgeError('Omni endpoint missing')
+  const response = await fetch(`http://127.0.0.1:${spec.port}/tts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ input: text, response_format: 'wav' }),
+    signal: options.signal,
+  })
+  if (!response.ok) {
+    throw new BridgeError(`TTS failed: HTTP ${response.status}`)
+  }
+  const blob = await response.blob()
+  if (!blob.size) throw new BridgeError('TTS returned empty audio')
+  return blob
+}
+
 // --- d1 systemone (supervisor) ----------------------------------------------
 
 export type D1Question =

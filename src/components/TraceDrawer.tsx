@@ -22,6 +22,8 @@ import { SceneCrop } from './SceneCrop'
 interface TraceDrawerProps {
   open: boolean
   trace: Trace | null
+  runs: Trace[]
+  onSelectRun: (id: string) => void
   onClose: () => void
 }
 
@@ -122,7 +124,7 @@ function XmlView({ xml }: { xml: string }) {
   )
 }
 
-export function TraceDrawer({ open, trace, onClose }: TraceDrawerProps) {
+export function TraceDrawer({ open, trace, runs, onSelectRun, onClose }: TraceDrawerProps) {
   const [copied, setCopied] = useState(false)
   const [showNoteView, setShowNoteView] = useState(false)
 
@@ -244,6 +246,25 @@ export function TraceDrawer({ open, trace, onClose }: TraceDrawerProps) {
           </div>
         ) : (
           <div className="trace-scroll">
+            {runs.length > 1 && (
+              <div className="trace-run-strip" role="tablist" aria-label="Run history">
+                {runs.map((run) => (
+                  <button
+                    key={run.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={run.id === trace.id}
+                    className={cx('trace-run-chip mono', run.id === trace.id && 'is-active')}
+                    onClick={() => onSelectRun(run.id)}
+                    title={`${clockOf(run.at)} · ${run.status}`}
+                  >
+                    <span>#{run.id.slice(-4).toUpperCase()}</span>
+                    <span className={cx('trace-run-status', `st-${run.status}`)}>{run.status}</span>
+                    <span className="trace-run-clock">{clockOf(run.at)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="trace-summary-grid">
               <div className="trace-summary-cell">
                 <span className="mono">action</span>
