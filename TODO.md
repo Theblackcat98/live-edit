@@ -1,32 +1,33 @@
 # TODOs
 
-Remaining work, newest context first. The app is functional: live trinity (Omni-2B
-chat/ASR/TTS on :8083, VL-2B worker on :8081, d1-Omni-2B supervisor on :8085), honest
-Runtime truth panel, voice capture → Omni ASR → grounded pipeline.
+The app is functional end to end: live trinity plus the 1.7B long-context text
+worker (Omni-2B chat/ASR/TTS on :8083, VL-2B worker on :8081, d1-Omni-2B
+supervisor on :8085, LFM3-1.7B on :8080), streaming chat replies with multi-turn
+memory and barge-in, d1 typed grounding, persistent workspace, rejected-trace
+JSONL export, camera/screen frames into the bridge, "New note" affordance.
+Milestone landed as commit b1c76ec.
 
-## Verification (needs a human)
+## Verification (needs a human — real hardware ears/voice)
 
 - [ ] Real-mic pass: speak a command, confirm auto-stop on pause, Omni transcription
       quality with a real voice (espeak test heard "rose" for "row").
 - [ ] Real-speaker pass: model TTS audibility, stop button mid-sentence, speaker toggle.
-- [ ] Trace run strip: browse >2 runs after a real session.
 
-## Functionality
+## Ops notes
 
-- [ ] Stream Omni chat replies (currently one blocking POST; first token lands after full
-      generation — short replies are ~1–4 s, visual turns longer).
-- [ ] Multi-turn dialogue memory: only the last run is injected; Omni does not see prior
-      assistant turns. Add a rolling conversation window to `buildChatMessages`.
-- [ ] Barge-in: stop spoken audio automatically when the user starts a new command.
-- [ ] "New note" affordance: start from a blank document (New chat already exists; the
-      note itself is editable via the source editor but there is no blank-slate button).
-- [ ] Camera/screen frames into the bridge (plan.md §10 step 3): attach real frames
-      instead of the rasterized synthetic slide when device/screen mode is active.
-- [ ] 256K `LFM3-1.7B` worker swap for 64K+ text refactors (plan.md §Limits).
-- [ ] d1 typed grounding: when the deterministic span search returns competing
-      candidates, let d1 choose between them over `/v1/systemone`.
-- [ ] Persistent workspace storage across reloads (plan.md: IndexedDB or local store).
-- [ ] Log rejected critic traces for the domain LoRA pass (plan.md §10 step 5).
+- Four model servers run: omni :8083, vl :8081, d1-omni :8085 (started outside the
+  family script — no pid files, stdout on a pty; `./lfm3.sh stop` will NOT manage
+  them) and text :8080 (family convention, pid in `~/Documents/Models/logs/lfm3/text.pid`).
+  If the box reboots, restart vl/omni/d1 via `./lfm3.sh vl|omni|d1-omni` or your own
+  process manager.
+- llama.cpp servers run `--reasoning on`; per-request
+  `chat_template_kwargs: {"enable_thinking": false}` is what the VL tool-call turn
+  uses — keep that if worker prompts change (measured: thinking-on never closed
+  `<think>` at any budget).
+- The Vite dev server occasionally serves stale transforms after external/rapid
+  file writes; `touch` the edited files or restart `npm run dev`.
+- The 1.7B swap decodes ~9–14 s at a 3000-token budget on fat notes — expected,
+  not a hang.
 
 ## Known rough edges
 
