@@ -6,12 +6,15 @@ import type {
   CriticResult,
   D1Answer,
   ExecutionDiff,
+  FrameSource,
   Message,
   PipelineStage,
+  ResolvedFrame,
   RouteDecision,
   RunStatus,
   RuntimeHealth,
   RuntimeSource,
+  RejectedTraceRecord,
   Snapshot,
   SpanTarget,
   StageId,
@@ -30,6 +33,8 @@ import {
   buildPlan,
   conversationalReply,
   critique,
+  resolveGroundingSpan,
+  ROUTE_QUESTIONS,
   routeCommand,
   tokenViewForWorker,
   type SupervisorPlan,
@@ -38,16 +43,19 @@ import { buildWorkerCall, buildWorkerMessages, renderToolCallXml } from '../lib/
 import { executeTool } from '../lib/tools'
 import { parseToolCallXml, type ParsedToolCall } from '../lib/xml'
 import { speak, stopSpeaking, cleanSpeechText, VoiceRecorder } from '../lib/speech'
-import { sceneFrame } from '../lib/frame'
+import { resolveSceneFrame } from '../lib/frame'
 import { buildSuggestions } from '../lib/suggestions'
+import { loadWorkspaceState, saveWorkspaceState, type PersistedWorkspace } from '../lib/storage'
 import {
   chatComplete,
+  chatCompleteStream,
   d1Decide,
   endpointUp,
   probeRuntime,
   synthesizeSpeech,
   transcribeAudio,
   type ChatMessage,
+  type ChatOptions,
 } from '../lib/bridge'
 import { clamp, estimateTokens, makeId, sleep, truncate } from '../lib/utils'
 
@@ -210,31 +218,6 @@ function contextAfterMutation(
 const ACTION_CLASSES: ActionClass[] = ['conversational_only', 'file_mutation', 'ambiguous_request']
 const ROUTE_TOOLS: ToolName[] = ['edit_text', 'remove_text', 'add_text', 'extract_visual_to_note']
 
-const ROUTE_QUESTIONS = {
-  action: {
-    type: 'choice' as const,
-    instructions:
-      'Classify what the speaker wants relative to the note file and the attached slide.',
-    criteria: {
-      conversational_only:
-        'a question, status request, greeting or small talk — the note file must not change',
-      file_mutation: 'an instruction to change the note file (add, edit, remove or extract content)',
-      ambiguous_request:
-        'a mutation verb, but the target object is missing or refers vaguely to "that" or "it"',
-    },
-  },
-  tool: {
-    type: 'choice' as const,
-    instructions: 'If the note file should change, which tool fits the command best?',
-    criteria: {
-      edit_text: 'replace existing lines with new text',
-      remove_text: 'delete lines, a bullet or a table row',
-      add_text: 'insert new content at a position or under a heading',
-      extract_visual_to_note: 'read the visible slide and copy its content into the note',
-    },
-  },
-}
-
 const CRITIC_QUESTIONS = {
   sound: {
     type: 'noul' as const,
@@ -275,24 +258,74 @@ export function routeFromAnswers(answers: Record<string, D1Answer>): RouteDecisi
   }
 }
 
+/**
+ * Recent (user command, assistant reply) pairs replayed as chat turns.
+ * `reply` is absent when the workspace answered with a pipeline template
+ * (clarify/ack): that canned wording is not conversation, and a small model
+ * imitates it verbatim on later turns instead of answering, so only the
+ * command is replayed for those turns.
+ */
+interface ChatTurn {
+  command: string
+  reply?: string
+}
+
+/** How many prior turns the conversational model sees. */
+const CHAT_MEMORY_TURNS = 6
+
+/** Workspace-authored replies that are pipeline templates, not conversation. */
+const TEMPLATE_REPLY_KINDS: Array<NonNullable<Message['kind']>> = ['clarify', 'ack']
+
+/**
+ * Pair each user message with the last assistant reply before the next user
+ * message. A trailing user turn (the command being submitted) has no reply yet
+ * and is therefore never replayed as history.
+ */
+function conversationTurns(messages: Message[], limit: number): ChatTurn[] {
+  const turns: ChatTurn[] = []
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index]
+    if (message.role !== 'user' || !message.text.trim()) continue
+    let reply: Message | null = null
+    for (let cursor = index + 1; cursor < messages.length; cursor += 1) {
+      const candidate = messages[cursor]
+      if (candidate.role === 'user') break
+      if (candidate.role === 'assistant' && candidate.text.trim()) reply = candidate
+    }
+    const templated = reply?.kind ? TEMPLATE_REPLY_KINDS.includes(reply.kind) : false
+    turns.push({
+      command: message.text,
+      reply: reply && !templated ? reply.text : undefined,
+    })
+  }
+  return turns.slice(-limit)
+}
+
+const FRAME_DESCRIPTIONS: Record<FrameSource, string> = {
+  'live-camera': 'Attached is the current live frame from the device camera.',
+  'live-screen': 'Attached is the current live frame from the screen share.',
+  'synthetic-slide':
+    'Attached is the synthetic operating-review slide frame (no live capture is attached).',
+  none: 'No frame is attached for this turn.',
+}
+
 function buildChatMessages(
   command: string,
   note: string,
   lastRun: { command: string; status: string; executionMessage?: string } | null,
-  imageDataUrl: string | null,
+  turns: ChatTurn[],
+  frame: ResolvedFrame | null,
 ): ChatMessage[] {
   const system = [
     'You are Omni — the conversational interface of a local multimodal note workspace.',
     'The user talks to you; a separate worker pipeline performs all file edits, so never claim to have edited or promise to edit anything in this chat.',
     'Style: brief and natural, one or two sentences unless more is genuinely needed.',
-    'Greetings, thanks and small talk: answer like a person — "Hey!", "Anytime." — and do NOT describe the note, the slide, or any statuses unless the user explicitly asks about them.',
-    'Reference the note or the attached slide only when the question is actually about them. When asked what you can see, describe the slide image.',
+    'Greetings, thanks and small talk: answer like a person — "Hey!", "Anytime." — and do NOT describe the note, the frame, or any statuses unless the user explicitly asks about them.',
+    'Reference the note or the attached frame only when the question is actually about them. When asked what you can see, describe the attached frame itself — camera or screen captures are real scenes, not documents.',
   ].join(' ')
 
   const textParts = [
-    imageDataUrl
-      ? 'Attached is the current operating-review slide frame.'
-      : 'No slide frame is attached for this turn.',
+    frame ? FRAME_DESCRIPTIONS[frame.source] : FRAME_DESCRIPTIONS.none,
     `Current note (${NOTE_PATH}):\n${truncate(note, 3600)}`,
     lastRun
       ? `Last completed run: "${lastRun.command}" → ${lastRun.status}${
@@ -302,14 +335,19 @@ function buildChatMessages(
     `User: ${command}`,
   ].join('\n\n')
 
-  const content: ChatMessage['content'] = imageDataUrl
+  const content: ChatMessage['content'] = frame
     ? [
         { type: 'text', text: textParts },
-        { type: 'image_url', image_url: { url: imageDataUrl } },
+        { type: 'image_url', image_url: { url: frame.dataUrl } },
       ]
     : textParts
   return [
     { role: 'system', content: system },
+    ...turns.flatMap((turn): ChatMessage[] => {
+      const user: ChatMessage = { role: 'user', content: truncate(turn.command, 600) }
+      if (!turn.reply) return [user]
+      return [user, { role: 'assistant', content: truncate(turn.reply, 600) }]
+    }),
     { role: 'user', content },
   ]
 }
@@ -385,6 +423,7 @@ export interface WorkspaceApi {
   trace: Trace | null
   runs: Trace[]
   selectedTrace: Trace | null
+  rejectedTraces: RejectedTraceRecord[]
   traceOpen: boolean
   openTrace: (id?: string) => void
   closeTrace: () => void
@@ -407,6 +446,7 @@ export interface WorkspaceApi {
   ttsBusy: boolean
   stopSpeech: () => void
   resetChat: () => void
+  newNote: () => void
   suggestions: Suggestion[]
   activeModel: ActiveModel
   elapsedSeconds: number
@@ -430,12 +470,26 @@ export function useWorkspace(): WorkspaceApi {
   const initialSnapshotRef = useRef<Snapshot | null>(null)
   if (!initialSnapshotRef.current) initialSnapshotRef.current = initialSnapshot()
 
-  const [note, setNote] = useState(INITIAL_NOTE)
-  const [messages, setMessages] = useState<Message[]>(initialMessages)
-  const [history, setHistory] = useState<Snapshot[]>(() => [initialSnapshotRef.current as Snapshot])
-  const [historyIndex, setHistoryIndex] = useState(0)
+  // Hydrate persisted workspace once, during first render (before paint).
+  const persistedRef = useRef<PersistedWorkspace | null>(null)
+  if (!persistedRef.current) persistedRef.current = loadWorkspaceState()
+  const persisted = persistedRef.current
+
+  const [note, setNote] = useState(persisted?.note ?? INITIAL_NOTE)
+  const [messages, setMessages] = useState<Message[]>(() =>
+    (persisted?.messages ?? initialMessages()).map((message) =>
+      // A stream cut off by a reload must not leave a permanent caret.
+      message.streaming ? { ...message, streaming: false } : message,
+    ),
+  )
+  const [history, setHistory] = useState<Snapshot[]>(() =>
+    persisted?.snapshots.length ? persisted.snapshots : [initialSnapshotRef.current as Snapshot],
+  )
+  const [historyIndex, setHistoryIndex] = useState(() =>
+    persisted?.snapshots.length ? persisted.snapshots.length - 1 : 0,
+  )
   const [trace, setTrace] = useState<Trace | null>(null)
-  const [runs, setRuns] = useState<Trace[]>([])
+  const [runs, setRuns] = useState<Trace[]>(persisted?.runs ?? [])
   const [stage, setStage] = useState<PipelineStage>('idle')
   const [stageStates, setStageStates] = useState<Record<StageId, StageState>>({
     A: 'idle',
@@ -463,16 +517,18 @@ export function useWorkspace(): WorkspaceApi {
   const [runtimeHealth, setRuntimeHealth] = useState<RuntimeHealth | null>(null)
   const [asrBusy, setAsrBusy] = useState(false)
   const [ttsBusy, setTtsBusy] = useState(false)
+  const [rejectedTraces, setRejectedTraces] = useState<RejectedTraceRecord[]>(
+    persisted?.rejectedTraces ?? [],
+  )
 
   const noteRef = useRef(note)
   const historyRef = useRef(history)
   const historyIndexRef = useRef(historyIndex)
-  const runsRef = useRef<Trace[]>([])
+  const runsRef = useRef<Trace[]>(runs)
   const traceRef = useRef<Trace | null>(null)
   const busyRef = useRef(false)
   const speakerOnRef = useRef(speakerOn)
   const flowModelRef = useRef<ActiveModel>(null)
-  const speakingRef = useRef(false)
   const idleTimerRef = useRef<number | null>(null)
   const highlightTimerRef = useRef<number | null>(null)
   const toastTimerRef = useRef<number | null>(null)
@@ -487,6 +543,8 @@ export function useWorkspace(): WorkspaceApi {
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null)
   const ttsAbortRef = useRef<AbortController | null>(null)
   const ttsUrlRef = useRef<string | null>(null)
+  const chatAbortRef = useRef<AbortController | null>(null)
+  const messagesRef = useRef<Message[]>(messages)
 
   useEffect(() => {
     noteRef.current = note
@@ -494,6 +552,13 @@ export function useWorkspace(): WorkspaceApi {
   useEffect(() => {
     historyRef.current = history
   }, [history])
+  // Debounced workspace persistence — best-effort, never breaks the UI.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      saveWorkspaceState({ note, snapshots: history, messages, runs, rejectedTraces })
+    }, 500)
+    return () => window.clearTimeout(timer)
+  }, [note, history, messages, runs, rejectedTraces])
   useEffect(() => {
     historyIndexRef.current = historyIndex
   }, [historyIndex])
@@ -507,8 +572,8 @@ export function useWorkspace(): WorkspaceApi {
     flowModelRef.current = flowModel
   }, [flowModel])
   useEffect(() => {
-    speakingRef.current = speaking
-  }, [speaking])
+    messagesRef.current = messages
+  }, [messages])
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -808,6 +873,14 @@ export function useWorkspace(): WorkspaceApi {
   ): Promise<void> {
     const command = rawCommand.trim()
     if (!command) return
+
+    // Barge-in: a new command owns the session. Cut any in-flight chat stream
+    // and any spoken audio (model TTS fetch, audio element, browser voice)
+    // before this run starts processing.
+    chatAbortRef.current?.abort()
+    chatAbortRef.current = null
+    stopSpeech()
+
     if (busyRef.current) {
       notify('Worker is busy', 'Wait for the current verified call to finish before queuing another.', 'neutral')
       return
@@ -829,11 +902,6 @@ export function useWorkspace(): WorkspaceApi {
     setStage('routing')
     setStageStates({ A: 'running', B: 'idle', C: 'idle' })
     setFlowModel('d1')
-    if (speakingRef.current) {
-      speechTokenRef.current += 1
-      stopSpeaking()
-      setSpeaking(false)
-    }
 
     const noteAtStart = noteRef.current
     const traceLocal = makeTrace(command, source, noteAtStart)
@@ -865,7 +933,8 @@ export function useWorkspace(): WorkspaceApi {
           traceLocal.timings.ground +
           traceLocal.timings.generate +
           traceLocal.timings.critic +
-          traceLocal.timings.execute
+          traceLocal.timings.execute +
+          (traceLocal.timings.chat ?? 0)
         ).toFixed(1),
       )
       const finished: Trace = { ...traceLocal, timings: { ...traceLocal.timings } }
@@ -893,7 +962,7 @@ export function useWorkspace(): WorkspaceApi {
     if (source === 'voice') runtime.asr = asrSourceRef.current
     asrSourceRef.current = 'fallback'
     traceLocal.runtime = runtime
-    traceLocal.frameSource = 'synthetic-slide'
+    traceLocal.frameSource = 'none'
     const liveUsage: Partial<ContextUsage> = {}
 
     try {
@@ -901,17 +970,18 @@ export function useWorkspace(): WorkspaceApi {
 
       // --- A · route ------------------------------------------------------
       // Live path: d1-Omni-2B classifies the command over /v1/systemone in one
-      // forward pass (watching the slide frame). Fallback: local heuristics.
+      // forward pass (watching the current frame). Fallback: local heuristics.
       let route: RouteDecision | null = null
       if (endpointUp(healthRef.current, 'd1omni')) {
         try {
-          const frame = await sceneFrame('full').catch(() => null)
+          const frame = await resolveSceneFrame('full').catch(() => null)
+          traceLocal.frameSource = frame?.source ?? 'none'
           const decision = await d1Decide({
             state: [
               `User command: ${command}`,
               `Note (${NOTE_PATH}):\n${truncate(noteAtStart, 2400)}`,
             ].join('\n'),
-            imageDataUrl: frame ?? undefined,
+            imageDataUrl: frame?.dataUrl,
             questions: ROUTE_QUESTIONS,
           })
           const decided = routeFromAnswers(decision.answers)
@@ -1003,33 +1073,78 @@ export function useWorkspace(): WorkspaceApi {
               executionMessage: last.execution?.message,
             }
           : null
-        let reply: string | null = null
-        // Live path: LFM3-Omni-2B over /v1/chat/completions. The slide frame is
-        // attached only for visual-relevant turns — small talk stays fast.
+        const memory = conversationTurns(messagesRef.current, CHAT_MEMORY_TURNS)
+        // Stage the assistant bubble now; streamed tokens fill it live.
+        const streamId = addMessage({
+          role: 'assistant',
+          kind: 'result',
+          text: '',
+          animate: false,
+          streaming: true,
+          runId: traceLocal.id,
+        })
+        const controller = new AbortController()
+        chatAbortRef.current = controller
+        let reply = ''
+        let aborted = false
+        let lastFlush = 0
+        const flush = () => {
+          const now = performance.now()
+          if (now - lastFlush < 48) return
+          lastFlush = now
+          patchMessage(streamId, { text: reply })
+        }
+        // Live path: LFM3-Omni-2B over /v1/chat/completions, streamed. The frame
+        // is attached only for visual-relevant turns — small talk stays fast.
         if (endpointUp(healthRef.current, 'omni')) {
           try {
             const wantsVisual =
               /\b(see|look|slide|screen|camera|show|image|frame|describe|chart|table|formula|sticky|whiteboard|visual|read)\b/i.test(
                 command,
               )
-            const frame = wantsVisual ? await sceneFrame('full').catch(() => null) : null
-            const completion = await chatComplete(
+            const frame = wantsVisual ? await resolveSceneFrame('full') : null
+            if (frame) traceLocal.frameSource = frame.source
+            const completion = await chatCompleteStream(
               'omni',
-              buildChatMessages(command, noteAtStart, lastRun, frame),
-              { temperature: 0.3, maxTokens: 500 },
+              buildChatMessages(
+                command,
+                noteAtStart,
+                lastRun,
+                memory,
+                frame,
+              ),
+              {
+                temperature: 0.3,
+                maxTokens: 500,
+                signal: controller.signal,
+                onToken: (delta) => {
+                  reply += delta
+                  flush()
+                },
+              },
             )
             reply = completion.text
             runtime.chat = 'live'
+            traceLocal.timings.chat = completion.ms
             traceLocal.outputTokens = completion.usage.outputTokens || estimateTokens(reply)
             if (completion.usage.promptTokens) {
               traceLocal.promptTokens = completion.usage.promptTokens
               liveUsage.omni = completion.usage.promptTokens
             }
           } catch {
-            reply = null
+            aborted = controller.signal.aborted
+          } finally {
+            if (chatAbortRef.current === controller) chatAbortRef.current = null
           }
         }
-        if (!reply) {
+
+        if (aborted && !reply.trim()) {
+          // Cut before the first token: never leave an empty bubble behind.
+          setMessages((previous) => previous.filter((message) => message.id !== streamId))
+          finish('conversational')
+          return
+        }
+        if (!reply.trim()) {
           // Fallback: deterministic local templates.
           reply = conversationalReply(command, noteAtStart, lastRun)
           traceLocal.outputTokens = estimateTokens(reply)
@@ -1041,16 +1156,14 @@ export function useWorkspace(): WorkspaceApi {
               30000,
             ),
           }))
+        } else if (aborted && runtime.chat !== 'live') {
+          // Partial tokens did arrive from the model before the abort.
+          runtime.chat = 'live'
+          traceLocal.outputTokens = estimateTokens(reply)
         }
-        addMessage({
-          role: 'assistant',
-          kind: 'result',
-          text: reply,
-          animate: true,
-          runId: traceLocal.id,
-        })
+        patchMessage(streamId, { text: reply, streaming: false })
         publish()
-        speakReply(reply)
+        if (!aborted) speakReply(reply)
         finish('conversational')
         return
       }
@@ -1122,6 +1235,12 @@ export function useWorkspace(): WorkspaceApi {
       if (!effectiveRoute.primaryTool) {
         throw new Error('Supervisor returned no tool for a mutation turn.')
       }
+      // Multiple plausible spans → d1-Omni picks among candidates (typed choice
+      // over /v1/systemone); ties fall back to the deterministic top pick.
+      const grounding = await resolveGroundingSpan(command, noteAtStart, plan)
+      if (grounding.span) {
+        plan = { ...plan, span: grounding.span }
+      }
       traceLocal.route = effectiveRoute
       traceLocal.timings.ground = Number((performance.now() - groundStarted).toFixed(1))
       if (traceLocal.timings.ground < 180) await sleep(180 - traceLocal.timings.ground)
@@ -1176,10 +1295,21 @@ export function useWorkspace(): WorkspaceApi {
       }
 
       const templateCall = buildWorkerCall(command, effectiveRoute, plan, noteAtStart)
+      // Long-context swap: text-only mutations with fat prompts (>~55K tokens)
+      // go to LFM3-1.7B (256K ctx) instead of VL-2B (128K). VL stays default,
+      // and a down text server falls back to VL, never failing the run.
+      const wantsText =
+        effectiveRoute.primaryTool !== 'extract_visual_to_note' &&
+        estimateTokens(`${command}\n${noteAtStart}`) > 55_000
+      const workerEndpoint: 'vl' | 'text' =
+        wantsText && endpointUp(healthRef.current, 'text')
+          ? 'text'
+          : 'vl'
       const delegation = {
         runId: traceLocal.id,
         tool: effectiveRoute.primaryTool,
         status: 'generating' as const,
+        modelLabel: workerEndpoint === 'text' ? '1.7B' : undefined,
         thought:
           templateCall?.thought ??
           'VL worker is decoding the grounded hints into one XML tool call.',
@@ -1197,55 +1327,84 @@ export function useWorkspace(): WorkspaceApi {
       // Live path: LFM3-VL-2B emits the XML tool call over /v1/chat/completions,
       // with the ROI crop attached for visual extraction. Fallback: template.
       let call: WorkerCall | null = null
-      if (endpointUp(healthRef.current, 'vl')) {
+      if (endpointUp(healthRef.current, workerEndpoint)) {
         try {
           const frame =
             effectiveRoute.primaryTool === 'extract_visual_to_note'
-              ? await sceneFrame(plan.bbox?.region ?? 'full').catch(() => null)
+              ? await resolveSceneFrame(plan.bbox?.region ?? 'full').catch(() => null)
               : null
-          const messages = buildWorkerMessages(command, route, plan, noteAtStart, frame)
-          const completion = await chatComplete('vl', messages, {
-            temperature: 0.1,
-            maxTokens: 700,
-          })
-          const rawText = completion.text
-          const xmlInput = /<think>/.test(rawText)
-            ? rawText
-            : completion.reasoning
-              ? `<think>${completion.reasoning}</think>\n${rawText}`
-              : rawText
-          const parsed = parseToolCallXml(xmlInput)
-          const required = parsed
-            ? TOOL_BY_NAME[parsed.name].params
-                .filter((param) => param.required)
-                .map((param) => param.name)
-            : []
-          const complete =
-            parsed &&
-            parsed.name === effectiveRoute.primaryTool &&
-            required.every((name) => (parsed.params[name] ?? '').length > 0)
-          if (parsed && complete) {
-            call = liveWorkerCall(
-              parsed,
-              completion.reasoning,
-              rawText,
-              completion.ms,
-              completion.usage.promptTokens,
-              completion.usage.outputTokens,
-              plan,
-              noteAtStart,
-            )
-            runtime.worker = 'live'
-            traceLocal.timings.generate = completion.ms
-            traceLocal.outputTokens = call.rawTokens
-            if (completion.usage.promptTokens) {
-              traceLocal.promptTokens = completion.usage.promptTokens
-              liveUsage.worker = completion.usage.promptTokens
+          if (frame) traceLocal.frameSource = frame.source
+          const messages = buildWorkerMessages(
+            command,
+            effectiveRoute,
+            plan,
+            noteAtStart,
+            frame?.dataUrl ?? null,
+          )
+          // The 1.7B worker reasons at length before closing its <think>
+          // block (~2K tokens on the windowed prompt); a 900-token budget
+          // truncated it mid-think, so give it room and one spare attempt
+          // before falling back to VL / template.
+          //
+          // VL decodes with thinking off: the server runs --reasoning on, and
+          // the template default made the 2B spend the whole budget inside an
+          // unclosed  thinking block (finish_reason "length", empty content at
+          // 700 and at 3000 tokens). Thinking off emits the XML contract in
+          // ~78 tokens at the same 0.1 / 700.
+          const attempts: ChatOptions[] =
+            workerEndpoint === 'text'
+              ? [
+                  { temperature: 0.3, maxTokens: 3000 },
+                  { temperature: 0.4, maxTokens: 3000 },
+                ]
+              : [{ temperature: 0.1, maxTokens: 700, enableThinking: false }]
+          for (const options of attempts) {
+            const completion = await chatComplete(workerEndpoint, messages, options)
+            const rawText = completion.text
+            const xmlInput = /<think>/.test(rawText)
+              ? rawText
+              : completion.reasoning
+                ? `<think>${completion.reasoning}</think>\n${rawText}`
+                : rawText
+            const parsed = parseToolCallXml(xmlInput)
+            const required = parsed
+              ? TOOL_BY_NAME[parsed.name].params
+                  .filter((param) => param.required)
+                  .map((param) => param.name)
+              : []
+            const complete =
+              parsed &&
+              parsed.name === effectiveRoute.primaryTool &&
+              required.every((name) => (parsed.params[name] ?? '').length > 0)
+            if (parsed && complete) {
+              call = liveWorkerCall(
+                parsed,
+                completion.reasoning,
+                rawText,
+                completion.ms,
+                completion.usage.promptTokens,
+                completion.usage.outputTokens,
+                plan,
+                noteAtStart,
+              )
+              runtime.worker = 'live'
+              traceLocal.workerModel = workerEndpoint
+              traceLocal.timings.generate = completion.ms
+              traceLocal.outputTokens = call.rawTokens
+              if (completion.usage.promptTokens) {
+                traceLocal.promptTokens = completion.usage.promptTokens
+                liveUsage.worker = completion.usage.promptTokens
+              }
+              patchMessage(delegationId, {
+                delegation: {
+                  ...delegation,
+                  thought: call.thought,
+                  modelLabel: workerEndpoint === 'text' ? '1.7B' : undefined,
+                },
+              })
+              break
             }
-            patchMessage(delegationId, {
-              delegation: { ...delegation, thought: call.thought },
-            })
-          }
+            }
         } catch {
           call = null
         }
@@ -1316,6 +1475,28 @@ export function useWorkspace(): WorkspaceApi {
         const rejection =
           'I paused before execution. The supervisor rejected the proposed tool call, so the note was not touched. Open the trace to see which check failed.'
         traceLocal.status = 'rejected'
+        setRejectedTraces((previous) => [
+          ...previous,
+          {
+            at: Date.now(),
+            command,
+            route: {
+              tool: effectiveRoute.primaryTool,
+              provenance:
+                traceLocal.runtime?.route === 'live'
+                  ? 'd1-Omni · /v1/systemone'
+                  : 'local heuristics',
+            },
+            spanCandidates: grounding.candidates.map((candidate) => ({
+              startLine: candidate.startLine,
+              endLine: candidate.endLine,
+              excerpt: candidate.excerpt,
+            })),
+            grounding: { source: grounding.source, chosenLine: grounding.span?.startLine },
+            workerXml: call.xml,
+            critic: { verdict: 'rejected', reason: critic.feedback, pCorrect: critic.pCorrect },
+          },
+        ])
         addMessage({
           role: 'assistant',
           kind: 'error',
@@ -1452,6 +1633,8 @@ export function useWorkspace(): WorkspaceApi {
   }, [notify])
 
   const toggleMic = useCallback(() => {
+    // Barge-in: speaking while you talk would fight the microphone.
+    stopSpeech()
     if (recorderRef.current) {
       // Manual stop: transcribe what was captured.
       void finishVoiceCapture()
@@ -1494,6 +1677,27 @@ export function useWorkspace(): WorkspaceApi {
 
   const getMicLevel = useCallback(() => recorderRef.current?.getLevel() ?? 0, [])
 
+  const newNote = useCallback(() => {
+    if (busyRef.current) {
+      notify(
+        'Worker is busy',
+        'Wait for the current verified call to finish before starting a new note.',
+        'neutral',
+      )
+      return
+    }
+    commitNote('# Untitled\n\n', 'New note', 'manual')
+    setSpan(null)
+    setBBox(null)
+    setDiff(null)
+    setSourceMode(false)
+    notify(
+      'New note',
+      'A blank note replaced the document. Undo restores the previous note.',
+      'success',
+    )
+  }, [commitNote, notify, setSourceMode])
+
   const resetChat = useCallback(() => {
     if (busyRef.current) {
       notify(
@@ -1505,6 +1709,8 @@ export function useWorkspace(): WorkspaceApi {
     }
     stopSpeech()
     stopMic()
+    chatAbortRef.current?.abort()
+    chatAbortRef.current = null
     setMessages(initialMessages())
     runsRef.current = []
     setRuns([])
@@ -1569,6 +1775,7 @@ export function useWorkspace(): WorkspaceApi {
       recorderRef.current?.abort()
       recorderRef.current = null
       ttsAbortRef.current?.abort()
+      chatAbortRef.current?.abort()
       stopSpeaking()
       if (idleTimerRef.current) window.clearTimeout(idleTimerRef.current)
       if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current)
@@ -1590,6 +1797,7 @@ export function useWorkspace(): WorkspaceApi {
     trace,
     runs,
     selectedTrace,
+    rejectedTraces,
     traceOpen,
     openTrace,
     closeTrace,
@@ -1612,6 +1820,7 @@ export function useWorkspace(): WorkspaceApi {
     ttsBusy,
     stopSpeech,
     resetChat,
+    newNote,
     suggestions,
     activeModel,
     elapsedSeconds,
@@ -1631,3 +1840,7 @@ export function useWorkspace(): WorkspaceApi {
     refreshRuntime,
   }
 }
+
+
+
+

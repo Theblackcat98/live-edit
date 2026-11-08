@@ -27,6 +27,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { id: 'omni', name: 'LFM3-Omni-2B', role: 'Interface · chat + ASR', port: 8083, alias: 'lfm3-omni-2b' },
   { id: 'vl', name: 'LFM3-VL-2B', role: 'Worker · tool calls', port: 8081, alias: 'lfm3-vl-2b' },
   { id: 'd1omni', name: 'd1-Omni-2B', role: 'Supervisor · route/critic', port: 8085, alias: 'd1-omni-2b' },
+  { id: 'text', name: 'LFM3-1.7B', role: 'Worker · long-context text refactors', port: 8080, alias: 'lfm3-1.7b' },
 ]
 
 const DEFAULT_TIMEOUT_MS = 30_000
@@ -154,10 +155,53 @@ export interface ChatResult {
   usage: TokenUsage
 }
 
+export interface ChatOptions {
+  temperature?: number
+  maxTokens?: number
+  stop?: string[]
+  /**
+   * Passed to the model's chat template as `chat_template_kwargs.enable_thinking`.
+   * The LFM3 servers run with `--reasoning on`, so the template thinks by default;
+   * tool-call turns must ask for it off or the whole budget goes to reasoning.
+   * Omitted entirely when undefined — the server default applies.
+   */
+  enableThinking?: boolean
+}
+
+export interface ChatStreamOptions extends ChatOptions {
+  signal?: AbortSignal
+  onToken?: (delta: string) => void
+}
+
+function thinkingPayload(options: ChatOptions): Record<string, unknown> {
+  return options.enableThinking === undefined
+    ? {}
+    : { chat_template_kwargs: { enable_thinking: options.enableThinking } }
+}
+
+function readCompletionChoice(payload: unknown): { text: string; reasoning: string } {
+  const choices = isRecord(payload) && Array.isArray(payload.choices) ? payload.choices : []
+  const first = isRecord(choices[0]) ? choices[0] : {}
+  const message = isRecord(first.message) ? first.message : {}
+  return {
+    text: (readString(message, 'content') ?? '').trim(),
+    reasoning: (readString(message, 'reasoning_content') ?? '').trim(),
+  }
+}
+
+/** llama.cpp reports real token counts in the final chunk's `timings` object. */
+function measuredUsage(payload: unknown): TokenUsage | null {
+  if (!isRecord(payload) || !isRecord(payload.timings)) return null
+  const promptTokens = readNumber(payload.timings, 'prompt_n')
+  const outputTokens = readNumber(payload.timings, 'predicted_n')
+  if (promptTokens == null || outputTokens == null) return null
+  return { promptTokens, outputTokens }
+}
+
 export async function chatComplete(
   endpoint: EndpointHealth['id'],
   messages: ChatMessage[],
-  options: { temperature?: number; maxTokens?: number; stop?: string[] } = {},
+  options: ChatOptions = {},
 ): Promise<ChatResult> {
   const spec = ENDPOINTS.find((candidate) => candidate.id === endpoint)
   if (!spec) throw new BridgeError(`Unknown endpoint ${endpoint}`)
@@ -171,20 +215,143 @@ export async function chatComplete(
       temperature: options.temperature ?? 0.1,
       max_tokens: options.maxTokens ?? 700,
       ...(options.stop?.length ? { stop: options.stop } : {}),
+      ...thinkingPayload(options),
       stream: false,
     }),
   })
-  const choices = isRecord(payload) && Array.isArray(payload.choices) ? payload.choices : []
-  const first = isRecord(choices[0]) ? choices[0] : {}
-  const message = isRecord(first.message) ? first.message : {}
-  const text = (readString(message, 'content') ?? '').trim()
-  const reasoning = (readString(message, 'reasoning_content') ?? '').trim()
+  const { text, reasoning } = readCompletionChoice(payload)
   if (!text && !reasoning) throw new BridgeError('Model returned an empty completion')
   return {
     text,
     reasoning,
     ms: Number((performance.now() - started).toFixed(1)),
     usage: usageOf(payload),
+  }
+}
+
+/**
+ * Streamed chat completion: POST `stream: true`, parse SSE `data:` chunks,
+ * forward each `delta.content` to `onToken`, resolve with the full text.
+ *
+ * `ms` is measured wall-clock for the whole stream. `usage` carries llama.cpp's
+ * own token counts when the server reports them, zero otherwise — never a guess.
+ */
+export async function chatCompleteStream(
+  endpoint: EndpointHealth['id'],
+  messages: ChatMessage[],
+  options: ChatStreamOptions = {},
+): Promise<ChatResult> {
+  const spec = ENDPOINTS.find((candidate) => candidate.id === endpoint)
+  if (!spec) throw new BridgeError(`Unknown endpoint ${endpoint}`)
+  const started = performance.now()
+  const timeout = new AbortController()
+  const timer = window.setTimeout(() => timeout.abort(), 90_000)
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, timeout.signal])
+    : timeout.signal
+  try {
+    const response = await fetch(`http://127.0.0.1:${spec.port}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: spec.alias,
+        messages,
+        temperature: options.temperature ?? 0.1,
+        max_tokens: options.maxTokens ?? 700,
+        ...(options.stop?.length ? { stop: options.stop } : {}),
+        ...thinkingPayload(options),
+        stream: true,
+      }),
+      signal,
+    })
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '')
+      throw new BridgeError(
+        `HTTP ${response.status}: ${(detail || response.statusText).slice(0, 240)}`,
+      )
+    }
+
+    const contentType = response.headers.get('content-type') ?? ''
+    if (!response.body || !contentType.includes('text/event-stream')) {
+      // Server ignored `stream`; accept the single JSON body instead.
+      const payload: unknown = await response.json().catch(() => null)
+      const { text, reasoning } = readCompletionChoice(payload)
+      if (!text && !reasoning) throw new BridgeError('Model returned an empty completion')
+      if (text) options.onToken?.(text)
+      return {
+        text,
+        reasoning,
+        ms: Number((performance.now() - started).toFixed(1)),
+        usage: usageOf(payload),
+      }
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let text = ''
+    let reasoning = ''
+    let usage: TokenUsage = { promptTokens: 0, outputTokens: 0 }
+    let finished = false
+
+    while (!finished) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let newline = buffer.indexOf('\n')
+      while (newline >= 0) {
+        const line = buffer.slice(0, newline).trim()
+        buffer = buffer.slice(newline + 1)
+        newline = buffer.indexOf('\n')
+        if (!line.startsWith('data:')) continue
+        const data = line.slice(5).trim()
+        if (!data) continue
+        if (data === '[DONE]') {
+          finished = true
+          break
+        }
+        let chunk: unknown
+        try {
+          chunk = JSON.parse(data)
+        } catch {
+          continue
+        }
+        const timings = measuredUsage(chunk)
+        if (timings) usage = timings
+        if (isRecord(chunk) && isRecord(chunk.usage)) usage = usageOf(chunk)
+        const choices = isRecord(chunk) && Array.isArray(chunk.choices) ? chunk.choices : []
+        const first = isRecord(choices[0]) ? choices[0] : {}
+        const delta = isRecord(first.delta) ? first.delta : {}
+        const content = readString(delta, 'content')
+        if (content) {
+          text += content
+          options.onToken?.(content)
+        }
+        const reasoningDelta = readString(delta, 'reasoning_content')
+        if (reasoningDelta) reasoning += reasoningDelta
+      }
+    }
+    await reader.cancel().catch(() => {})
+
+    const trimmed = text.trim()
+    const trimmedReasoning = reasoning.trim()
+    if (!trimmed && !trimmedReasoning) throw new BridgeError('Model returned an empty completion')
+    return {
+      text: trimmed,
+      reasoning: trimmedReasoning,
+      ms: Number((performance.now() - started).toFixed(1)),
+      usage,
+    }
+  } catch (error) {
+    if (error instanceof BridgeError) throw error
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new BridgeError(
+        options.signal?.aborted ? 'Stream aborted' : 'Request timed out after 90s',
+      )
+    }
+    throw new BridgeError(error instanceof Error ? error.message : 'Network failure')
+  } finally {
+    window.clearTimeout(timer)
   }
 }
 

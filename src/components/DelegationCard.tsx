@@ -26,7 +26,7 @@ export function DelegationCard({ delegation, onOpenTrace }: DelegationCardProps)
           <span className="delegation-icon">
             <Braces size={12} />
           </span>
-          <span className="delegation-title">VL 2B · tool call</span>
+          <span className="delegation-title">{delegation.modelLabel ?? 'VL 2B'} · tool call</span>
           <span
             className={cx(
               'delegation-status',

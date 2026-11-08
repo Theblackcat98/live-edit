@@ -132,6 +132,7 @@ export default function App() {
             canRedo={workspace.canRedo}
             undo={workspace.undo}
             redo={workspace.redo}
+            newNote={workspace.newNote}
             history={workspace.history}
             historyIndex={workspace.historyIndex}
             trace={workspace.trace}
@@ -170,6 +171,7 @@ export default function App() {
         open={workspace.traceOpen}
         trace={workspace.selectedTrace}
         runs={workspace.runs}
+        rejectedTraces={workspace.rejectedTraces}
         onSelectRun={(id) => workspace.openTrace(id)}
         onClose={workspace.closeTrace}
       />

@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import type {
   ContextUsage,
+  FrameSource,
   RuntimeHealth,
   Snapshot,
   StageId,
@@ -171,9 +172,11 @@ const WIRING_SURFACES: WiringSurface[] = [
 function RuntimeWiringCard({
   runtimeHealth,
   refreshRuntime,
+  frameSource,
 }: {
   runtimeHealth: RuntimeHealth | null
   refreshRuntime: () => Promise<void>
+  frameSource?: FrameSource
 }) {
   const [refreshing, setRefreshing] = useState(false)
   const up = (id: 'omni' | 'vl' | 'd1omni'): boolean =>
@@ -184,6 +187,17 @@ function RuntimeWiringCard({
     setRefreshing(true)
     void refreshRuntime().finally(() => setRefreshing(false))
   }
+
+  // Which pixels the models actually got for the selected run. A synthetic
+  // frame after the camera was on is shown as FALLBACK, never as live.
+  const frameRow =
+    frameSource === 'live-camera'
+      ? { badge: 'LIVE', tone: 'live', detail: 'device camera · live JPEG' }
+      : frameSource === 'live-screen'
+        ? { badge: 'LIVE', tone: 'live', detail: 'screen share · live JPEG' }
+        : frameSource === 'synthetic-slide'
+          ? { badge: 'FALLBACK', tone: 'fallback', detail: 'synthetic slide · no live capture' }
+          : { badge: 'NONE', tone: 'engine', detail: 'no frame attached this run' }
 
   return (
     <section className="rail-card wiring-card">
@@ -223,6 +237,11 @@ function RuntimeWiringCard({
             </div>
           )
         })}
+        <div className="wiring-row" title={frameRow.detail}>
+          <span className={cx('wiring-badge', `is-${frameRow.tone}`)}>{frameRow.badge}</span>
+          <span className="wiring-label">Vision frame</span>
+          <span className="wiring-target mono">{frameRow.detail}</span>
+        </div>
       </div>
 
       <div className="wiring-endpoints">
@@ -596,7 +615,11 @@ export function RuntimeRail({
   return (
     <>
       <RuntimeCard activeModel={activeModel} runtimeHealth={runtimeHealth} />
-      <RuntimeWiringCard runtimeHealth={runtimeHealth} refreshRuntime={refreshRuntime} />
+      <RuntimeWiringCard
+        runtimeHealth={runtimeHealth}
+        refreshRuntime={refreshRuntime}
+        frameSource={trace?.frameSource}
+      />
       <SupervisorCard trace={trace} stageStates={stageStates} openTrace={openTrace} />
       <ContextCard usage={contextUsage} trace={trace} />
       <SnapshotsCard

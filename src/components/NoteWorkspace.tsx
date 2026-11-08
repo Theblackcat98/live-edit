@@ -3,6 +3,7 @@ import {
   Braces,
   Code2,
   FileText,
+  FilePlus2,
   History,
   Redo2,
   ShieldCheck,
@@ -27,6 +28,7 @@ interface NoteWorkspaceProps {
   canRedo: boolean
   undo: () => void
   redo: () => void
+  newNote: () => void
   history: Snapshot[]
   historyIndex: number
   trace: Trace | null
@@ -48,6 +50,7 @@ export function NoteWorkspace({
   canRedo,
   undo,
   redo,
+  newNote,
   history,
   historyIndex,
   trace,
@@ -126,6 +129,16 @@ export function NoteWorkspace({
         </div>
 
         <div className="note-header-actions">
+          <button
+            type="button"
+            className="icon-button"
+            onClick={newNote}
+            disabled={busy}
+            aria-label="New note"
+            title="New note (snapshots the current note first, so undo restores it)"
+          >
+            <FilePlus2 size={14} />
+          </button>
           <div className="note-history-buttons">
             <button
               type="button"

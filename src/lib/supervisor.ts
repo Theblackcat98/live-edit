@@ -22,6 +22,7 @@ import {
   splitLines,
 } from './doc'
 import { clamp, countWords, estimateTokens, sentenceCase, truncate } from './utils'
+import { d1Decide, type D1Question } from './bridge'
 import { SCENE_REGIONS, VISUAL_MARKDOWN } from '../data/scene'
 import { NOTE_PATH } from '../data/note'
 
@@ -41,6 +42,8 @@ export interface SupervisorPlan {
   problem?: PlanProblem
   problemDetail?: string
   candidates?: { label: string; command: string }[]
+  /** Distinct alternative spans the deterministic search tied on (top span first). */
+  spanCandidates?: SpanTarget[]
 }
 
 const MUTATION_VERBS =
@@ -94,6 +97,43 @@ const CONVERSATIONAL_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
     reason: 'Repeat request.',
   },
 ]
+
+/**
+ * The d1-Omni routing questions (/v1/systemone). One forward pass maps a turn
+ * onto an action class and, when the note must change, a tool.
+ *
+ * The conversational criterion has to name personal statements explicitly:
+ * without that, d1 reads a fact like "my favorite number is 47" as note
+ * content and returns file_mutation, so the user hits a clarification instead
+ * of a chat reply. The mutation criteria stay imperative — "an instruction
+ * addressed to you as a command" — which keeps real edit commands out of the
+ * conversational class.
+ */
+export const ROUTE_QUESTIONS: Record<'action' | 'tool', D1Question> = {
+  action: {
+    type: 'choice',
+    instructions:
+      'Classify what the speaker wants relative to the note file and the attached slide. Statements about the user and questions about what you can see are conversation, not edits.',
+    criteria: {
+      conversational_only:
+        'the user is talking to you, not asking for an edit: greetings, thanks, questions about the conversation or about what the camera and slide show, or telling you something about themselves — their name, preferences, numbers, or a fact to remember later',
+      file_mutation:
+        'an instruction to change the note file, addressed to you as a command: add, edit, remove or extract content',
+      ambiguous_request:
+        'a mutation verb, but the target object is missing or refers vaguely to "that" or "it"',
+    },
+  },
+  tool: {
+    type: 'choice',
+    instructions: 'If the note file should change, which tool fits the command best?',
+    criteria: {
+      edit_text: 'replace existing lines with new text',
+      remove_text: 'delete lines, a bullet or a table row',
+      add_text: 'insert new content at a position or under a heading',
+      extract_visual_to_note: 'read the visible slide and copy its content into the note',
+    },
+  },
+}
 
 const VAGUE_MUTATION =
   /^(?:please\s+|could you\s+|can you\s+)?(?:delete|remove|change|update|edit|replace|fix|make|shorten|clean up|rewrite|amend)\s+(?:that|this|it|those|these)(?:\s+(?:part|bit|thing|section|line|text|one|stuff))?(?:\s+(?:to|into|with|so it)\s+.+)?[.!]?$/i
@@ -980,6 +1020,9 @@ export function buildPlan(
   }
 
   const found = findSpanForMutation(note, command)
+  const spanCandidates = found
+    ? distinctSpans([found.span, ...found.candidates])
+    : []
   if (!found || found.span.confidence < 0.56) {
     return {
       problem: 'missing_target',
@@ -987,6 +1030,7 @@ export function buildPlan(
         ? 'Competing spans share nearly equal probability.'
         : 'No span in the note matches the spoken target.',
       span: found?.span,
+      spanCandidates,
       candidates: buildCandidates(note, tool, extractReplacement(command)),
     }
   }
@@ -994,6 +1038,7 @@ export function buildPlan(
   if (tool === 'remove_text') {
     return {
       span: found.span,
+      spanCandidates,
       bbox: /q3|revenue|formula|slide|table/i.test(command)
         ? makeBBox(visualRegionForCommand(command), 0.88)
         : undefined,
@@ -1009,6 +1054,7 @@ export function buildPlan(
   if (!replacement || replacementIsTargetQuote) {
     return {
       span: found.span,
+      spanCandidates,
       problem: 'missing_content',
       problemDetail: 'Target grounded, but no replacement text was spoken.',
       candidates: buildCandidates(note, 'edit_text', null),
@@ -1018,10 +1064,111 @@ export function buildPlan(
   const newText = applyReplacementToSpan(note, found.span, replacement, found.span.phrase)
   return {
     span: found.span,
+    spanCandidates,
     newText,
     bbox: /q3|revenue|formula|slide|table/i.test(command)
       ? makeBBox(visualRegionForCommand(command), 0.88)
       : undefined,
+  }
+}
+
+function distinctSpans(spans: SpanTarget[]): SpanTarget[] {
+  const seen = new Set<string>()
+  const out: SpanTarget[] = []
+  for (const span of spans) {
+    const key = `${span.startLine}:${span.endLine}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(span)
+  }
+  return out
+}
+
+export interface GroundingResolution {
+  span?: SpanTarget
+  /** 'live' = d1 chose among competing spans; 'fallback' = deterministic pick. */
+  source: 'live' | 'fallback'
+  candidates: SpanTarget[]
+}
+
+const SPAN_CHOICE_QUESTION = 'span_choice'
+const D1_GROUNDING_CAPTION = 'd1-Omni · /v1/systemone'
+const LOCAL_GROUNDING_CAPTION = 'local heuristics'
+
+/**
+ * When the deterministic span search surfaces more than one distinct candidate
+ * span, ask d1-Omni to pick via one typed choice question over /v1/systemone.
+ * Single-candidate groundings stay fully local (no model call), and a d1 outage
+ * or malformed answer falls back to the deterministic top pick.
+ */
+export async function resolveGroundingSpan(
+  command: string,
+  note: string,
+  plan: SupervisorPlan,
+): Promise<GroundingResolution> {
+  const candidates = distinctSpans(
+    plan.span ? [plan.span, ...(plan.spanCandidates ?? [])] : (plan.spanCandidates ?? []),
+  )
+  const localSpan = plan.span
+  if (!localSpan || candidates.length < 2) {
+    return { span: localSpan, source: 'fallback', candidates }
+  }
+
+  const criteria: Record<string, string> = {}
+  candidates.forEach((candidate, index) => {
+    const range =
+      candidate.endLine !== candidate.startLine
+        ? `L${candidate.startLine}–${candidate.endLine}`
+        : `L${candidate.startLine}`
+    criteria[`option_${index + 1}`] = `${range}: ${truncate(
+      candidate.excerpt.replace(/\n/g, ' / '),
+      140,
+    )}`
+  })
+
+  try {
+    const decision = await d1Decide({
+      state: `User command: ${command}\nNote under edit (first lines):\n${truncate(note, 900)}`,
+      questions: {
+        [SPAN_CHOICE_QUESTION]: {
+          type: 'choice',
+          instructions:
+            'The user wants to target one part of the note. Choose which candidate span the command refers to.',
+          criteria,
+        },
+      },
+    })
+    const answer = decision.answers[SPAN_CHOICE_QUESTION]
+    const chosenIndex =
+      answer && answer.type === 'choice'
+        ? candidates.findIndex(
+            (_candidate, index) => answer.choice.trim() === `option_${index + 1}`,
+          )
+        : -1
+    if (chosenIndex >= 0) {
+      const chosen = candidates[chosenIndex]
+      return {
+        span: {
+          ...chosen,
+          confidence: clamp(Math.max(chosen.confidence, localSpan.confidence), 0, 0.99),
+          reason: `${chosen.reason} · disambiguated by ${D1_GROUNDING_CAPTION}: chose ${
+            chosenIndex + 1
+          } of ${candidates.length} (${criteria[`option_${chosenIndex + 1}`]}).`,
+        },
+        source: 'live',
+        candidates,
+      }
+    }
+  } catch {
+    // d1 unreachable or malformed answer — keep the deterministic pick.
+  }
+  return {
+    span: {
+      ...localSpan,
+      reason: `${localSpan.reason} · ${LOCAL_GROUNDING_CAPTION} (${D1_GROUNDING_CAPTION} unavailable for disambiguation).`,
+    },
+    source: 'fallback',
+    candidates,
   }
 }
 

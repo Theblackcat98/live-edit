@@ -12,9 +12,15 @@ import {
 import type { BBoxTarget, PipelineStage, SourceId } from '../types'
 import { SCENE_META } from '../data/scene'
 import { cx, formatElapsed } from '../lib/utils'
+import { registerLiveFrame } from '../lib/frame'
 import { Waveform, type WaveMode } from './Waveform'
 import { SceneSlide } from './SceneSlide'
 import { SceneCropCard } from './SceneCrop'
+
+/** Longest edge of an uploaded live frame; keeps JPEG snapshots small. */
+const MAX_FRAME_WIDTH = 1280
+/** Snapshot cadence while capture is live. */
+const FRAME_INTERVAL_MS = 1000
 
 interface VisualPanelProps {
   bbox: BBoxTarget | null
@@ -45,8 +51,11 @@ export function VisualPanel({
   const [streamKind, setStreamKind] = useState<SourceId | null>(null)
   const [captureBusy, setCaptureBusy] = useState<'camera' | 'screen' | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [hasLiveFrame, setHasLiveFrame] = useState(false)
+  const hasLiveFrameRef = useRef(false)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
+  const frameCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const stageRef = useRef<HTMLDivElement | null>(null)
   const [roi, setRoi] = useState<RoiRect | null>(null)
 
@@ -71,6 +80,9 @@ export function VisualPanel({
       active.getTracks().forEach((track) => track.stop())
     }
     streamRef.current = null
+    registerLiveFrame(null)
+    hasLiveFrameRef.current = false
+    setHasLiveFrame(false)
     setStream(null)
     setStreamKind(null)
     setNotice(null)
@@ -79,6 +91,7 @@ export function VisualPanel({
   useEffect(() => {
     return () => {
       streamRef.current?.getTracks().forEach((track) => track.stop())
+      registerLiveFrame(null)
     }
   }, [])
 
@@ -94,6 +107,41 @@ export function VisualPanel({
       video.srcObject = null
     }
   }, [stream])
+
+  // Push real snapshots into the model frame registry while capture is active.
+  // Throttled to ~1 fps; the synthetic slide is only used when nothing is here.
+  useEffect(() => {
+    if (!stream || !streamKind) {
+      hasLiveFrameRef.current = false
+      setHasLiveFrame(false)
+      return
+    }
+    let cancelled = false
+    const publish = () => {
+      if (cancelled) return
+      const video = videoRef.current
+      if (!video || !video.videoWidth || !video.videoHeight) return
+      const scale = Math.min(1, MAX_FRAME_WIDTH / video.videoWidth)
+      const canvas = frameCanvasRef.current ?? document.createElement('canvas')
+      frameCanvasRef.current = canvas
+      canvas.width = Math.max(1, Math.round(video.videoWidth * scale))
+      canvas.height = Math.max(1, Math.round(video.videoHeight * scale))
+      const context = canvas.getContext('2d')
+      if (!context) return
+      context.drawImage(video, 0, 0, canvas.width, canvas.height)
+      registerLiveFrame(canvas.toDataURL('image/jpeg', 0.8), streamKind)
+      if (!hasLiveFrameRef.current) {
+        hasLiveFrameRef.current = true
+        setHasLiveFrame(true)
+      }
+    }
+    publish()
+    const timer = window.setInterval(publish, FRAME_INTERVAL_MS)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [stream, streamKind])
 
   useEffect(() => {
     if (!notice) return
@@ -168,22 +216,22 @@ export function VisualPanel({
       setSource(kind)
       setNotice(
         kind === 'camera'
-          ? 'Camera preview connected. Simulated reasoning still uses the demo review frame.'
-          : 'Screen preview connected. Simulated reasoning still uses the demo review frame.',
+          ? 'Camera live. Snapshots now feed routing and vision; stop to fall back to the synthetic slide.'
+          : 'Screen live. Snapshots now feed routing and vision; stop to fall back to the synthetic slide.',
       )
       const track = media.getVideoTracks()[0]
       if (track) {
         track.addEventListener('ended', () => {
           stopStream()
-          setNotice('The live source ended. Synthetic feed restored.')
+          setNotice('The live source ended · synthetic slide fallback restored.')
         })
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Capture was cancelled.'
       setNotice(
         kind === 'camera'
-          ? `Device camera unavailable (${message}). The synthetic slide stays in frame.`
-          : `Screen share cancelled (${message}). The synthetic slide stays in frame.`,
+          ? `Device camera unavailable (${message}). The synthetic slide is the frame fallback.`
+          : `Screen share cancelled (${message}). The synthetic slide is the frame fallback.`,
       )
     } finally {
       setCaptureBusy(null)
@@ -228,7 +276,7 @@ export function VisualPanel({
           </button>
         </div>
         <div className="card-header-spacer" />
-        <span className="chip chip-ghost">2 fps</span>
+        <span className="chip chip-ghost">1 fps</span>
       </header>
 
       <div
@@ -354,9 +402,15 @@ export function VisualPanel({
       <div className="perception-strip">
         <div className="perception-scene">
           <ScanLine size={12} />
-          <span>{isLive ? 'Live preview' : 'Slide indexed'}</span>
+          <span>
+            {isLive
+              ? hasLiveFrame
+                ? 'Live frames indexed'
+                : 'Waiting for live frames'
+              : 'Synthetic slide indexed'}
+          </span>
           <span className="perception-meta mono">
-            {isLive ? 'SIM vision · demo frame' : SCENE_META.elements}
+            {isLive ? 'LIVE → VISION' : 'SYNTHETIC FALLBACK'}
           </span>
         </div>
         <div className="perception-status">
@@ -366,8 +420,13 @@ export function VisualPanel({
               d1 ROI {Math.round(bbox.confidence * 100)}%
             </span>
           ) : (
-            <span className={cx('chip', isLive ? 'chip-green' : 'chip-ghost')}>
-              {isLive ? 'Preview only' : 'Synthetic feed'}
+            <span
+              className={cx(
+                'chip',
+                isLive && hasLiveFrame ? 'chip-green' : 'chip-ghost',
+              )}
+            >
+              {isLive ? (hasLiveFrame ? 'Live vision' : 'No frame yet') : 'Synthetic fallback'}
             </span>
           )}
         </div>

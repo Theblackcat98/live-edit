@@ -14,12 +14,14 @@ import {
   Sparkles,
   X,
 } from 'lucide-react'
-import type { CriticCheck, Trace } from '../types'
+import type { CriticCheck, RejectedTraceRecord, Trace } from '../types'
 import { TOOL_DEFS } from '../data/tools'
 import { cx, pad, truncate } from '../lib/utils'
 import { SceneCrop } from './SceneCrop'
+import { Download } from 'lucide-react'
 
 interface TraceDrawerProps {
+  rejectedTraces: RejectedTraceRecord[]
   open: boolean
   trace: Trace | null
   runs: Trace[]
@@ -124,7 +126,7 @@ function XmlView({ xml }: { xml: string }) {
   )
 }
 
-export function TraceDrawer({ open, trace, runs, onSelectRun, onClose }: TraceDrawerProps) {
+export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, onClose }: TraceDrawerProps) {
   const [copied, setCopied] = useState(false)
   const [showNoteView, setShowNoteView] = useState(false)
 
@@ -185,6 +187,20 @@ export function TraceDrawer({ open, trace, runs, onSelectRun, onClose }: TraceDr
     } catch {
       // Clipboard access can be blocked outside a user gesture; the view stays intact.
     }
+  }
+
+  const downloadRejected = () => {
+    if (!rejectedTraces.length) return
+    const jsonl = `${rejectedTraces.map((record) => JSON.stringify(record)).join('\n')}\n`
+    const blob = new Blob([jsonl], { type: 'application/x-ndjson' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = 'liquidscribe-rejected-traces.jsonl'
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
   const content = (
@@ -412,7 +428,11 @@ export function TraceDrawer({ open, trace, runs, onSelectRun, onClose }: TraceDr
             <TraceSection
               index="W"
               title="Worker generation"
-              caption={trace.runtime?.worker === 'live' ? 'LFM3-VL-2B · live decode' : 'template fallback'}
+              caption={
+                trace.runtime?.worker === 'live'
+                  ? `${trace.workerModel === 'text' ? 'LFM3-1.7B' : 'LFM3-VL-2B'} · live decode`
+                  : 'template fallback'
+              }
             >
               {trace.call ? (
                 <div className="trace-worker">
@@ -598,6 +618,22 @@ export function TraceDrawer({ open, trace, runs, onSelectRun, onClose }: TraceDr
               <span className="mono">
                 Engine in-tab · models on 127.0.0.1 · fallbacks labeled per stage
               </span>
+              <button
+                type="button"
+                className="trace-export-button mono"
+                disabled={rejectedTraces.length === 0}
+                title={
+                  rejectedTraces.length
+                    ? `Download ${rejectedTraces.length} rejected trace record${
+                        rejectedTraces.length === 1 ? '' : 's'
+                      } as JSONL`
+                    : 'No rejected traces yet — the critic has not rejected any worker call this session'
+                }
+                onClick={downloadRejected}
+              >
+                <Download size={11} />
+                Download rejected · JSONL
+              </button>
             </div>
           </div>
         )}

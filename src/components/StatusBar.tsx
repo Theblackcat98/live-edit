@@ -50,7 +50,7 @@ function formatMs(value: number | undefined): string {
 export function StatusBar({ stage, trace, micOn, asrBusy, runtimeHealth }: StatusBarProps) {
   const active = stage !== 'idle' && stage !== 'complete'
   const upCount = runtimeHealth?.endpoints.filter((endpoint) => endpoint.up).length ?? 0
-  const totalEndpoints = runtimeHealth?.endpoints.length ?? 3
+  const totalEndpoints = runtimeHealth?.endpoints.length ?? 4
   const liveTone =
     !runtimeHealth ? 'statusbar-muted' : upCount === totalEndpoints ? 'is-green' : 'is-orange'
   const micLabel = asrBusy ? 'Omni · transcribing' : micOn ? 'REC 16 kHz' : 'MIC standby'

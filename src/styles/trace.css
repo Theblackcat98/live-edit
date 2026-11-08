@@ -912,6 +912,30 @@
   font-size: 8.5px;
 }
 
+.trace-export-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 8.5px;
+  cursor: pointer;
+}
+
+.trace-export-button:hover:not(:disabled) {
+  border-color: var(--ink-3);
+  color: var(--ink-1);
+}
+
+.trace-export-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .trace-empty {
   flex: 1;
   display: flex;

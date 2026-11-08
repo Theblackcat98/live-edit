@@ -77,6 +77,7 @@ export function MessageBubble({ message, onAction, onOpenTrace, recent }: Messag
         </div>
         <p className="message-assistant-text">
           <TypewriterText text={message.text} animate={message.animate} />
+          {message.streaming && <span className="typewriter-caret" aria-hidden="true" />}
         </p>
         {message.actions && message.actions.length > 0 && (
           <div className="message-actions">

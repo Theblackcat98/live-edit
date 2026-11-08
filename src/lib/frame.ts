@@ -3,14 +3,31 @@
  *
  * The on-screen slide (SceneSlide) is DOM. The bridge needs real image bytes
  * for LFM3-VL-2B / d1-Omni-2B, so this module renders the same content as
- * SVG and rasterizes it through a canvas. The frame is the fixed synthetic
- * review slide — a live camera/screen frame is plan.md §10 step 3.
+ * SVG and rasterizes it through a canvas.
+ *
+ * The visual panel registers real camera/screen snapshots here while capture
+ * is active; `resolveSceneFrame` prefers them and reports exactly which pixels
+ * (live camera, live screen, or the synthetic slide) the models received.
+ * The synthetic slide is only ever the fallback.
  */
 
-import type { SceneRegionId } from '../types'
+import type { FrameSource, LiveFrame, ResolvedFrame, SceneRegionId, SourceId } from '../types'
 
 const WIDTH = 1280
 const HEIGHT = 720
+
+// --- live frame registry (written by VisualPanel, read by the orchestrator) ---
+
+let liveFrame: LiveFrame | null = null
+
+/** Register a live JPEG snapshot, or pass null when capture stops. */
+export function registerLiveFrame(dataUrl: string | null, source: SourceId = 'camera'): void {
+  liveFrame = dataUrl ? { dataUrl, source, at: Date.now() } : null
+}
+
+export function getLiveFrame(): LiveFrame | null {
+  return liveFrame
+}
 
 interface RegionRect {
   x: number
@@ -126,8 +143,48 @@ function slideSvg(): string {
 
 const frameCache = new Map<SceneRegionId, string>()
 
-/** Rasterize the synthetic review slide (or one region crop) to a PNG data URL. */
-export async function sceneFrame(region: SceneRegionId = 'full'): Promise<string> {
+function decodeImage(dataUrl: string): Promise<HTMLImageElement> {
+  const image = new Image()
+  image.decoding = 'async'
+  const decoded = Promise.withResolvers<void>()
+  image.onload = () => decoded.resolve()
+  image.onerror = () => decoded.reject(new Error('Frame failed to decode'))
+  image.src = dataUrl
+  return decoded.promise.then(() => image)
+}
+
+/**
+ * Crop a live snapshot by the same fractional window the synthetic slide uses
+ * for the region. Live frames have their own resolution, so the region rect is
+ * scaled by the frame's aspect, not by slide pixels.
+ */
+async function cropLiveFrame(frame: LiveFrame, region: SceneRegionId): Promise<string> {
+  const rect = REGIONS[region]
+  const image = await decodeImage(frame.dataUrl)
+  const sourceX = Math.round((rect.x / WIDTH) * image.naturalWidth)
+  const sourceY = Math.round((rect.y / HEIGHT) * image.naturalHeight)
+  const sourceWidth = Math.max(1, Math.round((rect.width / WIDTH) * image.naturalWidth))
+  const sourceHeight = Math.max(1, Math.round((rect.height / HEIGHT) * image.naturalHeight))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.min(sourceWidth, image.naturalWidth - sourceX)
+  canvas.height = Math.min(sourceHeight, image.naturalHeight - sourceY)
+  const context = canvas.getContext('2d')
+  if (!context) throw new Error('Canvas 2D unavailable for frame cropping')
+  context.drawImage(
+    image,
+    sourceX,
+    sourceY,
+    canvas.width,
+    canvas.height,
+    0,
+    0,
+    canvas.width,
+    canvas.height,
+  )
+  return canvas.toDataURL('image/jpeg', 0.85)
+}
+
+async function syntheticFrame(region: SceneRegionId): Promise<string> {
   const cached = frameCache.get(region)
   if (cached) return cached
 
@@ -137,13 +194,7 @@ export async function sceneFrame(region: SceneRegionId = 'full'): Promise<string
     `viewBox="${rect.x} ${rect.y} ${rect.width} ${rect.height}"`,
   )
   const blobUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
-  const image = new Image()
-  image.decoding = 'async'
-  const decoded = Promise.withResolvers<void>()
-  image.onload = () => decoded.resolve()
-  image.onerror = () => decoded.reject(new Error('Synthetic frame failed to rasterize'))
-  image.src = blobUrl
-  await decoded.promise
+  const image = await decodeImage(blobUrl)
   const scale = region === 'full' ? 1 : 1.6
   const canvas = document.createElement('canvas')
   canvas.width = Math.round(rect.width * scale)
@@ -154,4 +205,24 @@ export async function sceneFrame(region: SceneRegionId = 'full'): Promise<string
   const dataUrl = canvas.toDataURL('image/png')
   frameCache.set(region, dataUrl)
   return dataUrl
+}
+
+/**
+ * Resolve a model-visible frame and its true provenance.
+ * A registered live snapshot wins; the synthetic slide is the fallback.
+ */
+export async function resolveSceneFrame(
+  region: SceneRegionId = 'full',
+): Promise<ResolvedFrame> {
+  const frame = liveFrame
+  if (frame) {
+    const source: FrameSource = frame.source === 'screen' ? 'live-screen' : 'live-camera'
+    if (region === 'full') return { dataUrl: frame.dataUrl, source }
+    try {
+      return { dataUrl: await cropLiveFrame(frame, region), source }
+    } catch {
+      // Undecodable snapshot: fall through to the synthetic slide.
+    }
+  }
+  return { dataUrl: await syntheticFrame(region), source: 'synthetic-slide' }
 }

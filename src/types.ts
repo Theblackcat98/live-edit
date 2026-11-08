@@ -129,6 +129,16 @@ export interface ExecutionResult {
   snapshotId?: string
 }
 
+export interface RejectedTraceRecord {
+  at: number
+  command: string
+  route: { tool?: ToolName; provenance: string }
+  spanCandidates: Array<{ startLine: number; endLine: number; excerpt: string }>
+  grounding: { source: 'live' | 'fallback'; chosenLine?: number }
+  workerXml: string
+  critic: { verdict: 'rejected'; reason?: string; pCorrect: number }
+}
+
 export interface TraceTimings {
   route: number
   ground: number
@@ -136,6 +146,27 @@ export interface TraceTimings {
   critic: number
   execute: number
   total: number
+  /** Conversational reply generation (streamed chat), measured end-to-end. */
+  chat?: number
+}
+
+/**
+ * Which pixels the models actually received for a run.
+ * `none` means no frame was attached at all — never claim a source by default.
+ */
+export type FrameSource = 'live-camera' | 'live-screen' | 'synthetic-slide' | 'none'
+
+/** A live camera/screen snapshot registered by the visual panel. */
+export interface LiveFrame {
+  dataUrl: string
+  source: SourceId
+  at: number
+}
+
+/** A resolved frame handed to the models, with its true provenance. */
+export interface ResolvedFrame {
+  dataUrl: string
+  source: FrameSource
 }
 
 export interface Trace {
@@ -155,8 +186,10 @@ export interface Trace {
   promptTokens: number
   noteTokensAtStart: number
   workerNoteView: string
+  /** Which model decoded the worker XML when live: VL-2B default, 1.7B on long-context swap. */
+  workerModel?: 'vl' | 'text'
   runtime?: TraceRuntime
-  frameSource?: 'synthetic-slide' | 'none'
+  frameSource?: FrameSource
 }
 
 export interface MessageAction {
@@ -180,6 +213,8 @@ export interface DelegationInfo {
   status: 'generating' | 'verified' | 'executed' | 'rejected'
   confidence?: number
   thought?: string
+  /** Short model label for the card title; defaults to the VL-2B worker. */
+  modelLabel?: string
 }
 
 export interface Message {
@@ -194,6 +229,8 @@ export interface Message {
   actions?: MessageAction[]
   animate?: boolean
   delegation?: DelegationInfo
+  /** Assistant text is still arriving token by token from the model stream. */
+  streaming?: boolean
 }
 
 export interface Snapshot {
@@ -239,7 +276,7 @@ export interface TraceRuntime {
 }
 
 export interface EndpointHealth {
-  id: 'omni' | 'vl' | 'd1omni'
+  id: 'omni' | 'vl' | 'd1omni' | 'text'
   name: string
   role: string
   port: number
