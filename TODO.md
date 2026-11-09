@@ -42,14 +42,7 @@ noise floor; the HDMI audio connector reports disconnected; the ZhuHai USB
 sink drives no audible transducer), so the over-the-air loop cannot be
 machine-verified here.
 
-- [ ] Real-mic pass (human voice; speakers not required): speak a command at
-      the default mic (the Brio 101 webcam mic measures best; the Realtek USB
-      mic is ~11 dB deafer), confirm auto-stop ~1.2 s after you stop talking,
-      and check the transcript quality.
-- [ ] Real-speaker pass (human ears): with the speaker toggle on, confirm the
-      TTS reply is audible (the sink demonstrably receives the stream at
-      −16 dBFS RMS — if the room stays silent, check the ZhuHai USB amp/
-      wiring or switch the default sink), then stop mid-reply and toggle off.
+Tracked as GitHub Issues #7 (real-mic pass) and #8 (real-speaker pass).
 
 ## Next implementation work
 
