@@ -8,9 +8,33 @@
 
 const SAMPLE_RATE = 16_000
 const MAX_RECORD_MS = 20_000
-const SILENCE_STOP_MS = 1_500
-/** RMS above this counts as speech (microphone gain applied). */
-const SPEECH_RMS = 0.045
+/** Trailing silence after the last voiced block that ends the capture. */
+const SILENCE_STOP_MS = 1_200
+/**
+ * Absolute gate on the processed RMS (~−48 dBFS). Chrome's AGC+noise
+ * suppression puts the room floor at 0.0005–0.004 here, while quiet
+ * far-field speech measured 0.014 (HDMI speakers) to 0.038 (USB speakers);
+ * a single absolute threshold above both floors would never latch.
+ */
+const VOICE_RMS_MIN = 0.004
+/** Speech must also clear the rolling noise floor by this factor. */
+const VOICE_FLOOR_RATIO = 2.2
+/**
+ * Consecutive 3-block means (~256 ms each) above the gate before voice
+ * latches. Two means reject keyboard/fan transients.
+ */
+const VOICE_ONSET_BLOCKS = 2
+/** Chrome's AGC/NS startup transient is loud for the first ~0.5 s; do not
+ * treat it as speech (audio is still recorded, only detection waits). */
+const VAD_WARMUP_MS = 500
+/** Noise-floor tracking per block: fall immediately, creep up slowly. */
+const FLOOR_FALL = 0.5
+const FLOOR_RISE = 0.02
+/** Blocks averaged before a gate decision (85 ms each at 48 kHz). */
+const LEVEL_WINDOW = 3
+/** Peak-safe gain lift applied to the capture before ASR. */
+const ASR_TARGET_RMS = 0.1
+const ASR_MAX_GAIN = 31.6
 
 export interface VoiceRecorderOptions {
   /** Fired when the recorder auto-stops after trailing silence. */
@@ -30,6 +54,12 @@ export class VoiceRecorder {
   private sawVoice = false
   private recordingStartedAt = 0
   private stopping = false
+  /** Rolling noise-floor estimate of the processed RMS. */
+  private noiseFloor = 0
+  /** Last few block RMS values; smoothed before gate decisions. */
+  private recentRms: number[] = []
+  /** Consecutive smoothed levels above the gate. */
+  private aboveGateRun = 0
   private readonly options: VoiceRecorderOptions
 
   constructor(options: VoiceRecorderOptions = {}) {
@@ -51,6 +81,9 @@ export class VoiceRecorder {
     this.level = 0
     this.sawVoice = false
     this.stopping = false
+    this.noiseFloor = VOICE_RMS_MIN
+    this.recentRms = []
+    this.aboveGateRun = 0
     this.recordingStartedAt = performance.now()
     this.lastVoiceAt = this.recordingStartedAt
 
@@ -84,16 +117,36 @@ export class VoiceRecorder {
     this.samples += outLength
 
     const now = performance.now()
-    if (rms >= SPEECH_RMS) {
-      this.sawVoice = true
-      this.lastVoiceAt = now
-    } else if (
-      this.sawVoice &&
-      now - this.lastVoiceAt >= SILENCE_STOP_MS
-    ) {
+    const elapsed = now - this.recordingStartedAt
+
+    // Track the room/AGC floor: fall to any quieter block immediately, creep
+    // up only while no voice is active so speech cannot lift the gate.
+    this.noiseFloor =
+      rms < this.noiseFloor
+        ? this.noiseFloor + (rms - this.noiseFloor) * FLOOR_FALL
+        : this.sawVoice
+          ? this.noiseFloor
+          : this.noiseFloor + (rms - this.noiseFloor) * FLOOR_RISE
+
+    this.recentRms.push(rms)
+    if (this.recentRms.length > LEVEL_WINDOW) this.recentRms.shift()
+    const smoothed =
+      this.recentRms.reduce((sum, value) => sum + value, 0) / this.recentRms.length
+    const gate = Math.max(VOICE_RMS_MIN, this.noiseFloor * VOICE_FLOOR_RATIO)
+    if (elapsed >= VAD_WARMUP_MS && smoothed >= gate) {
+      this.aboveGateRun += 1
+      if (!this.sawVoice && this.aboveGateRun >= VOICE_ONSET_BLOCKS) {
+        this.sawVoice = true
+      }
+      if (this.sawVoice) this.lastVoiceAt = now
+    } else {
+      this.aboveGateRun = 0
+    }
+
+    if (this.sawVoice && now - this.lastVoiceAt >= SILENCE_STOP_MS) {
       this.stopping = true
       this.options.onAutoStop?.()
-    } else if (now - this.recordingStartedAt >= MAX_RECORD_MS) {
+    } else if (elapsed >= MAX_RECORD_MS) {
       this.stopping = true
       this.options.onAutoStop?.()
     }
@@ -115,7 +168,7 @@ export class VoiceRecorder {
     if (!audioContext || !chunks.length) return null
     const seconds = this.samples / SAMPLE_RATE
     if (seconds < 0.4) return null
-    return encodeWav(chunks, this.samples)
+    return encodeWav(chunks, this.samples, captureGain(chunks, this.samples))
   }
 
   abort(): void {
@@ -140,12 +193,36 @@ export class VoiceRecorder {
   }
 }
 
-function encodeWav(chunks: Float32Array[], totalSamples: number): Blob {
+/**
+ * Lift quiet captures toward a level ASR models are calibrated for. A real
+ * USB mic fed through Chrome's AGC can deliver a −40 dBFS phrase; the Omni
+ * transcription of the same audio degrades sharply that low. Gain is capped
+ * so the loudest sample stays below full scale and never attenuates.
+ */
+function captureGain(chunks: Float32Array[], totalSamples: number): number {
+  if (!totalSamples) return 1
+  let sum = 0
+  let peak = 0
+  for (const chunk of chunks) {
+    for (let index = 0; index < chunk.length; index += 1) {
+      const sample = chunk[index]
+      sum += sample * sample
+      const magnitude = Math.abs(sample)
+      if (magnitude > peak) peak = magnitude
+    }
+  }
+  const rms = Math.sqrt(sum / totalSamples)
+  if (!rms || !peak) return 1
+  const gain = Math.min(ASR_MAX_GAIN, ASR_TARGET_RMS / rms, 0.95 / peak)
+  return gain > 1 ? gain : 1
+}
+
+function encodeWav(chunks: Float32Array[], totalSamples: number, gain = 1): Blob {
   const pcm = new Int16Array(totalSamples)
   let offset = 0
   for (const chunk of chunks) {
     for (let index = 0; index < chunk.length; index += 1) {
-      const sample = Math.max(-1, Math.min(1, chunk[index]))
+      const sample = Math.max(-1, Math.min(1, chunk[index] * gain))
       pcm[offset + index] = sample < 0 ? sample * 0x8000 : sample * 0x7fff
     }
     offset += chunk.length
