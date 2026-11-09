@@ -185,6 +185,7 @@ async function main() {
     await cdp.send('Page.reload', { ignoreCache: false })
     await sleep(800) // let the navigation actually start before probing DOM
     await waitAppReady()
+    await installTtsHook()
   }
 
   async function waitAppReady(timeout = 30_000) {
@@ -231,16 +232,93 @@ async function main() {
   }
 
   /**
+   * Case 25 (design.md §13.6): pipeline stage/mechanism vocabulary that must
+   * never surface in chat transcript or TTS text. Scoped to the delegation
+   * mechanism's own tokens plus the pipeline state machine's stage nouns and
+   * provenance nouns. Deliberately absent: the bare role/component names
+   * ("worker", "supervisor", "ground …") that the retained legacy canned
+   * strings (ackFor/completionFor/buildClarification) still speak through
+   * P5 — a hit on harness-authored strings would be a planned-defect false
+   * positive (architecture-refactor.md §6.5), not mechanism leakage. The
+   * list tightens when P6 deletes those strings.
+   */
+  const STAGE_VOCABULARY =
+    /\b(routing|grounding|critic|critique|directive|pipeline|systemone|noul|stage\s+[abc]|d1)\b/i
+
+  /**
    * Chat hygiene: an assistant reply must never surface raw action markup —
    * no `<tool_call`, no `<function=`, and no fenced block that contains either
-   * (models sometimes "show their work" in a code fence).
+   * (models sometimes "show their work" in a code fence). Extended for the
+   * Omni-first pipeline (case 25): no delegation tool tokens, no directive
+   * delimiters, no call/arguments JSON fragments, no pipeline stage
+   * vocabulary.
    */
   function replyHygiene(text) {
     const hits = []
     if (text.includes('<tool_call')) hits.push('<tool_call')
     if (text.includes('<function=')) hits.push('<function=')
     if (/```[\s\S]*?(tool_call|function=)[\s\S]*?```/.test(text)) hits.push('fenced action block')
+    if (text.includes('delegate_edit')) hits.push('delegate_edit')
+    if (text.includes('<<<DIRECTIVE')) hits.push('<<<DIRECTIVE')
+    if (/\btool_call\b/.test(text)) hits.push('tool_call token')
+    if (/["']arguments["']\s*:/.test(text)) hits.push('arguments JSON fragment')
+    const vocab = text.match(STAGE_VOCABULARY)
+    if (vocab) hits.push(`stage vocabulary "${vocab[0]}"`)
     return { ok: hits.length === 0, hits }
+  }
+
+  /**
+   * Case 25 corpus: every transcript message text and spoken utterance
+   * observed across the battery, harvested at each settled run (mutation and
+   * conversational cases alike — design.md §13.6 puts the bar on "any
+   * case"). A text may be sampled twice if several runs settle in one group;
+   * duplicates only make the audit stricter.
+   */
+  const hygieneCorpus = []
+
+  /**
+   * Snapshot transcript + spoken texts into the corpus and reset the TTS
+   * log so utterances are recorded exactly once.
+   */
+  async function harvestHygiene() {
+    const sample = await evalJs(`(() => {
+      const raw = localStorage.getItem(${JSON.stringify(STORAGE_KEY)})
+      const ws = raw ? JSON.parse(raw) : null
+      const msgs = (ws && Array.isArray(ws.messages))
+        ? ws.messages.map((m) => ({ role: m.role ?? '?', text: typeof m.text === 'string' ? m.text : '' }))
+        : []
+      const tts = Array.isArray(window.__qaTtsText) ? window.__qaTtsText.slice() : []
+      if (Array.isArray(window.__qaTtsText)) window.__qaTtsText.length = 0
+      return { msgs, tts }
+    })()`)
+    for (const m of sample.msgs) {
+      if (m.text) hygieneCorpus.push({ kind: `msg/${m.role}`, text: m.text })
+    }
+    for (const t of sample.tts) {
+      if (t) hygieneCorpus.push({ kind: 'tts', text: t })
+    }
+  }
+
+  /**
+   * Record browser TTS utterances so case 25 audits what was actually
+   * spoken, not only what was written (the app strips markup before
+   * speaking, so spoken text can differ from the transcript). Transparent
+   * to the app; re-installed after every seedWorkspace reload because the
+   * page reload wipes window globals.
+   */
+  async function installTtsHook() {
+    await evalJs(`(() => {
+      if (window.__qaTtsHooked) return
+      window.__qaTtsHooked = true
+      window.__qaTtsText = []
+      const synth = window.speechSynthesis
+      if (!synth || typeof synth.speak !== 'function') return
+      const original = synth.speak.bind(synth)
+      synth.speak = (utterance) => {
+        try { window.__qaTtsText.push(String(utterance?.text ?? '')) } catch { /* never break the app */ }
+        original(utterance)
+      }
+    })()`)
   }
 
   /** Wait until the persisted workspace stops changing (debounced save settled). */
@@ -295,6 +373,7 @@ async function main() {
       const info = await runsInfo()
       if (info.count > before.count && TERMINAL.has(info.status)) {
         await settleState()
+        await harvestHygiene()
         return { ...info, samples }
       }
       await sleep(300)
@@ -807,6 +886,50 @@ async function main() {
     record('24', 'vague "delete the bullet about the audit" → d1 grounds the SSO list item',
       info.status === 'verified' && bulletGone && neighboursKept && info.grounding?.source === 'd1-span',
       `status=${info.status}, bulletGone=${bulletGone}, neighboursKept=${neighboursKept}, span=${info.span ? `${info.span.startLine}-${info.span.endLine}` : '-'}, grounding=${JSON.stringify(info.grounding)}${run.timedOut ? ', TIMEOUT' : ''}`)
+  }
+
+  // --- Group F: P2 gates — delegation hygiene + ambiguous → Omni clarify -
+  // The two architecture-refactor.md §6 P2 gate cases. Case 25 audits the
+  // corpus harvested across every group above (it needs no new turns); case
+  // 26 sends the design's ambiguous command and binds the Omni clarify
+  // outcome (plan §6.2 — clarify is Omni's move, made before delegating).
+  // Both are authored to the P2 spec; they only bind as model-behaviour
+  // gates once the orchestrator wires runOmniTurn in front of the pipeline.
+  say('Group F: delegation hygiene (design.md §13.6), ambiguous → Omni clarify')
+
+  {
+    const violations = []
+    for (const sample of hygieneCorpus) {
+      const hygiene = replyHygiene(sample.text)
+      if (!hygiene.ok) {
+        violations.push(`${sample.kind} → ${hygiene.hits.join('+')} in ${JSON.stringify(sample.text.slice(0, 70))}`)
+      }
+    }
+    record('25', 'delegation hygiene: no mechanism markup in transcript/TTS across all cases',
+      hygieneCorpus.length > 0 && violations.length === 0,
+      violations.length
+        ? violations.slice(0, 3).join(' | ')
+        : `${hygieneCorpus.length} transcript + TTS texts checked, all clean`)
+  }
+
+  await seedWorkspace(null)
+  await waitStorageFlushed()
+  const noteBeforeClarify = await note()
+  await submitCommand('change the number')
+  {
+    const run = await waitForRun()
+    const info = await runsInfo()
+    const n = await note()
+    const settled = await waitForReplySettled()
+    const clarifyMsg =
+      (await getWs())?.messages?.filter((m) => m.kind === 'clarify').at(-1)?.text ?? ''
+    // The exact wording is model-generated; bind to the shape of a
+    // clarifying question (which number / what target), not its phrasing.
+    const reply = settled.text || clarifyMsg
+    const asksWhichTarget = /which|what|where/i.test(reply)
+    record('26', 'ambiguous "change the number" → clarify, note byte-unchanged, reply asks which number/target',
+      info.status === 'clarify' && n === noteBeforeClarify && asksWhichTarget,
+      `status=${info.status}, noteUnchanged=${n === noteBeforeClarify}, asksWhichTarget=${asksWhichTarget}, reply="${reply.slice(0, 90)}"${run.timedOut ? ', TIMEOUT' : ''}`)
   }
 
   // ------------------------------------------------------------- report ---

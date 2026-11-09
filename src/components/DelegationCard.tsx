@@ -9,14 +9,21 @@ interface DelegationCardProps {
 }
 
 export function DelegationCard({ delegation, onOpenTrace }: DelegationCardProps) {
+  // `checking` (Phase-2 contract): the worker's proposed call is inside the
+  // deterministic hard gates and the d1 safety check — in flight, nothing
+  // decided yet (design.md §7/§8). `pending` is Phase 5's (design.md §9,
+  // user adjudication): nothing produces it yet, so it deliberately falls
+  // through to the neutral chip below until PendingEditCard lands.
   const statusLabel =
     delegation.status === 'generating'
       ? 'Generating XML'
-      : delegation.status === 'verified'
-        ? 'Verified by d1'
-        : delegation.status === 'executed'
-          ? 'Executed'
-          : 'Held by critic'
+      : delegation.status === 'checking'
+        ? 'Gates + d1 check'
+        : delegation.status === 'verified'
+          ? 'Verified by d1'
+          : delegation.status === 'executed'
+            ? 'Executed'
+            : 'Held by critic'
 
   return (
     <div className={cx('delegation-card', `is-${delegation.status}`)}>
@@ -31,11 +38,12 @@ export function DelegationCard({ delegation, onOpenTrace }: DelegationCardProps)
             className={cx(
               'delegation-status',
               delegation.status === 'executed' && 'is-green',
-              delegation.status === 'generating' && 'is-accent',
+              (delegation.status === 'generating' || delegation.status === 'checking') &&
+                'is-accent',
               delegation.status === 'rejected' && 'is-red',
             )}
           >
-            {delegation.status === 'generating' ? (
+            {delegation.status === 'generating' || delegation.status === 'checking' ? (
               <LoaderCircle size={10} className="spin" />
             ) : delegation.status === 'rejected' ? (
               <X size={10} />
@@ -56,6 +64,11 @@ export function DelegationCard({ delegation, onOpenTrace }: DelegationCardProps)
         </div>
         {delegation.thought && (
           <p className="delegation-thought">{delegation.thought}</p>
+        )}
+        {delegation.status === 'checking' && (
+          <p className="delegation-thought">
+            Hard gates and the d1 safety check are running on the proposed call.
+          </p>
         )}
         <div className="delegation-foot">
           <span className="mono">{delegation.runId.slice(-7).toUpperCase()}</span>
