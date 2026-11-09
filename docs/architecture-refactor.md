@@ -565,6 +565,7 @@ gone. (Pre-merge soak on the branch is the mitigation.)
 | D3 | Pending edits persist across reloads; storage schema v2 with v1 migration | Decided in this plan (§9.2); answers design.md Q5 |
 | D4 | E1 mechanism (native tool call vs. structured block), E2 Omni config, E3 thresholds | Filled by the P0 spikes (§4 results): **E1 stop-gate FIRED** — native wins emission (11/11 schema-valid, 0 repairs) but both mechanisms sit below the 18/20 bar (13/20, 8/20); design re-open pending. E2: native tools, temp 0.3, max_tokens 700, note cap 3,600 kept, `--reasoning off` removed (verified no-op). E3: noul ≥ 0.50 AND `safe` (interval [0.40, 0.59]). E4: 41.7% vs ≥85% — mechanical taxonomy recorded as P3 levers |
 | D5 | The flag is removed in P6, not kept as a permanent dual pipeline | Decided — a permanent dual pipeline is how the shipped build's inconsistencies happened |
+| D6 | Proceed past the E1 stop-gate (owner decision 2026-11-09: "continue anyways") — the directive-semantics gap (task-tag selection, ambiguity→clarify, brief-not-content) is carried as a known risk into P2's prompt contract, with d1 + hard gates + pending adjudication as the compensating controls | Decided by owner |
 
 ## 15. Definition of done
 
