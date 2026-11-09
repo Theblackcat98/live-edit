@@ -5,3 +5,6 @@ dist-ssr
 .DS_Store
 *.tsbuildinfo
 .vite
+
+# live-check harness artifact
+.omni-live-check-last.json
