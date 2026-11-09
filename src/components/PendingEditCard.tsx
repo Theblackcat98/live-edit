@@ -11,9 +11,9 @@ import { cx, truncate } from '../lib/utils'
  * ✓ / ✗ controls. Until ✓, a pending edit modifies nothing — not the note,
  * the snapshot stack, or the undo chain.
  *
- * Unwired on this branch: the Phase-5 wiring (useWorkspace/pipeline) mounts
- * it into the session column and resolves statuses; this component renders
- * every state — pending, busy, stale, applied, discarded — safely on its own.
+ * Mounted by SessionPanel under the transcript; useWorkspace resolves
+ * statuses. This component renders every state — pending, busy, stale,
+ * applied, discarded — safely on its own.
  *
  * Props contract for the wiring:
  *   edit:    the PendingEdit (design.md §9 shape) to render

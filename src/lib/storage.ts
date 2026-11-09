@@ -69,10 +69,8 @@ export function loadWorkspaceState(): PersistedWorkspace | null {
 /**
  * Persists `pendingEdits` verbatim. The contract (D3): the caller hands over an
  * already-capped list — pending.ts's toStorable keeps the 10 most recent
- * non-resolved — and storage does no filtering of its own. Until the Phase-5
- * wiring passes real pendings, call sites omit the field and saves carry
- * `pendingEdits: []`, which is the correct v2 shape for a workspace with no
- * pending edits.
+ * non-resolved — and storage does no filtering of its own. (useWorkspace
+ * passes `toStorable(pendingEdits)` on every save.)
  */
 export function saveWorkspaceState(state: {
   note: string

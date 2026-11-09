@@ -185,6 +185,9 @@ export default function App() {
             onResetChat={workspace.resetChat}
             onRunDemo={() => void workspace.runDemo()}
             onOpenTrace={handleOpenTrace}
+            pendingEdits={workspace.pendingEdits}
+            onApplyPending={workspace.applyPendingEdit}
+            onDismissPending={workspace.dismissPendingEdit}
             showComposer={!isPhone}
           />
         </div>
