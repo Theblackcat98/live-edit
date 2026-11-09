@@ -5,6 +5,14 @@ LiquidScribe is functional end to end on the three-model trinity: LFM3-Omni-2B
 and LFM3-1.7B (tool-call worker, :8080). `extract_visual_to_note` is
 deterministic. LFM3-VL-2B (:8081) was removed from the runtime on 2026-11-08.
 
+**Design correction (2026-11-09):** [`docs/design.md`](docs/design.md) is now
+the authoritative spec — **Omni-first**: Omni converses and silently delegates
+with a typed directive, the 1.7B worker authors edits, d1-Omni is a safety
+check only, and d1 rejections become user-adjudicated pending edits. The roles
+in the paragraph above describe the *shipped* supervisor-first pipeline, not
+the target design; the refactor is the top item under Next implementation
+work, and design.md §12/§13 are its scope and acceptance criteria.
+
 Landed: streaming chat with multi-turn memory and barge-in, d1 typed grounding
 (structural span extraction, 2026-11-08), persistent workspace, rejected-trace
 JSONL export, camera/screen frames into the bridge, "New note", §10 MVP
@@ -45,6 +53,18 @@ machine-verified here.
 
 ## Next implementation work
 
+- [ ] **Omni-first refactor** (docs/design.md; phased plan:
+      docs/architecture-refactor.md — spikes E1–E4 first, then P1–P6).
+      Replace the supervisor-first
+      pipeline with the corrected design: Omni-first turn loop, typed
+      delegation directives, worker packet (directive + last-3-edit-turns
+      context packet + full line-numbered note), d1 reduced to the §7 safety
+      check (directive + command + call/diff + frame packet), pending-edit
+      store + ✓ / ✗ adjudication UI, deterministic layer demoted to hard
+      gates only (no content authoring, no routing). First step is design.md
+      Q1: verify Omni directive emission (native tool call vs. structured
+      block) on the local llama.cpp build. Acceptance: design.md §13 battery,
+      incl. the README-template case on a non-empty note.
 - [ ] **LoRA/tool-call SFT pass on rejected traces** (plan.md §7 Phase 5,
       §9.6, §9.8 item 5). The rejected-trace JSONL export already produces the
       training data; run a lightweight LoRA fine-tune of LFM3-1.7B on a single

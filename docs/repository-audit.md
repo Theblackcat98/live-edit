@@ -1,5 +1,18 @@
 # live-edit — Comprehensive Repository Audit
 
+> **Post-audit note (2026-11-09) — read before citing the architecture sections.**
+> This audit is a point-in-time record of commit `d84a0ab`; its findings stand as
+> written and are not revised here. But its architectural premise needs one
+> correction the audit could not have made: the supervisor-first pipeline it
+> describes (d1 routing/grounding, deterministic content authoring, Omni as
+> chat-only) is **not the owner's design**. The owner stated the intended design
+> on 2026-11-09 — Omni-first delegation, a worker that authors edits, d1 as a
+> safety check only, and user adjudication of d1 rejections — and it is now the
+> authoritative spec in [`design.md`](./design.md) (§12 there maps this audit's
+> code locations to the refactor delta). Where this report evaluates the
+> pipeline *as a supervisor design*, design.md supersedes the framing; where it
+> reports code facts and defects, it remains the record.
+
 - **Repository:** [github.com/Theblackcat98/live-edit](https://github.com/Theblackcat98/live-edit) (public)
 - **Branch:** `main`
 - **Audited commit:** `d84a0ab3aceb56324f3c8fbf585f1475323552cf`

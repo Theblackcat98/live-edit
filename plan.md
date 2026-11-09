@@ -1,5 +1,15 @@
 # Project Plan: LFM3 Multimodal Agentic Note & File Workspace ("LiquidScribe")
 
+> **⚠ SUPERSEDED IN PART (2026-11-09).** The authoritative design is now
+> [`docs/design.md`](./docs/design.md) — the owner's corrected, **Omni-first** spec:
+> Omni converses and silently delegates via a typed directive, the 1.7B worker
+> **authors** edits, d1-Omni is a **safety check only**, and d1 rejections go to the
+> user as pending edits (✓ / ✗). **§1–§6 of this plan describe the earlier
+> supervisor-first design (d1 routing/grounding, deterministic pre-authoring) and
+> are superseded wherever they conflict with design.md.** §7 is the original
+> roadmap; §9–§10 remain valid as the build record of what actually shipped.
+> See §11 below for the correction summary.
+
 ## 1. Executive Summary & Core Concept
 
 **LiquidScribe** is a local-first, real-time multimodal workspace where a user can talk naturally, show documents/screens/whiteboards via camera or screen-share, and collaboratively build, edit, and organize notes/files hands-free.
@@ -538,6 +548,34 @@ type changes, no dependency changes.
 `useWorkspace.ts` and `qa-suite.mjs`; `npm run typecheck` and `npm run build` pass; the QA
 battery ran 31/31 PASS with zero console errors against the live trinity (Omni :8083,
 d1-Omni :8085, LFM3-1.7B :8080, VL-2B :8081).
+
+---
+
+# 11. Corrected design — Omni-first (2026-11-09)
+
+§10 hardened the supervisor-first pipeline; it did not question it. On
+2026-11-08 the owner reported the lived symptom — *"write a README template
+document to begin"* on a non-empty note inserts that literal phrase instead of
+drafting a README — and on 2026-11-09 stated the design in his own words. The
+shipped architecture **inverts** it:
+
+| Owner's design | Shipped build (§1–§6, §10) |
+| :--- | :--- |
+| Omni is the only user-facing model; every turn goes to it first | d1 + regex route before Omni; mutation turns never reach Omni |
+| Omni silently delegates with a typed, context-resolved directive | No directive exists; a deterministic plan pre-decides tool, span and content |
+| The 1.7B worker authors the edit and the tool call | The worker transcribes supervisor-authored content into XML ("insert verbatim", one schema, span ±3 lines) |
+| d1 is a safety check on finished calls, fed directive + context + frame | d1 routes, grounds and critiques; its critic packet has no directive, no turns, no frame |
+| d1 disapproval → pending edit, user adjudicates ✓ / ✗ | d1 rejection is a dead end |
+
+The full corrected spec — roles, flow, directive schema, the downhill-distilled
+context policy (worker gets the last 3 edit turns as *outcomes*, not raw
+transcript), hard gates vs. semantic veto, the pending-edit object and UI
+contract, degradation rules, the file-by-file refactor delta (§12 there), and
+acceptance criteria including the README case on a non-empty note — lives in
+[`docs/design.md`](./docs/design.md) and is authoritative. The §10 workstreams
+are closed; the next implementation work is the design.md refactor (tracked in
+TODO.md), planned phase-by-phase in
+[`docs/architecture-refactor.md`](./docs/architecture-refactor.md).
 
 
 
