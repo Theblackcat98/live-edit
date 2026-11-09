@@ -21,11 +21,11 @@ import {
   getParagraphs,
   isTableSeparator,
   lineRangeExcerpt,
-  normalizeWhitespace,
   parseTableRow,
   splitLines,
 } from './doc'
 import { clamp, countWords, estimateTokens, pAdopted, pDecisive, sentenceCase, truncate } from './utils'
+import { checkAnchor, checkBlastRadius, checkBounds } from './gates'
 import { d1Decide, type D1Question } from './bridge'
 import { SCENE_REGIONS, VISUAL_MARKDOWN } from '../data/scene'
 import { MEMORY_BUDGET_GB, MODELS, TOTAL_MEMORY_GB } from '../data/models'
@@ -1723,7 +1723,6 @@ export function critique(
   span: SpanTarget | undefined,
   call: WorkerCall,
 ): CriticResult {
-  const lines = splitLines(note)
   const checks: CriticCheck[] = []
   const params = call.params
 
@@ -1745,74 +1744,43 @@ export function critique(
       : `${call.name} was not routed.`,
   })
 
-  let rangeValid = true
-  let anchorExact = true
-  let targetGrounded = true
-  let destructiveSafe = true
-
+  // Bounds, anchor exactness and blast radius are the hard gates of gates.ts,
+  // called in the same order with the same labels and detail strings as when
+  // they lived inline here. The route-dependent checks stay local: tool_match
+  // above, and target_grounded (span confinement) below.
   if (call.name === 'edit_text' || call.name === 'remove_text') {
-    const start = Number(params.start_line)
-    const end = Number(params.end_line)
-    rangeValid = Number.isInteger(start) && Number.isInteger(end) && start >= 1 && end >= start && end <= lines.length
-    checks.push({
-      label: 'range_in_bounds',
-      pass: rangeValid,
-      detail: rangeValid ? `Lines ${start}–${end} exist (${lines.length} total).` : 'Proposed range is outside the note.',
-    })
+    const bounds = checkBounds(note, call)
+    const rangeValid = bounds?.pass === true
+    if (bounds) {
+      checks.push({ label: 'range_in_bounds', pass: bounds.pass, detail: bounds.detail })
+    }
     if (rangeValid) {
-      const current = lines.slice(start - 1, end).join('\n')
-      const anchor = call.name === 'edit_text' ? params.old_text_anchor : params.target_excerpt
       // The anchor is validated against the SUPERVISOR'S span, not the call's
       // own range: a worker that invents a range and copies its text would
-      // otherwise always agree with itself (audit TD-01).
-      const anchorSource = span ? span.excerpt : current
-      anchorExact = normalizeWhitespace(anchorSource) === normalizeWhitespace(anchor)
-      checks.push({
-        label: 'anchor_exact',
-        pass: anchorExact,
-        detail: anchorExact
-          ? span
-            ? 'old_text_anchor matches the grounded span exactly.'
-            : 'old_text_anchor matches the current lines exactly.'
-          : 'Anchor drifted from the grounded span.',
-      })
+      // otherwise always agree with itself (audit TD-01). checkAnchor keeps
+      // that span-override semantics.
+      const anchor = checkAnchor(note, call, span?.excerpt)
+      if (anchor) {
+        checks.push({ label: 'anchor_exact', pass: anchor.pass, detail: anchor.detail })
+      }
       if (span) {
         // The whole call range must sit inside the grounded span (±1 line of
         // adjacency tolerance). Checking only the call's start let an 8-line
         // removal pass against a 1-line span (audit TD-01).
+        const start = Number(params.start_line)
+        const end = Number(params.end_line)
         const confined = start >= span.startLine - 1 && end <= span.endLine + 1
-        targetGrounded = confined
         checks.push({
           label: 'target_grounded',
-          pass: targetGrounded,
-          detail: targetGrounded
+          pass: confined,
+          detail: confined
             ? `Call lines ${start}–${end} sit inside supervisor span ${span.startLine}–${span.endLine}.`
             : `Call ${start}–${end} is not confined to grounded span ${span.startLine}–${span.endLine}.`,
         })
       }
-      if (call.name === 'remove_text') {
-        const removed = end - start + 1
-        destructiveSafe = removed < Math.max(9, Math.floor(lines.length * 0.5))
-        checks.push({
-          label: 'destructive_safety',
-          pass: destructiveSafe,
-          detail: destructiveSafe ? `${removed} line${removed === 1 ? '' : 's'} removed; below blast-radius limit.` : 'Removal exceeds the blast-radius limit.',
-        })
-      }
-      if (call.name === 'edit_text') {
-        // A replacement that keeps under 30% of the target's length guts it,
-        // at ANY target size — the old 90-character floor let short-target
-        // gutting through (audit TD-44).
-        const replacementLength = (params.new_text ?? '').trim().length
-        const retainsContext = replacementLength >= current.length * 0.3
-        destructiveSafe = destructiveSafe && retainsContext
-        checks.push({
-          label: 'blast_radius',
-          pass: retainsContext,
-          detail: retainsContext
-            ? `Replacement retains enough of the target (${replacementLength} of ${current.length} characters).`
-            : 'Replacement collapses the grounded target. Ask for a narrower target.',
-        })
+      const blast = checkBlastRadius(note, call)
+      if (blast) {
+        checks.push({ label: blast.gate, pass: blast.pass, detail: blast.detail })
       }
     }
   }
@@ -1832,7 +1800,6 @@ export function critique(
         pass: exists,
         detail: exists ? `Heading “${params.anchor}” exists.` : 'Heading anchor not found.',
       })
-      anchorExact = exists
     }
   }
 
@@ -1845,7 +1812,6 @@ export function critique(
       pass: headingOk,
       detail: headingOk ? `Heading “${params.anchor_heading}” exists.` : 'Anchor heading not found.',
     })
-    anchorExact = headingOk
   }
 
   // The local critic never invents probabilities: the verdict tracks the

@@ -16,6 +16,12 @@ export type RunStatus =
   | 'rejected'
   | 'conversational'
   | 'failed'
+  /**
+   * The run produced a pending edit (design.md §9) that awaits user
+   * adjudication; the turn is paused, not over. Phase-1 contract only —
+   * nothing produces this status yet.
+   */
+  | 'pending'
 
 export type PipelineStage =
   | 'idle'
@@ -258,7 +264,12 @@ export interface Suggestion {
 export interface DelegationInfo {
   runId: string
   tool: ToolName
-  status: 'generating' | 'verified' | 'executed' | 'rejected'
+  /**
+   * Phase-1 additions: `checking` (hard gates / d1 check in flight) and
+   * `pending` (the edit awaits user adjudication, design.md §9). Nothing
+   * produces them yet — the old pipeline still emits only the original four.
+   */
+  status: 'generating' | 'checking' | 'pending' | 'verified' | 'executed' | 'rejected'
   /** d1's measured critic score; null/undefined hides the P chip (never invented). */
   confidence?: Probability
   thought?: string
@@ -387,4 +398,134 @@ export interface WorkspaceState {
   speakerOn: boolean
   micOn: boolean
   activityTab: 'supervisor' | 'context'
+}
+
+// --- Phase-1 pipeline contracts (architecture-refactor.md §5.1) ----------------
+// Additive only: these types describe the Omni-first pipeline (design.md) so
+// later phases are type-led. Nothing produces or consumes them yet; the legacy
+// types above stay until their phase deletes them.
+
+/**
+ * The Omni → worker delegation contract (design.md §5). Omni resolves the
+ * user's references ("the same for Q4", "that bullet") *inside* the directive,
+ * so the worker can act on it almost standalone.
+ *
+ * Rules from design.md §5:
+ * - `instruction` is a **brief, not the content** — except that Omni must pack
+ *   into it everything the user specified about the content (sections named,
+ *   values given, tone asked for).
+ * - `verbatim` is the one case where content legitimately travels inside the
+ *   directive: the user dictated exact words, and the worker inserts them as-is.
+ * - `target` is optional; the worker grounds the exact span itself.
+ * - A directive is per-turn and ephemeral; it is recorded in the trace.
+ *
+ * Note: the `frame_extract` field (decision D2) is deliberately absent — it
+ * lands with Phase 3 and is mirrored into design.md §5 then.
+ */
+export interface DirectiveTarget {
+  /** What was asked for, in Omni's resolved words ("top of the note, before the Q3 heading"). */
+  description: string
+  /** The heading the target sits under, when Omni resolved one; null otherwise. */
+  heading: string | null
+}
+
+export interface Directive {
+  /** Coarse operation class; the worker still chooses the concrete tool. */
+  task: 'create' | 'insert' | 'edit' | 'remove' | 'extract'
+  /** The brief: everything the user meant, references resolved, no chat. */
+  instruction: string
+  /** Optional resolved target description; the worker grounds the exact span. */
+  target?: DirectiveTarget
+  /** Exact user-dictated text to insert as-is, when the user dictated it; null otherwise. */
+  verbatim?: string | null
+  /** Formatting/scope constraints ("markdown", "keep the existing Q3 content intact"). */
+  constraints?: string[]
+  /** Whether the worker's task depends on the current video frame. */
+  frame_relevant?: boolean
+}
+
+/**
+ * What a single Omni turn resolved to (design.md §2/§4). Exactly one outcome
+ * per turn: Omni answers, asks for clarification, silently delegates to the
+ * worker, or maps the user's words to a harness action (undo/redo/apply a
+ * pending edit).
+ */
+export type OmniOutcome = 'answer' | 'clarify' | 'delegate' | 'action'
+
+/**
+ * One completed edit turn distilled for the worker context packet
+ * (design.md §6): outcomes, not transcript. Assistant prose is excluded by
+ * construction — this record is built from the directive and the recorded
+ * diff, never from chat.
+ */
+export interface EditTurnRecord {
+  /** The user's command for that turn, verbatim. */
+  command: string
+  /** The directive that drove the turn, truncated (summaries are the directives themselves). */
+  directiveSummary: string
+  /** One-line summary of the diff the turn produced. */
+  diffSummary: string
+}
+
+/**
+ * The worker's context packet (design.md §6): the last 3 completed edit turns
+ * (most recent last) plus the packet's prompt-token estimate, so the trace can
+ * record the real budget spent. The full line-numbered note travels with the
+ * prompt itself, not inside this packet.
+ */
+export interface ContextPacket {
+  /** Up to 3 most recent completed edit turns, oldest first (most recent last). */
+  editTurns: EditTurnRecord[]
+  /** Estimated prompt-token cost of the packet (assembly-time estimate, recorded honestly). */
+  promptTokens: number
+}
+
+/**
+ * Result of the d1 safety check (design.md §7). `unavailable` is a first-class
+ * verdict: d1 down, malformed answer, or an otherwise unusable response is
+ * never silently mapped to approval (or to rejection) — it means the user
+ * decides instead.
+ */
+export interface D1CheckResult {
+  /** approved: noul ≥ threshold and destructive_safety = safe; disapproved otherwise; unavailable per above. */
+  verdict: 'approved' | 'disapproved' | 'unavailable'
+  /** d1's measured `does_call_match_directive` score; null when unreported/unavailable. */
+  noul: number | null
+  /** d1's `destructive_safety` choice; null when unreported/unavailable. */
+  destructiveSafety: 'safe' | 'unintended_data_loss' | null
+  /** Which typed question failed the verdict (shown to the user on a pending card). */
+  failingQuestion?: string
+  /** Human-readable reason (bridge error detail, threshold explanation). */
+  reason?: string
+  /** Wall-clock duration of the check, in ms. */
+  ms?: number
+}
+
+/**
+ * A first-class pending edit awaiting user adjudication (design.md §9). A
+ * pending edit modifies nothing — not the note, the snapshot stack, or the
+ * undo chain — until the user approves it and the hard gates re-run.
+ */
+export interface PendingEdit {
+  /** Stable id for the card, the queue (FIFO) and voice adjudication references. */
+  id: string
+  /** When the proposal was created (epoch ms). */
+  createdAt: number
+  /** The Omni directive that produced this proposal. */
+  directive: Directive
+  /** The parsed worker tool call under adjudication. */
+  call: WorkerCall
+  /** The diff rendered against the note version the call was authored against. */
+  diff: ExecutionDiff
+  /** Hash of the note the call was authored against; staleness compares against the current note. */
+  noteHash: string
+  /** The d1 result that routed this call here. Only disapproved/unavailable can appear. */
+  d1: {
+    verdict: 'disapproved' | 'unavailable'
+    noul: number | null
+    destructiveSafety: 'safe' | 'unintended_data_loss' | null
+    reason?: string
+  }
+  /** pending: awaiting adjudication; applied/discarded: resolved by the user; stale: gates failed on ✓ (drifted anchor). */
+  status: 'pending' | 'applied' | 'discarded' | 'stale'
 }
