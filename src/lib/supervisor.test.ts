@@ -1,10 +1,27 @@
 import { describe, expect, it } from 'vitest'
+// Source text of every module that produces displayed/gated numbers: the
+// honesty guarantee is static (no Math.random may exist in src/lib + src/state),
+// so the sources are imported raw and grepped.
+import bridgeSource from './bridge.ts?raw'
+import docSource from './doc.ts?raw'
+import frameSource from './frame.ts?raw'
+import routeSource from './route.ts?raw'
+import speechSource from './speech.ts?raw'
+import storageSource from './storage.ts?raw'
+import suggestionsSource from './suggestions.ts?raw'
+import supervisorSource from './supervisor.ts?raw'
+import toolsSource from './tools.ts?raw'
+import utilsSource from './utils.ts?raw'
+import workerSource from './worker.ts?raw'
+import xmlSource from './xml.ts?raw'
+import workspaceSource from '../state/useWorkspace.ts?raw'
 import type { RouteDecision, SpanTarget, WorkerCall } from '../types'
 import { INITIAL_NOTE } from '../data/note'
 import { lineRangeExcerpt } from './doc'
 import { executeTool } from './tools'
 import {
   buildPlan,
+  conversationalReply,
   critique,
   isVagueMutation,
   normalizeCommand,
@@ -264,5 +281,147 @@ describe('vague-mutation guardrail predicate (TD-43)', () => {
     const edit = routeCommand('change it to something shorter')
     expect(edit.action).toBe('ambiguous_request')
     expect(edit.primaryTool).toBe('edit_text')
+  })
+})
+
+// --- audit TD-03: deterministic scores, no fabricated distributions -------------
+
+describe('deterministic scores (audit TD-03)', () => {
+  it('routeCommand returns deep-equal scores for the same command on every run', () => {
+    const first = routeCommand('Update the Q3 revenue row to $1.45M Final')
+    const second = routeCommand('Update the Q3 revenue row to $1.45M Final')
+    expect(second).toEqual(first)
+    // Flat heuristic values, stable across runs — no simulated spread.
+    expect(first.actionConfidence).toBe(0.9)
+    expect(first.allowedTools[0]).toEqual({ name: 'edit_text', p: 0.88 })
+  })
+
+  it('the whole fallback pipeline is reproducible: two runs deep-equal', async () => {
+    const first = await runDeterministicPipeline('Update the Q3 revenue row to $1.45M Final')
+    const second = await runDeterministicPipeline('Update the Q3 revenue row to $1.45M Final')
+    expect(second.route).toEqual(first.route)
+    expect(second.plan).toEqual(first.plan)
+    expect(second.call).toEqual(first.call)
+    expect(second.critic).toEqual(first.critic)
+  })
+
+  it('src/lib and src/state contain no Math.random call', () => {
+    const sources: Record<string, string> = {
+      'src/lib/bridge.ts': bridgeSource,
+      'src/lib/doc.ts': docSource,
+      'src/lib/frame.ts': frameSource,
+      'src/lib/route.ts': routeSource,
+      'src/lib/speech.ts': speechSource,
+      'src/lib/storage.ts': storageSource,
+      'src/lib/suggestions.ts': suggestionsSource,
+      'src/lib/supervisor.ts': supervisorSource,
+      'src/lib/tools.ts': toolsSource,
+      'src/lib/utils.ts': utilsSource,
+      'src/lib/worker.ts': workerSource,
+      'src/lib/xml.ts': xmlSource,
+      'src/state/useWorkspace.ts': workspaceSource,
+    }
+    const offenders = Object.entries(sources)
+      .filter(([, source]) => /Math\.random/.test(source))
+      .map(([file]) => file)
+    expect(offenders).toEqual([])
+  })
+})
+
+// --- audit TD-03: the local critic never invents probabilities -------------------
+
+describe('critic honesty (audit TD-03)', () => {
+  it('a passing call verifies with null pCorrect/pSafe — the checks alone decide', () => {
+    const span = spanAt(INITIAL_NOTE, 17, 17)
+    const call = manualCall('edit_text', {
+      file_path: 'notes/quarterly-review.md',
+      start_line: '17',
+      end_line: '17',
+      old_text_anchor: '| Q3 | $1.2M | Pending |',
+      new_text: '| Q3 | $1.45M | Final |',
+    })
+    const result = critique(INITIAL_NOTE, mutationRoute('edit_text'), span, call)
+    expect(result.verdict).toBe('verified')
+    expect(result.pCorrect).toBeNull()
+    expect(result.pSafe).toBeNull()
+  })
+
+  it('a failing call rejects with null pCorrect/pSafe — a rolled number never gates', () => {
+    const span = spanAt(INITIAL_NOTE, 25, 25) // the Redis bullet
+    const call = manualCall('remove_text', {
+      file_path: 'notes/quarterly-review.md',
+      start_line: '22',
+      end_line: '29',
+      target_excerpt: span.excerpt,
+    })
+    const result = critique(INITIAL_NOTE, mutationRoute('remove_text'), span, call)
+    expect(result.verdict).toBe('rejected')
+    expect(result.pCorrect).toBeNull()
+    expect(result.pSafe).toBeNull()
+  })
+
+  it('an unreported tool score still counts as routed membership', () => {
+    const span = spanAt(INITIAL_NOTE, 17, 17)
+    const call = manualCall('edit_text', {
+      file_path: 'notes/quarterly-review.md',
+      start_line: '17',
+      end_line: '17',
+      old_text_anchor: '| Q3 | $1.2M | Pending |',
+      new_text: '| Q3 | $1.45M | Final |',
+    })
+    // d1 chose edit_text without a distribution: p is null, not a number.
+    const route = mutationRoute('edit_text')
+    const unreported: RouteDecision = {
+      ...route,
+      primaryTool: 'remove_text',
+      allowedTools: [{ name: 'edit_text', p: null }],
+    }
+    const result = critique(INITIAL_NOTE, unreported, span, call)
+    const toolMatch = result.checks.find((check) => check.label === 'tool_match')
+    expect(toolMatch?.pass).toBe(true)
+  })
+})
+
+// --- audit TD-13/TD-05: template calls are labelled, sampler claims are real ----
+
+describe('worker template honesty (audit TD-13/TD-05)', () => {
+  it('labels template calls as deterministic and claims no sampler', async () => {
+    const { call } = await runDeterministicPipeline('Update the Q3 revenue row to $1.45M Final')
+    expect(call.thought).toContain('No model decode ran')
+    // A sampler is recorded only for genuinely live decodes.
+    expect(call.sampler).toBeUndefined()
+    const hints = call.promptHints.join(' ')
+    expect(hints).not.toMatch(/top_k|repetition_penalty/)
+    expect(hints).toContain('no decode request sent')
+  })
+})
+
+// --- audit TD-18: the chat fallback describes only what it can know -------------
+
+describe('conversationalReply frame honesty (audit TD-18)', () => {
+  const ASK = 'What do you see?'
+
+  it('describes the slide only when the attached frame is the synthetic one', () => {
+    const reply = conversationalReply(ASK, INITIAL_NOTE, null, 'synthetic-slide')
+    expect(reply).toContain('synthetic Q3 operating review slide')
+  })
+
+  it('declines to describe a live frame — visual description needs the Omni server', () => {
+    for (const source of ['live-camera', 'live-screen'] as const) {
+      const reply = conversationalReply(ASK, INITIAL_NOTE, null, source)
+      expect(reply).toContain('cannot honestly describe')
+      expect(reply).not.toContain('operating review slide')
+    }
+  })
+
+  it('says nothing is attached when no frame exists', () => {
+    expect(conversationalReply(ASK, INITIAL_NOTE, null, 'none')).toContain('No frame is attached')
+  })
+
+  it('reports the static roster budget, never the invented 5.1 GB live figure', () => {
+    const reply = conversationalReply('status update', INITIAL_NOTE, null)
+    expect(reply).not.toContain('5.1 GB')
+    expect(reply).toContain('static roster budget')
+    expect(reply).toContain('not a live measurement')
   })
 })

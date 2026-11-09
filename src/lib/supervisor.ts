@@ -2,7 +2,9 @@ import type {
   BBoxTarget,
   CriticCheck,
   CriticResult,
+  FrameSource,
   GroundingSource,
+  Probability,
   RouteDecision,
   SceneRegionId,
   SpanTarget,
@@ -23,9 +25,10 @@ import {
   parseTableRow,
   splitLines,
 } from './doc'
-import { clamp, countWords, estimateTokens, sentenceCase, truncate } from './utils'
+import { clamp, countWords, estimateTokens, pAdopted, pDecisive, sentenceCase, truncate } from './utils'
 import { d1Decide, type D1Question } from './bridge'
 import { SCENE_REGIONS, VISUAL_MARKDOWN } from '../data/scene'
+import { MEMORY_BUDGET_GB, MODELS, TOTAL_MEMORY_GB } from '../data/models'
 import { NOTE_PATH } from '../data/note'
 
 export type PlanProblem = 'missing_target' | 'missing_content' | 'ambiguous'
@@ -339,7 +342,10 @@ export function routeCommand(command: string): RouteDecision {
       : 'edit_text'
   }
 
-  const allowedTools: ToolScore[] = [{ name: primaryTool, p: 0.88 + Math.random() * 0.07 }]
+  // Flat heuristic scores: the deterministic router never measured anything, so
+  // it reports stable values instead of simulating a distribution. The trace
+  // labels the whole route as local heuristics.
+  const allowedTools: ToolScore[] = [{ name: primaryTool, p: 0.88 }]
   if (primaryTool === 'edit_text' && hasVisual) {
     allowedTools.push({ name: 'extract_visual_to_note', p: 0.19 })
   }
@@ -352,8 +358,10 @@ export function routeCommand(command: string): RouteDecision {
 
   return {
     action: 'file_mutation',
-    actionConfidence: 0.9 + Math.random() * 0.07,
-    allowedTools: allowedTools.sort((a, b) => b.p - a.p),
+    actionConfidence: 0.9,
+    // All scores on this path are flat local heuristics (never null), but the
+    // null-safe ranking keeps the invariant explicit.
+    allowedTools: allowedTools.sort((a, b) => (b.p ?? 0) - (a.p ?? 0)),
     primaryTool,
     reason:
       primaryTool === 'remove_text'
@@ -1294,7 +1302,7 @@ export function buildPlan(
     const headingLine = heading?.line ?? 1
     const anchorHeading = heading?.title ?? 'Executive summary'
     return {
-      bbox: makeBBox(region, 0.9 + Math.random() * 0.06),
+      bbox: makeBBox(region, 0.9),
       anchorHeading,
       visualFormat: visualFormatForRegion(region),
       extractedMarkdown: visualMarkdownForRegion(region),
@@ -1369,7 +1377,9 @@ export function buildPlan(
   const spanCandidates = found
     ? distinctSpans([found.span, ...found.candidates])
     : []
-  if (!found || found.span.confidence < 0.56) {
+  // The deterministic search always scores its span; an unreported confidence
+  // (never produced here) reads as 0 — it can never clear the gate.
+  if (!found || (found.span.confidence ?? 0) < 0.56) {
     return {
       problem: 'missing_target',
       problemDetail: found
@@ -1439,8 +1449,8 @@ export interface GroundingResolution {
   /** Plan fields the live grounding refined (problem, newText). */
   planPatch?: { problem?: PlanProblem; problemDetail?: string; newText?: string }
   source: GroundingSource
-  /** d1-Omni probability for the chosen candidate (live path only). */
-  p?: number
+  /** d1-Omni probability for the chosen candidate (live path only); null = unreported. */
+  p?: Probability
   /** Typed-question latency in ms (live path only). */
   ms?: number
   promptTokens?: number
@@ -1461,8 +1471,6 @@ const LOCAL_GROUNDING_CAPTION = 'local heuristics'
 const GROUNDING_MIN_P = 0.25
 /** d1 only overturns a deterministic miss when its choice is decisive. */
 const GROUNDING_DECISIVE_P = 0.5
-/** d1's server may omit the distribution; its argmax is still the decision. */
-const DEFAULT_CHOICE_P = 0.6
 const GROUNDING_TIMEOUT_MS = 12_000
 /** The note text is the authoritative context the candidate excerpts index into. */
 const GROUNDING_NOTE_LIMIT = 6000
@@ -1471,7 +1479,8 @@ const MAX_SPAN_CHOICES = 40
 
 interface D1ChoiceAnswer {
   choice: string
-  p: number
+  /** Measured probability; null when d1's server omitted the distribution. */
+  p: Probability
   ms: number
   promptTokens: number
 }
@@ -1497,7 +1506,7 @@ async function askD1Choice(
   const probability = answer.probabilities?.[answer.choice]
   return {
     choice: answer.choice,
-    p: typeof probability === 'number' ? probability : DEFAULT_CHOICE_P,
+    p: typeof probability === 'number' ? probability : null,
     ms: decision.ms,
     promptTokens: decision.usage.promptTokens,
   }
@@ -1609,7 +1618,9 @@ export async function resolveGroundingSpan(
         criteria: regionCriteria(chunks),
       })
       if (!region) return fallback('d1-Omni returned no region')
-      if (region.p < GROUNDING_MIN_P) {
+      // An unreported region choice still adopts (the argmax is the decision);
+      // a measured score below the gate does not.
+      if (region.p !== null && region.p < GROUNDING_MIN_P) {
         return fallback(`d1-Omni chose ${region.choice} at p ${region.p.toFixed(2)}, below the region gate`)
       }
       const regionIndex = Number(region.choice.replace(/^option_/, '')) - 1
@@ -1628,8 +1639,15 @@ export async function resolveGroundingSpan(
     if (!answer) return fallback('d1-Omni returned no span choice')
     const chosen = pool[Number(answer.choice.replace(/^option_/, '')) - 1]
     if (!chosen) return fallback('d1-Omni chose an unknown span')
+    // An unreported choice adopts when the local search already grounded a
+    // span, but it is never decisive: it cannot overturn a deterministic miss.
+    if (answer.p === null && miss) {
+      return fallback(
+        `d1-Omni chose ${answer.choice} but reported no probability; an unreported choice cannot overturn a local miss`,
+      )
+    }
     const gate = miss ? GROUNDING_DECISIVE_P : GROUNDING_MIN_P
-    if (answer.p < gate) {
+    if (answer.p !== null && answer.p < gate) {
       return fallback(
         `d1-Omni chose ${answer.choice} at p ${answer.p.toFixed(2)}, below the p≥${gate} gate`,
       )
@@ -1637,12 +1655,12 @@ export async function resolveGroundingSpan(
     // "the finance follow-up" already grounded to the one bullet; a low-confidence
     // pick of the enclosing Follow-ups section is drift, not a decision. When the
     // command names no block kind, the narrower local span wins unless d1 is
-    // decisive.
+    // decisive (an unreported choice never is).
     if (
       !miss &&
       !namedKinds.length &&
       plan.span &&
-      answer.p < GROUNDING_DECISIVE_P &&
+      !pDecisive(answer.p, GROUNDING_DECISIVE_P) &&
       chosen.startLine <= plan.span.startLine &&
       chosen.endLine >= plan.span.endLine &&
       (chosen.startLine !== plan.span.startLine || chosen.endLine !== plan.span.endLine)
@@ -1654,8 +1672,10 @@ export async function resolveGroundingSpan(
       startLine: chosen.startLine,
       endLine: chosen.endLine,
       excerpt: chosen.excerpt,
-      confidence: clamp(0.6 + answer.p * 0.35, 0, 0.97),
-      reason: `${D1_GROUNDING_CAPTION} chose ${answer.choice} of ${pool.length} structural candidates (${chosen.kind}, p ${answer.p.toFixed(2)}).`,
+      confidence: answer.p === null ? null : clamp(0.6 + answer.p * 0.35, 0, 0.97),
+      reason: `${D1_GROUNDING_CAPTION} chose ${answer.choice} of ${pool.length} structural candidates (${chosen.kind}, p ${
+        answer.p === null ? 'unreported' : answer.p.toFixed(2)
+      }).`,
     }
 
     const planPatch: GroundingResolution['planPatch'] = {}
@@ -1708,8 +1728,11 @@ export function critique(
   const params = call.params
 
   const primary = call.name === route.primaryTool
+  // Membership uses the adoption gate: an unreported tool score (d1 chose
+  // without a distribution) still counts as routed; a measured score must
+  // clear the prune.
   const allowed = route.allowedTools.some(
-    (tool) => tool.name === call.name && tool.p > 0.25,
+    (tool) => tool.name === call.name && pAdopted(tool.p, 0.25),
   )
   const toolMatch = primary || allowed
   checks.push({
@@ -1825,21 +1848,16 @@ export function critique(
     anchorExact = headingOk
   }
 
+  // The local critic never invents probabilities: the verdict tracks the
+  // deterministic checks alone. pCorrect/pSafe stay null here; the live d1
+  // overlay writes its measured score into pCorrect when it runs.
   const allPass = checks.every((check) => check.pass)
-  const pCorrect = clamp(
-    allPass
-      ? 0.91 + (route.actionConfidence - 0.9) * 0.2 + Math.random() * 0.035
-      : 0.37 + Math.random() * 0.09,
-    0,
-    0.99,
-  )
-  const pSafe = clamp(destructiveSafe ? 0.975 + Math.random() * 0.02 : 0.58, 0, 0.999)
-  const verdict = pCorrect >= 0.8 && pSafe >= 0.85 && allPass ? 'verified' : 'rejected'
+  const verdict: CriticResult['verdict'] = allPass ? 'verified' : 'rejected'
 
   return {
     checks,
-    pCorrect,
-    pSafe,
+    pCorrect: null,
+    pSafe: null,
     verdict,
     feedback:
       verdict === 'rejected'
@@ -1851,10 +1869,18 @@ export function critique(
   }
 }
 
+/**
+ * Deterministic conversational fallback (chat template path). `frameSource`
+ * says which pixels are actually attached: only the synthetic slide can be
+ * described verbatim (its content is known by construction); a live frame is
+ * stated as attached but never described — visual description needs the Omni
+ * server, and this template runs precisely when that server did not answer.
+ */
 export function conversationalReply(
   command: string,
   note: string,
   lastRun: { command: string; status: string; executionMessage?: string } | null,
+  frameSource: FrameSource = 'none',
 ): string {
   const lower = command.toLowerCase()
   const words = countWords(note)
@@ -1862,7 +1888,15 @@ export function conversationalReply(
   const headings = getHeadings(note)
 
   if (/\b(what (can|do) you see|what am i looking at|describe|read (the |this )?slide|what'?s on (the |my )?screen)\b/i.test(lower)) {
-    return 'You are showing a Q3 operating review slide. I can see a revenue table with Q3 marked pending, a north-star card reading LTV / CAC = 3.4×, a quarterly bar chart, and a finance sticky note about invoice reconciliation. The note on screen is open to the revenue section.'
+    if (frameSource === 'synthetic-slide') {
+      return 'You are showing the synthetic Q3 operating review slide. It has a revenue table with Q3 marked pending, a north-star card reading LTV / CAC = 3.4×, a quarterly bar chart, and a finance sticky note about invoice reconciliation. The note is open to the revenue section.'
+    }
+    if (frameSource === 'live-camera' || frameSource === 'live-screen') {
+      return `Your ${
+        frameSource === 'live-screen' ? 'screen share' : 'camera'
+      } frame is attached, but I cannot honestly describe it right now — visual description needs the Omni vision server, and this reply is the local fallback because that server did not answer. The note itself is fully readable and editable.`
+    }
+    return 'No frame is attached for this turn, so there is nothing to describe. Start a camera or screen capture, or ask me about the note.'
   }
 
   if (/\b(summari[sz]e|summary|recap|tl;?dr|what'?s in the note|read (me )?the note)\b/i.test(lower)) {
@@ -1890,7 +1924,7 @@ export function conversationalReply(
   if (/\b(what (just )?changed|last edit|what did you (do|change)|diff)\b/i.test(lower)) {
     return lastRun
       ? `The last grounded command was “${lastRun.command}”. ${lastRun.executionMessage ?? 'The trace is available in the decision panel.'}`
-      : 'No file edits yet this session. I am holding the note steady and watching the camera.'
+      : 'No file edits yet this session. I am holding the note steady.'
   }
 
   if (/\b(how (does|do) (this|you|it) work|explain (the |this )?(system|trinity|architecture|pipeline)|what model|which models)\b/i.test(lower)) {
@@ -1898,7 +1932,11 @@ export function conversationalReply(
   }
 
   if (/\b(update me|give me an update|status|how many tokens|context budget|latency|memory)\b/i.test(lower)) {
-    return `The note is ${words} words, roughly ${tokens} tokens. Omni is holding a rolling conversation window; d1 sees the full grounded note; the 1.7B worker only receives the pruned tool schema and the target span. The trinity is using 5.1 GB of the 8 GB budget.`
+    return `The note is ${words} words, roughly ${tokens} tokens. Omni is holding a rolling conversation window; d1 sees the full grounded note; the 1.7B worker only receives the pruned tool schema and the target span. The static roster budget is ${TOTAL_MEMORY_GB.toFixed(
+      1,
+    )} GB across ${MODELS.length} models of the ${MEMORY_BUDGET_GB.toFixed(
+      1,
+    )} GB envelope — a fixed per-quant figure, not a live measurement.`
   }
 
   if (/^(help|commands)\b|\bwhat can you do\b|\bhow do i\b/i.test(lower)) {
@@ -1906,7 +1944,7 @@ export function conversationalReply(
   }
 
   if (/\b(thank you|thanks|nice work|great|perfect|looks good)\b/i.test(lower)) {
-    return 'Anytime. The supervisor has the note and the camera frame in sync, so you can keep speaking naturally.'
+    return 'Anytime. The supervisor keeps the note and the decision trace in sync, so you can keep speaking naturally.'
   }
 
   if (/\b(read that back|say that again|repeat that|what did you say)\b/i.test(lower)) {
@@ -1914,7 +1952,15 @@ export function conversationalReply(
   }
 
   if (/^(hi|hey|hello|good morning|good afternoon|yo)\b/i.test(lower)) {
-    return 'I am here. I can see the operating-review slide and your note. Tell me what to change, or ask me what I see.'
+    const frame =
+      frameSource === 'synthetic-slide'
+        ? 'The synthetic operating-review slide is attached as the demo frame'
+        : frameSource === 'live-camera'
+          ? 'The camera frame is attached'
+          : frameSource === 'live-screen'
+            ? 'The screen-share frame is attached'
+            : 'Your note is open'
+    return `I am here. ${frame}. Tell me what to change, or ask me what I see.`
   }
 
   return 'I will keep that conversational. If you want the note changed, name the target and the edit — for example, “Update the Q3 revenue row to $1.45M Final.” I will not touch a line without a grounded span.'

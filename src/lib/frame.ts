@@ -29,6 +29,18 @@ export function getLiveFrame(): LiveFrame | null {
   return liveFrame
 }
 
+/**
+ * Which pixels the visual surface is showing right now, without rasterizing
+ * anything. Used where only the provenance matters (e.g. the local chat
+ * fallback describing the scene honestly): a registered snapshot is live, and
+ * the synthetic slide is what the panel shows otherwise.
+ */
+export function currentSceneSource(): FrameSource {
+  const frame = liveFrame
+  if (!frame) return 'synthetic-slide'
+  return frame.source === 'screen' ? 'live-screen' : 'live-camera'
+}
+
 interface RegionRect {
   x: number
   y: number

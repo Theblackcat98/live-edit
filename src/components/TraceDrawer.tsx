@@ -14,9 +14,9 @@ import {
   Sparkles,
   X,
 } from 'lucide-react'
-import type { CriticCheck, RejectedTraceRecord, Trace } from '../types'
+import type { CriticCheck, Probability, RejectedTraceRecord, Trace } from '../types'
 import { TOOL_DEFS } from '../data/tools'
-import { cx, pad, truncate } from '../lib/utils'
+import { cx, formatP, pAdopted, pad, truncate } from '../lib/utils'
 import { SceneCrop } from './SceneCrop'
 import { Download } from 'lucide-react'
 
@@ -50,16 +50,23 @@ function statusTone(trace: Trace): string {
   return 'chip-accent'
 }
 
+/** `P 0.87` for a measured score; the word "unreported" for a null one. */
+function pLabel(value: Probability | undefined): string {
+  return typeof value === 'number' ? `P ${value.toFixed(2)}` : 'unreported'
+}
+
 function Meter({
   value,
   tone = 'accent',
 }: {
-  value: number
+  value: number | null
   tone?: 'accent' | 'green' | 'orange' | 'red'
 }) {
+  // An unreported score renders as an empty track — never a fabricated fill.
+  const width = value === null ? 0 : Math.max(2, Math.min(100, value * 100))
   return (
     <span className={cx('trace-meter', `tone-${tone}`)} aria-hidden="true">
-      <span style={{ width: `${Math.max(2, Math.min(100, value * 100))}%` }} />
+      <span style={{ width: `${width}%` }} />
     </span>
   )
 }
@@ -292,9 +299,7 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, on
               </div>
               <div className="trace-summary-cell">
                 <span className="mono">critic</span>
-                <strong>
-                  {trace.critic ? `P ${trace.critic.pCorrect.toFixed(2)}` : '—'}
-                </strong>
+                <strong>{trace.critic ? pLabel(trace.critic.pCorrect) : '—'}</strong>
               </div>
               <div className="trace-summary-cell">
                 <span className="mono">total</span>
@@ -315,8 +320,8 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, on
                       : trace.critic.feedback}
                   </p>
                   <span className="trace-verdict-meta mono">
-                    P(correct) {trace.critic.pCorrect.toFixed(2)} · P(safe){' '}
-                    {trace.critic.pSafe.toFixed(2)} · note untouched
+                    P(correct) {formatP(trace.critic.pCorrect)} · P(safe){' '}
+                    {formatP(trace.critic.pSafe)} · note untouched
                   </span>
                 </div>
               </div>
@@ -335,8 +340,11 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, on
                       <span className={cx('chip', trace.route.action === 'file_mutation' ? 'chip-accent' : trace.route.action === 'ambiguous_request' ? 'chip-orange' : 'chip-green')}>
                         {trace.route.action.replace(/_/g, ' ')}
                       </span>
-                      <span className="trace-query-p mono">
-                        P {trace.route.actionConfidence.toFixed(2)}
+                      <span
+                        className="trace-query-p mono"
+                        title="measured by d1 · heuristic (local) · — unreported"
+                      >
+                        P {formatP(trace.route.actionConfidence)}
                       </span>
                     </div>
                   </div>
@@ -348,12 +356,23 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, on
                       )}
                       {trace.route.allowedTools.map((tool) => (
                         <div
-                          className={cx('trace-tool-score', tool.p <= 0.25 && 'is-pruned')}
+                          className={cx(
+                            'trace-tool-score',
+                            !pAdopted(tool.p, 0.25) && 'is-pruned',
+                          )}
                           key={tool.name}
+                          title={
+                            tool.p === null
+                              ? 'd1 chose this tool without reporting a probability'
+                              : undefined
+                          }
                         >
                           <span className="mono">{tool.name}</span>
-                          <Meter value={tool.p} tone={tool.p > 0.25 ? 'accent' : 'orange'} />
-                          <span className="mono">{tool.p.toFixed(2)}</span>
+                          <Meter
+                            value={tool.p}
+                            tone={pAdopted(tool.p, 0.25) ? 'accent' : 'orange'}
+                          />
+                          <span className="mono">{formatP(tool.p)}</span>
                         </div>
                       ))}
                     </div>
@@ -361,14 +380,13 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, on
                   <p className="trace-reason">{trace.route.reason}</p>
                   <div className="trace-hint-row mono">
                     <span>
-                      {trace.route.allowedTools.filter((tool) => tool.p > 0.25).length} schema
-                      {trace.route.allowedTools.filter((tool) => tool.p > 0.25).length === 1 ? '' : 's'}{' '}
-                      injected
-                    </span>
-                    <span>
-                      {TOOL_DEFS.length -
-                        trace.route.allowedTools.filter((tool) => tool.p > 0.25).length}{' '}
-                      withheld
+                      {trace.call
+                        ? `${trace.call.toolSchemasInjected} schema${
+                            trace.call.toolSchemasInjected === 1 ? '' : 's'
+                          } injected into the worker prompt`
+                        : `${
+                            trace.route.allowedTools.filter((tool) => pAdopted(tool.p, 0.25)).length
+                          } of ${TOOL_DEFS.length} tools above the adoption gate`}
                     </span>
                     {trace.route.directive && <span>directive: {trace.route.directive}</span>}
                   </div>
@@ -398,7 +416,12 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, on
                           L{trace.span.startLine}
                           {trace.span.endLine !== trace.span.startLine ? `–${trace.span.endLine}` : ''}
                         </span>
-                        <span className="mono">P {trace.span.confidence.toFixed(2)}</span>
+                        <span
+                          className="mono"
+                          title="measured by d1 · heuristic (local) · — unreported"
+                        >
+                          P {formatP(trace.span.confidence)}
+                        </span>
                         <span className="trace-span-label">target span</span>
                       </div>
                       <div className="trace-span-lines">
@@ -447,9 +470,27 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, on
               {trace.call ? (
                 <div className="trace-worker">
                   <div className="trace-param-chips">
-                    <span className="chip chip-ghost mono">temp 0.1</span>
-                    <span className="chip chip-ghost mono">top_k 50</span>
-                    <span className="chip chip-ghost mono">rep 1.1</span>
+                    {/* Only what the request actually carried. The bridge sends
+                        temperature and max_tokens; top_k / repetition_penalty
+                        were displayed but never sent (audit TD-05). */}
+                    {trace.call.sampler ? (
+                      <>
+                        <span className="chip chip-ghost mono">
+                          temp {trace.call.sampler.temperature}
+                        </span>
+                        <span className="chip chip-ghost mono">
+                          max_tokens {trace.call.sampler.maxTokens}
+                        </span>
+                      </>
+                    ) : trace.runtime?.worker === 'live' ? (
+                      // A live decode from before samplers were recorded on the
+                      // call — the attempt params exist but were not persisted.
+                      <span className="chip chip-ghost mono">sampler not recorded</span>
+                    ) : (
+                      <span className="chip chip-ghost mono">
+                        deterministic template · no sampler sent
+                      </span>
+                    )}
                     <span className="chip chip-ghost mono">{trace.call.toolSchemasInjected} schema</span>
                     <span className="chip chip-ghost mono">{trace.call.rawTokens} out tok</span>
                   </div>
@@ -508,18 +549,24 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, on
                     <div className="trace-critic-meter">
                       <div className="trace-critic-meter-head">
                         <span className="mono">P(correct_tool_call)</span>
-                        <strong className="mono">{trace.critic.pCorrect.toFixed(2)}</strong>
+                        <strong className="mono">{formatP(trace.critic.pCorrect)}</strong>
                       </div>
                       <Meter value={trace.critic.pCorrect} tone="accent" />
                     </div>
                     <div className="trace-critic-meter">
                       <div className="trace-critic-meter-head">
                         <span className="mono">P(destructive_safe)</span>
-                        <strong className="mono">{trace.critic.pSafe.toFixed(2)}</strong>
+                        <strong className="mono">{formatP(trace.critic.pSafe)}</strong>
                       </div>
                       <Meter value={trace.critic.pSafe} tone="green" />
                     </div>
                   </div>
+                  {trace.critic.pCorrect === null && trace.critic.pSafe === null && (
+                    <p className="trace-muted">
+                      p unreported — the verdict tracks the deterministic checks alone; numbers
+                      never gate a local decision.
+                    </p>
+                  )}
                   <div className="trace-checks">
                     {trace.critic.checks.map((check) => (
                       <CheckRow key={check.label} check={check} />
@@ -619,6 +666,7 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, on
               <div className="trace-total mono">
                 <Gauge size={11} />
                 end-to-end {trace.timings.total ? `${Math.round(trace.timings.total)} ms` : '—'} ·{' '}
+                {trace.runtime?.worker === 'live' || trace.runtime?.chat === 'live' ? '' : '≈'}
                 {trace.outputTokens} output tokens
               </div>
             </TraceSection>

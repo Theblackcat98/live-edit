@@ -10,7 +10,7 @@ import {
   Undo2,
 } from 'lucide-react'
 import type { ExecutionDiff, Snapshot, SpanTarget, Trace } from '../types'
-import { countWords, cx, estimateTokens, relativeTime } from '../lib/utils'
+import { countWords, cx, estimateTokens, formatP, relativeTime } from '../lib/utils'
 import { MarkdownDocument } from './MarkdownDocument'
 import { SourceEditor } from './SourceEditor'
 
@@ -207,11 +207,12 @@ export function NoteWorkspace({
           <div className="document-target-pill animate-pop-in">
             <span className="status-dot is-accent" />
             <span className="mono">
-              d1 target · L{span.startLine}
+              {trace?.grounding?.source === 'd1-span' ? 'd1 target' : 'local target'} · L
+              {span.startLine}
               {span.endLine !== span.startLine ? `–${span.endLine}` : ''}
             </span>
-            <span className="document-target-conf mono">
-              P {span.confidence.toFixed(2)}
+            <span className="document-target-conf mono" title="measured by d1 · heuristic (local) · — unreported">
+              P {formatP(span.confidence)}
             </span>
           </div>
         )}

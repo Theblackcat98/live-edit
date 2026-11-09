@@ -47,14 +47,26 @@ export interface ToolDefinition {
   params: ToolParam[]
 }
 
+/**
+ * Probability a model (or the deterministic router) assigned to a choice.
+ * `null` means unreported: the decision exists, but nobody measured a
+ * probability for it. An unreported score satisfies adoption-level gates
+ * (the choice stands) but never a decisive one (it cannot overturn another
+ * path's result). Flat numbers from the local router are heuristic values —
+ * stable across runs, labelled by the surrounding fallback provenance.
+ */
+export type Probability = number | null
+
 export interface ToolScore {
   name: ToolName
-  p: number
+  /** d1's measured probability, the local router's flat heuristic, or null (unreported). */
+  p: Probability
 }
 
 export interface RouteDecision {
   action: ActionClass
-  actionConfidence: number
+  /** d1's measured confidence, the local router's flat heuristic, or null (unreported). */
+  actionConfidence: Probability
   allowedTools: ToolScore[]
   primaryTool?: ToolName
   reason: string
@@ -65,7 +77,8 @@ export interface SpanTarget {
   startLine: number
   endLine: number
   excerpt: string
-  confidence: number
+  /** Heuristic (deterministic search) or d1-measured; null when d1 chose without reporting one. */
+  confidence: Probability
   reason: string
   phrase?: string
 }
@@ -81,8 +94,8 @@ export type GroundingSource = 'd1-span' | 'fallback-keyword'
 
 export interface GroundingRecord {
   source: GroundingSource
-  /** d1-Omni probability for the chosen candidate (live path only). */
-  p?: number
+  /** d1-Omni probability for the chosen candidate (live path only); null when unreported. */
+  p?: Probability
   /** 1-based first line of the resolved span. */
   chosenLine?: number
   /** Structural candidates the grounding question offered. */
@@ -115,10 +128,22 @@ export interface CriticCheck {
 
 export interface CriticResult {
   verdict: 'verified' | 'rejected'
-  pCorrect: number
-  pSafe: number
+  /**
+   * d1's measured semantic score (live overlay only). The local critic never
+   * invents one: null means unreported, and the verdict tracks the local
+   * checks alone — numbers never gate a local decision.
+   */
+  pCorrect: Probability
+  /** Same semantics as pCorrect; no local path measures a safety probability. */
+  pSafe: Probability
   checks: CriticCheck[]
   feedback?: string
+}
+
+/** Sampler settings actually sent with a live worker decode. */
+export interface WorkerSampler {
+  temperature: number
+  maxTokens: number
 }
 
 export interface WorkerCall {
@@ -130,6 +155,8 @@ export interface WorkerCall {
   promptHints: string[]
   toolSchemasInjected: number
   noteView: string
+  /** Present only when a live decode produced this call; absent for template calls. */
+  sampler?: WorkerSampler
 }
 
 export interface ExecutionDiff {
@@ -155,9 +182,9 @@ export interface RejectedTraceRecord {
   command: string
   route: { tool?: ToolName; provenance: string }
   spanCandidates: Array<{ startLine: number; endLine: number; excerpt: string }>
-  grounding: { source: GroundingSource; chosenLine?: number; p?: number }
+  grounding: { source: GroundingSource; chosenLine?: number; p?: Probability }
   workerXml: string
-  critic: { verdict: 'rejected'; reason?: string; pCorrect: number }
+  critic: { verdict: 'rejected'; reason?: string; pCorrect: Probability }
 }
 
 export interface TraceTimings {
@@ -232,7 +259,8 @@ export interface DelegationInfo {
   runId: string
   tool: ToolName
   status: 'generating' | 'verified' | 'executed' | 'rejected'
-  confidence?: number
+  /** d1's measured critic score; null/undefined hides the P chip (never invented). */
+  confidence?: Probability
   thought?: string
   /** Short model label for the card title; defaults to the active worker (1.7B). */
   modelLabel?: string
@@ -248,7 +276,6 @@ export interface Message {
   durationSec?: number
   runId?: string
   actions?: MessageAction[]
-  animate?: boolean
   delegation?: DelegationInfo
   /** Assistant text is still arriving token by token from the model stream. */
   streaming?: boolean

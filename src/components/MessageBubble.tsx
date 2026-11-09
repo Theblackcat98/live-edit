@@ -76,7 +76,7 @@ export function MessageBubble({ message, onAction, onOpenTrace, recent }: Messag
           <span className="message-time mono">{clockOf(message.at)}</span>
         </div>
         <p className="message-assistant-text">
-          <TypewriterText text={message.text} animate={message.animate} />
+          <TypewriterText text={message.text} />
           {message.streaming && <span className="typewriter-caret" aria-hidden="true" />}
         </p>
         {message.actions && message.actions.length > 0 && (

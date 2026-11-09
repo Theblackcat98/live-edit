@@ -60,7 +60,9 @@ export function buildWorkerMessages(
   const hints: string[] = []
   if (plan.span) {
     hints.push(
-      `Grounded span: lines ${plan.span.startLine}–${plan.span.endLine} · confidence ${plan.span.confidence.toFixed(2)} · exact current text: "${plan.span.excerpt}"`,
+      `Grounded span: lines ${plan.span.startLine}–${plan.span.endLine} · confidence ${
+        plan.span.confidence === null ? 'unreported' : plan.span.confidence.toFixed(2)
+      } · exact current text: "${plan.span.excerpt}"`,
     )
   }
   if (plan.addPosition) {
@@ -92,37 +94,30 @@ export function buildWorkerMessages(
   ]
 }
 
-function thoughtFor(
-  command: string,
+/**
+ * Honest deterministic description of a template-built call. These calls are
+ * emitted by code, not decoded by a model, so the "thought" states what built
+ * them — it never impersonates a first-person worker monologue.
+ */
+function templateThoughtFor(
+  _command: string,
   route: RouteDecision,
   plan: SupervisorPlan,
 ): string {
   const tool = route.primaryTool
   if (tool === 'edit_text' && plan.span) {
-    return `The user asked to ${command
-      .replace(/^please\s+/i, '')
-      .toLowerCase()}. d1 locked the target to lines ${plan.span.startLine}–${plan.span.endLine} (“${truncate(
-      plan.span.excerpt,
-      58,
-    )}”) at ${(plan.span.confidence * 100).toFixed(0)}% confidence. I will replace exactly that span and leave adjacent text untouched.`
+    return `Deterministic template call: the supervisor's grounded span (lines ${plan.span.startLine}–${plan.span.endLine}) is replaced with the supervisor-parsed text. No model decode ran.`
   }
   if (tool === 'remove_text' && plan.span) {
-    return `d1 grounded the deletion to lines ${plan.span.startLine}–${plan.span.endLine} with a blast-radius check. I will remove only “${truncate(
-      plan.span.excerpt,
-      64,
-    )}” and preserve the surrounding structure.`
+    return `Deterministic template call: the supervisor's grounded span (lines ${plan.span.startLine}–${plan.span.endLine}) is removed within the blast-radius limit. No model decode ran.`
   }
   if (tool === 'add_text') {
-    return plan.addPosition === 'under_heading'
-      ? `The insertion point is pinned under “${plan.addAnchor}”. d1 supplied the exact heading anchor, so I can use add_text without regenerating the file.`
-      : `No anchored mutation is needed. I will ${plan.addPosition ?? 'append'} the content at the supervisor-pinned location and preserve the existing note.`
+    return `Deterministic template call: the supervisor-pinned content is inserted at the ${plan.addPosition ?? 'append'} position${plan.addAnchor ? ` (anchor “${plan.addAnchor}”)` : ''}. No model decode ran.`
   }
   if (tool === 'extract_visual_to_note') {
-    return `The user referenced a visual element. d1 returned the ${plan.bbox?.label ?? 'ROI'} crop at ${(
-      (plan.bbox?.confidence ?? 0.9) * 100
-    ).toFixed(0)}% confidence. I will convert the ROI into ${plan.visualFormat} and insert it under “${plan.anchorHeading}”.`
+    return `Deterministic visual extraction: the supervisor's ${plan.bbox?.label ?? 'ROI'} crop is converted to ${plan.visualFormat} under “${plan.anchorHeading}”. Visual extraction never calls the worker model.`
   }
-  return 'Supervisor hints are attached. I will emit one minimal tool call.'
+  return 'Deterministic template call built from the supervisor hints. No model decode ran.'
 }
 
 export function buildWorkerCall(
@@ -174,14 +169,16 @@ export function buildWorkerCall(
     Object.entries(params).map(([key, value]) => [key, String(value)]),
   )
   const xml = renderToolCallXml(tool, params)
-  const thought = thoughtFor(command, route, plan)
+  const thought = templateThoughtFor(command, route, plan)
   const promptHints: string[] = [
     `Allowed tool pruned to ${tool} (1 schema injected)`,
-    'temperature=0.1 · top_k=50 · repetition_penalty=1.1',
+    'deterministic template · no decode request sent',
   ]
   if (plan.span) {
     promptHints.push(
-      `Target span: lines ${plan.span.startLine}–${plan.span.endLine} · P=${plan.span.confidence.toFixed(2)}`,
+      `Target span: lines ${plan.span.startLine}–${plan.span.endLine} · P=${
+        plan.span.confidence === null ? 'unreported' : plan.span.confidence.toFixed(2)
+      }`,
     )
     promptHints.push(`Exact anchor: ${truncate(plan.span.excerpt, 80)}`)
   }

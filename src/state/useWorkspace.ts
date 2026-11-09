@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
-  ActionClass,
   BBoxTarget,
   ContextUsage,
   CriticResult,
-  D1Answer,
   ExecutionDiff,
   FrameSource,
   Message,
   PipelineStage,
+  Probability,
   ResolvedFrame,
   RouteDecision,
   RunStatus,
@@ -25,6 +24,7 @@ import type {
   Trace,
   TraceRuntime,
   WorkerCall,
+  WorkerSampler,
 } from '../types'
 import { DEMO_SEQUENCE, INITIAL_NOTE, NOTE_PATH, NOTE_TITLE } from '../data/note'
 import { TOOL_BY_NAME } from '../data/tools'
@@ -41,10 +41,11 @@ import {
   type SupervisorPlan,
 } from '../lib/supervisor'
 import { buildWorkerCall, buildWorkerMessages, renderToolCallXml } from '../lib/worker'
+import { routeFromAnswers } from '../lib/route'
 import { executeTool } from '../lib/tools'
 import { parseToolCallXml, type ParsedToolCall } from '../lib/xml'
 import { speak, stopSpeaking, cleanSpeechText, VoiceRecorder } from '../lib/speech'
-import { resolveSceneFrame } from '../lib/frame'
+import { currentSceneSource, resolveSceneFrame } from '../lib/frame'
 import { buildSuggestions } from '../lib/suggestions'
 import { loadWorkspaceState, saveWorkspaceState, type PersistedWorkspace } from '../lib/storage'
 import {
@@ -58,7 +59,7 @@ import {
   type ChatMessage,
   type ChatOptions,
 } from '../lib/bridge'
-import { clamp, estimateTokens, makeId, sleep, truncate } from '../lib/utils'
+import { clamp, estimateTokens, makeId, pAdopted, pFloor, sleep, truncate } from '../lib/utils'
 
 const initialNoteTokens = estimateTokens(INITIAL_NOTE)
 const INITIAL_CONTEXT: ContextUsage = {
@@ -92,7 +93,6 @@ function initialMessages(): Message[] {
       kind: 'greeting',
       text: "I'm watching the camera and your note. Tell me what to change, or ask me what I see.",
       at: now - 400,
-      animate: false,
     },
   ]
 }
@@ -216,65 +216,12 @@ function contextAfterMutation(
 
 // --- native bridge glue -------------------------------------------------------
 
-const ACTION_CLASSES: ActionClass[] = ['conversational_only', 'file_mutation', 'ambiguous_request']
-const ROUTE_TOOLS: ToolName[] = ['edit_text', 'remove_text', 'add_text', 'extract_visual_to_note']
-
 const CRITIC_QUESTIONS = {
   sound: {
     type: 'noul' as const,
     instructions:
       'Is the proposed tool call correct and safe to execute on the grounded span? The replacement must preserve the note structure and the anchor must match the current lines.',
   },
-}
-
-export function routeFromAnswers(answers: Record<string, D1Answer>): RouteDecision | null {
-  const actionAnswer = answers.action
-  if (!actionAnswer || actionAnswer.type !== 'choice') return null
-  const action = actionAnswer.choice
-  if (!action || !ACTION_CLASSES.includes(action as ActionClass)) return null
-
-  const toolAnswer = answers.tool
-  const probabilities =
-    toolAnswer && toolAnswer.type === 'choice' ? (toolAnswer.probabilities ?? {}) : {}
-  // d1's typed choice is the decision even when the server omits the
-  // distribution. Reading only `probabilities` turned a confident live route
-  // into `null` and silently downgraded the turn to the regex router.
-  const chosenTool =
-    toolAnswer &&
-    toolAnswer.type === 'choice' &&
-    ROUTE_TOOLS.includes(toolAnswer.choice as ToolName)
-      ? (toolAnswer.choice as ToolName)
-      : undefined
-  const hasProbabilities = Object.values(probabilities).some((value) => value > 0)
-  const scored = ROUTE_TOOLS.map((name) => ({
-    name,
-    p: hasProbabilities ? (probabilities[name] ?? 0) : chosenTool === name ? 0.7 : 0,
-  }))
-  const ranked = scored.sort((a, b) => b.p - a.p)
-  const best = ranked[0]
-  if (action !== 'conversational_only' && (!best || best.p <= 0)) return null
-
-  const primaryTool = action === 'conversational_only' ? undefined : best.name
-  // Floor the primary tool at 0.6: routing, the grounding retry and the
-  // critic's `tool_match` membership check must agree on one scale, and the
-  // chosen tool must clear the p>0.02 prune with margin.
-  const allowedTools =
-    action === 'file_mutation'
-      ? ranked
-          .filter((tool) => tool.p > 0.02)
-          .map((tool) => ({
-            name: tool.name,
-            p: Number((tool.name === primaryTool ? Math.max(tool.p, 0.6) : tool.p).toFixed(3)),
-          }))
-      : []
-
-  return {
-    action: action as ActionClass,
-    actionConfidence: Number((actionAnswer.probabilities?.[action] ?? 0.9).toFixed(3)),
-    allowedTools,
-    primaryTool,
-    reason: `d1-Omni-2B typed decision over /v1/systemone: ${action}.`,
-  }
 }
 
 /**
@@ -424,7 +371,9 @@ function buildCriticState(
   const lines: string[] = [`User command: ${command}`]
   if (plan.span) {
     lines.push(
-      `Grounded span: lines ${plan.span.startLine}–${plan.span.endLine} · confidence ${plan.span.confidence.toFixed(2)}`,
+      `Grounded span: lines ${plan.span.startLine}–${plan.span.endLine} · confidence ${
+        plan.span.confidence === null ? 'unreported' : plan.span.confidence.toFixed(2)
+      }`,
       `Current span text: "${plan.span.excerpt}"`,
     )
   }
@@ -452,13 +401,17 @@ function liveWorkerCall(
   usageOutputTokens: number,
   plan: SupervisorPlan,
   note: string,
+  sampler: WorkerSampler,
 ): WorkerCall {
   const promptHints: string[] = [
     `Decoded by LFM3-1.7B · ${(ms / 1000).toFixed(1)}s · ${usagePromptTokens} prompt tokens`,
+    `Sent sampler: temperature=${sampler.temperature} · max_tokens=${sampler.maxTokens}`,
   ]
   if (plan.span) {
     promptHints.push(
-      `Target span: lines ${plan.span.startLine}–${plan.span.endLine} · P=${plan.span.confidence.toFixed(2)}`,
+      `Target span: lines ${plan.span.startLine}–${plan.span.endLine} · P=${
+        plan.span.confidence === null ? 'unreported' : plan.span.confidence.toFixed(2)
+      }`,
       `Exact anchor: ${truncate(plan.span.excerpt, 80)}`,
     )
   }
@@ -477,6 +430,7 @@ function liveWorkerCall(
     promptHints,
     toolSchemasInjected: 1,
     noteView: tokenViewForWorker(note, plan.span, null),
+    sampler,
   }
 }
 
@@ -1117,15 +1071,15 @@ export function useWorkspace(): WorkspaceApi {
             /\b(?:replace|swap|substitute)\b/i.test(command) &&
             /\bwith\b/i.test(command)
           ) {
-            const pinned = Math.max(
+            const pinned = pFloor(
+              route.allowedTools.find((tool) => tool.name === 'edit_text')?.p,
               0.3,
-              route.allowedTools.find((tool) => tool.name === 'edit_text')?.p ?? 0.3,
             )
             route = {
               ...route,
               primaryTool: 'edit_text',
               allowedTools: [
-                { name: 'edit_text', p: Number(pinned.toFixed(3)) },
+                { name: 'edit_text', p: pinned },
                 ...route.allowedTools.filter((tool) => tool.name !== 'edit_text'),
               ],
               reason: `${route.reason} · "replace … with …" pinned to edit_text by the syntax check.`,
@@ -1136,15 +1090,15 @@ export function useWorkspace(): WorkspaceApi {
             /\b(?:extract|pull|grab|copy|transcribe|ocr|import|capture|bring|take)\b/i.test(command) &&
             /\b(?:slide|whiteboard|screen|camera|image|photo|frame|chart|diagram|sticky)\b/i.test(command)
           ) {
-            const pinned = Math.max(
+            const pinned = pFloor(
+              route.allowedTools.find((tool) => tool.name === 'extract_visual_to_note')?.p,
               0.3,
-              route.allowedTools.find((tool) => tool.name === 'extract_visual_to_note')?.p ?? 0.3,
             )
             route = {
               ...route,
               primaryTool: 'extract_visual_to_note',
               allowedTools: [
-                { name: 'extract_visual_to_note', p: Number(pinned.toFixed(3)) },
+                { name: 'extract_visual_to_note', p: pinned },
                 ...route.allowedTools.filter((tool) => tool.name !== 'extract_visual_to_note'),
               ],
               reason: `${route.reason} · extraction verb plus a named visual source pinned to extract_visual_to_note.`,
@@ -1172,7 +1126,6 @@ export function useWorkspace(): WorkspaceApi {
               route.directive === 'undo'
                 ? 'There is nothing to undo yet — the note is at its first snapshot.'
                 : 'There is nothing to redo. The note is already at the latest snapshot.',
-            animate: true,
           })
           setContextUsage((previous) => ({
             ...previous,
@@ -1198,7 +1151,6 @@ export function useWorkspace(): WorkspaceApi {
           role: 'assistant',
           kind: 'result',
           text: confirmation,
-          animate: true,
           runId: traceLocal.id,
         })
         setContextUsage((previous) => ({
@@ -1227,7 +1179,6 @@ export function useWorkspace(): WorkspaceApi {
           role: 'assistant',
           kind: 'result',
           text: '',
-          animate: false,
           streaming: true,
           runId: traceLocal.id,
         })
@@ -1298,8 +1249,11 @@ export function useWorkspace(): WorkspaceApi {
           return
         }
         if (!reply.trim()) {
-          // Fallback: deterministic local templates.
-          reply = conversationalReply(command, noteAtStart, lastRun)
+          // Fallback: deterministic local templates. The scene's true source
+          // decides what may be described: only the synthetic slide's content
+          // is known by construction; a live frame is never described by a
+          // template (audit TD-18).
+          reply = conversationalReply(command, noteAtStart, lastRun, currentSceneSource())
           traceLocal.outputTokens = estimateTokens(reply)
           setContextUsage((previous) => ({
             ...previous,
@@ -1335,7 +1289,6 @@ export function useWorkspace(): WorkspaceApi {
           kind: 'clarify',
           text: clarification.text,
           actions: clarification.actions,
-          animate: true,
           runId: traceLocal.id,
         })
         setContextUsage((previous) => ({
@@ -1366,9 +1319,12 @@ export function useWorkspace(): WorkspaceApi {
       // falling back to a clarification, and record the repair in the reason.
       if (plan.problem && effectiveRoute.primaryTool) {
         const failedTool = effectiveRoute.primaryTool
+        // Adoption-gate the alternatives: an unreported runner-up (d1 chose
+        // without a distribution) is still a candidate; a measured score must
+        // clear the prune. Unreported sorts as adopted, mirroring the ranking.
         const alternatives = effectiveRoute.allowedTools
-          .filter((tool) => tool.p > 0.2 && tool.name !== failedTool)
-          .sort((a, b) => b.p - a.p)
+          .filter((tool) => pAdopted(tool.p, 0.2) && tool.name !== failedTool)
+          .sort((a, b) => (b.p ?? 1) - (a.p ?? 1))
         for (const alternative of alternatives) {
           const retryPlan = buildPlan(
             command,
@@ -1376,18 +1332,22 @@ export function useWorkspace(): WorkspaceApi {
             noteAtStart,
           )
           if (!retryPlan.problem) {
-            // The critic's `tool_match` demands p>0.25 membership, so the
-            // switched tool must be visible in allowedTools — otherwise the
-            // retry wins grounding and is then guaranteed rejected.
+            // The critic's `tool_match` demands adoption-gated membership, so
+            // the switched tool must be visible in allowedTools — otherwise
+            // the retry wins grounding and is then guaranteed rejected. A
+            // measured score below the repair floor is replaced by the flat
+            // heuristic floor (the reason records the repair); an unreported
+            // score stays unreported.
             const mergedTools = effectiveRoute.allowedTools.some(
               (tool) => tool.name === alternative.name,
             )
               ? effectiveRoute.allowedTools.map((tool) =>
-                  tool.name === alternative.name
-                    ? { ...tool, p: Number(Math.max(tool.p, 0.5).toFixed(3)) }
-                    : tool,
+                  tool.name === alternative.name ? { ...tool, p: pFloor(tool.p, 0.5) } : tool,
                 )
-              : [...effectiveRoute.allowedTools, { name: alternative.name, p: 0.5 }]
+              : [
+                  ...effectiveRoute.allowedTools,
+                  { name: alternative.name, p: pFloor(alternative.p, 0.5) },
+                ]
             effectiveRoute = {
               ...effectiveRoute,
               primaryTool: alternative.name,
@@ -1438,7 +1398,6 @@ export function useWorkspace(): WorkspaceApi {
         role: 'assistant',
         kind: 'ack',
         text: acknowledgement,
-        animate: true,
         runId: traceLocal.id,
       })
       speakReply(acknowledgement)
@@ -1469,7 +1428,6 @@ export function useWorkspace(): WorkspaceApi {
           kind: 'clarify',
           text: clarification.text,
           actions: clarification.actions,
-          animate: true,
           runId: traceLocal.id,
         })
         setContextUsage((previous) => ({
@@ -1495,9 +1453,10 @@ export function useWorkspace(): WorkspaceApi {
         tool: effectiveRoute.primaryTool,
         status: 'generating' as const,
         modelLabel: wantsText ? '1.7B' : 'local',
-        thought:
-          templateCall?.thought ??
-          'The worker is decoding the grounded hints into one XML tool call.',
+        thought: wantsText
+          ? 'The 1.7B worker is decoding the grounded hints into one XML tool call.'
+          : (templateCall?.thought ??
+            'The supervisor is building the deterministic extraction call.'),
       }
       const delegationId = addMessage({
         role: 'tool',
@@ -1540,7 +1499,7 @@ export function useWorkspace(): WorkspaceApi {
               parsed !== null &&
               (parsed.name === effectiveRoute.primaryTool ||
                 effectiveRoute.allowedTools.some(
-                  (tool) => tool.name === parsed.name && tool.p > 0.25,
+                  (tool) => tool.name === parsed.name && pAdopted(tool.p, 0.25),
                 ))
             const required = parsed
               ? TOOL_BY_NAME[parsed.name].params
@@ -1561,6 +1520,13 @@ export function useWorkspace(): WorkspaceApi {
                 completion.usage.outputTokens,
                 plan,
                 noteAtStart,
+                // Exactly what this attempt put on the wire — the trace's
+                // sampler chips read it back instead of hardcoding values.
+                // The fallbacks mirror chatComplete's own request defaults.
+                {
+                  temperature: options.temperature ?? 0.1,
+                  maxTokens: options.maxTokens ?? 700,
+                },
               )
               runtime.worker = 'live'
               traceLocal.timings.generate = completion.ms
@@ -1587,6 +1553,19 @@ export function useWorkspace(): WorkspaceApi {
         if (!templateCall) throw new Error('Worker could not build a call from supervisor hints.')
         call = templateCall
         traceLocal.timings.generate = 0.2
+        // The deterministic template executed: relabel the delegation card so
+        // it never claims a 1.7B decode that did not happen (audit TD-13).
+        if (wantsText) {
+          patchMessage(delegationId, {
+            delegation: {
+              ...delegation,
+              modelLabel: 'local',
+              thought: `${templateCall.thought} The 1.7B worker was ${
+                textWorkerUp ? 'asked but returned no usable call' : 'unavailable'
+              } — this call was built locally instead.`,
+            },
+          })
+        }
         if (traceLocal.timings.generate < 240) await sleep(240)
       }
       // The supervisor owns the target. A live worker can narrow a multi-line
@@ -1675,7 +1654,7 @@ export function useWorkspace(): WorkspaceApi {
       // Any rejection layer — critic verdict or engine-level refusal — lands
       // in rejectedTraces so the drawer/export shows every stopped call, not
       // only the ones the critic caught (audit TD-44).
-      const recordRejectedTrace = (reason: string | undefined, pCorrect: number) => {
+      const recordRejectedTrace = (reason: string | undefined, pCorrect: Probability) => {
         setRejectedTraces((previous) => [
           ...previous,
           {
@@ -1717,7 +1696,6 @@ export function useWorkspace(): WorkspaceApi {
           role: 'assistant',
           kind: 'error',
           text: rejection,
-          animate: true,
           runId: traceLocal.id,
         })
         notify('Call rejected by d1', 'No lines were written. The trace has the critic feedback.', 'error')
@@ -1758,7 +1736,6 @@ export function useWorkspace(): WorkspaceApi {
           role: 'assistant',
           kind: 'error',
           text: `I stopped before writing. ${execution.message} The note was not changed.`,
-          animate: true,
           runId: traceLocal.id,
         })
         notify('Execution stopped', execution.message, 'error')
@@ -1793,7 +1770,6 @@ export function useWorkspace(): WorkspaceApi {
         role: 'assistant',
         kind: 'result',
         text: completion,
-        animate: true,
         runId: traceLocal.id,
       })
       publish()
@@ -1808,7 +1784,6 @@ export function useWorkspace(): WorkspaceApi {
           role: 'assistant',
           kind: 'error',
           text: `I stopped the run: ${message} Nothing was written to the note.`,
-          animate: true,
         })
         notify('Run stopped', message, 'error')
         finish('failed')

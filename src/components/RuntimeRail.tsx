@@ -18,7 +18,6 @@ import {
 } from 'lucide-react'
 import type {
   ContextUsage,
-  FrameSource,
   RuntimeHealth,
   Snapshot,
   StageId,
@@ -26,7 +25,7 @@ import type {
   Trace,
 } from '../types'
 import { MODELS, MEMORY_BUDGET_GB, TOTAL_MEMORY_GB } from '../data/models'
-import { cx, relativeTime, truncate } from '../lib/utils'
+import { cx, formatP, relativeTime, truncate } from '../lib/utils'
 
 interface RuntimeRailProps {
   activeModel: 'omni' | 'd1' | 'worker' | null
@@ -160,7 +159,7 @@ interface WiringSurface {
 }
 
 const WIRING_SURFACES: WiringSurface[] = [
-  { id: 'asr', label: 'Voice ASR', target: 'Omni /v1/audio/transcriptions', endpoint: 'omni', fallback: 'unavailable — type instead' },
+  { id: 'asr', label: 'Voice ASR', target: 'Omni /v1/audio/transcriptions', endpoint: 'omni', fallback: 'typed input instead' },
   { id: 'chat', label: 'Chat replies', target: 'Omni /v1/chat/completions', endpoint: 'omni', fallback: 'canned templates' },
   { id: 'route', label: 'Routing', target: 'd1-Omni /v1/systemone', endpoint: 'd1omni', fallback: 'local heuristics' },
   { id: 'ground', label: 'Span grounding', target: 'd1-Omni /v1/systemone', endpoint: 'd1omni', fallback: 'keyword/quote fallback' },
@@ -169,14 +168,51 @@ const WIRING_SURFACES: WiringSurface[] = [
   { id: 'execute', label: 'Execution', target: 'in-tab diff engine', endpoint: null, fallback: '' },
 ]
 
+/** What actually ran for one surface on the latest run, from trace.runtime. */
+interface WiringVerdict {
+  badge: 'LIVE' | 'FALLBACK' | 'ENGINE' | 'TYPED' | 'IDLE' | '—'
+  tone: 'live' | 'fallback' | 'engine' | 'idle'
+  detail: string
+}
+
+function wiringVerdict(surface: WiringSurface, trace: Trace | null): WiringVerdict {
+  // Execution is deterministic code — never a model call, on any run.
+  if (!surface.endpoint) return { badge: 'ENGINE', tone: 'engine', detail: surface.target }
+  // No run yet: say so instead of dressing the health probe up as provenance.
+  if (!trace?.runtime) return { badge: 'IDLE', tone: 'idle', detail: 'no run yet this session' }
+
+  switch (surface.id) {
+    case 'asr':
+      // asr is only recorded for spoken commands; a typed turn never called it.
+      if (trace.runtime.asr === undefined)
+        return { badge: 'TYPED', tone: 'engine', detail: 'typed command — no ASR call' }
+      return trace.runtime.asr === 'live'
+        ? { badge: 'LIVE', tone: 'live', detail: surface.target }
+        : { badge: 'FALLBACK', tone: 'fallback', detail: surface.fallback }
+    case 'ground': {
+      const source = trace.grounding?.source
+      if (source === 'd1-span') return { badge: 'LIVE', tone: 'live', detail: surface.target }
+      if (source === 'fallback-keyword')
+        return { badge: 'FALLBACK', tone: 'fallback', detail: surface.fallback }
+      return { badge: '—', tone: 'idle', detail: 'no grounding pass this run' }
+    }
+    default: {
+      const stage = trace.runtime[surface.id as 'route' | 'worker' | 'critic' | 'chat']
+      return stage === 'live'
+        ? { badge: 'LIVE', tone: 'live', detail: surface.target }
+        : { badge: 'FALLBACK', tone: 'fallback', detail: surface.fallback }
+    }
+  }
+}
+
 function RuntimeWiringCard({
   runtimeHealth,
   refreshRuntime,
-  frameSource,
+  trace,
 }: {
   runtimeHealth: RuntimeHealth | null
   refreshRuntime: () => Promise<void>
-  frameSource?: FrameSource
+  trace: Trace | null
 }) {
   const [refreshing, setRefreshing] = useState(false)
   const up = (id: 'omni' | 'd1omni' | 'text'): boolean =>
@@ -190,6 +226,7 @@ function RuntimeWiringCard({
 
   // Which pixels the models actually got for the selected run. A synthetic
   // frame after the camera was on is shown as FALLBACK, never as live.
+  const frameSource = trace?.frameSource
   const frameRow =
     frameSource === 'live-camera'
       ? { badge: 'LIVE', tone: 'live', detail: 'device camera · live JPEG' }
@@ -197,7 +234,7 @@ function RuntimeWiringCard({
         ? { badge: 'LIVE', tone: 'live', detail: 'screen share · live JPEG' }
         : frameSource === 'synthetic-slide'
           ? { badge: 'FALLBACK', tone: 'fallback', detail: 'synthetic slide · no live capture' }
-          : { badge: 'NONE', tone: 'engine', detail: 'no frame attached this run' }
+          : { badge: '—', tone: 'idle', detail: 'no frame attached this run' }
 
   return (
     <section className="rail-card wiring-card">
@@ -220,20 +257,29 @@ function RuntimeWiringCard({
 
       <div className="wiring-rows">
         {WIRING_SURFACES.map((surface) => {
-          const live = surface.endpoint ? up(surface.endpoint) : true
-          const tone = !surface.endpoint ? 'engine' : live ? 'live' : 'fallback'
-          const detail = surface.endpoint
-            ? live
-              ? surface.target
-              : `${surface.target} down → ${surface.fallback}`
-            : surface.target
+          const verdict = wiringVerdict(surface, trace)
+          // The health probe is real data, but it is availability — not what
+          // ran. It rides along as a dot; the badge stays per-run provenance.
+          const probeUp = surface.endpoint ? up(surface.endpoint) : null
           return (
-            <div key={surface.id} className="wiring-row" title={detail}>
-              <span className={cx('wiring-badge', `is-${tone}`)}>
-                {!surface.endpoint ? 'ENGINE' : live ? 'LIVE' : 'FALLBACK'}
-              </span>
+            <div
+              key={surface.id}
+              className="wiring-row"
+              title={`${verdict.badge} · ${verdict.detail}${
+                probeUp === null ? '' : ` · endpoint probe: ${probeUp ? 'up' : 'down'}`
+              }`}
+            >
+              <span className={cx('wiring-badge', `is-${verdict.tone}`)}>{verdict.badge}</span>
               <span className="wiring-label">{surface.label}</span>
-              <span className="wiring-target mono">{detail}</span>
+              <span className="wiring-target mono">
+                {surface.endpoint && (
+                  <span
+                    className={cx('status-dot', probeUp ? 'is-green' : 'is-red')}
+                    title={`endpoint probe: ${probeUp ? 'up' : 'down'}`}
+                  />
+                )}
+                {verdict.detail}
+              </span>
             </div>
           )
         })}
@@ -333,8 +379,19 @@ function SupervisorCard({
           Supervisor
           <span className={cx('status-dot', running ? 'is-accent is-pulsing' : 'is-accent')} />
         </div>
-        <span className="chip chip-ghost">
-          {trace?.outputTokens ? `${trace.outputTokens} output tokens` : '0 output tokens'}
+        <span
+          className="chip chip-ghost mono"
+          title={
+            trace && (trace.runtime?.worker === 'live' || trace.runtime?.chat === 'live')
+              ? 'token usage reported by the model server'
+              : 'estimated from local text — no model decode reported usage'
+          }
+        >
+          {trace?.outputTokens
+            ? `${
+                trace.runtime?.worker === 'live' || trace.runtime?.chat === 'live' ? '' : '≈'
+              }${trace.outputTokens} output tokens`
+            : '0 output tokens'}
         </span>
       </header>
       <div className="supervisor-model mono">d1-Omni-2B · 128K · Q8_0 · single pass</div>
@@ -350,8 +407,11 @@ function SupervisorCard({
             <div className="sup-stage-data">
               <div className="sup-chip-row">
                 <span className={cx('chip', actionTone)}>{route.action.replace(/_/g, ' ')}</span>
-                <span className="chip chip-ghost mono">
-                  P {route.actionConfidence.toFixed(2)}
+                <span
+                  className="chip chip-ghost mono"
+                  title="measured by d1 · heuristic (local) · — unreported"
+                >
+                  P {formatP(route.actionConfidence)}
                 </span>
               </div>
               {route.allowedTools.length > 0 && (
@@ -359,11 +419,18 @@ function SupervisorCard({
                   {route.allowedTools.slice(0, 2).map((tool) => (
                     <span key={tool.name} className="sup-tool mono">
                       {tool.name}
-                      <span>{tool.p.toFixed(2)}</span>
+                      <span>{formatP(tool.p)}</span>
                     </span>
                   ))}
                 </div>
               )}
+              <span className="sup-muted mono">
+                {route.actionConfidence === null && route.allowedTools.every((tool) => tool.p === null)
+                  ? 'unreported'
+                  : trace?.runtime?.route === 'live'
+                    ? 'measured by d1'
+                    : 'local heuristic'}
+              </span>
             </div>
           ) : stageStates.A === 'running' ? (
             <span className="sup-running">Classifying action_required…</span>
@@ -387,10 +454,22 @@ function SupervisorCard({
                   L{span.startLine}
                   {span.endLine !== span.startLine ? `–${span.endLine}` : ''}
                 </span>
-                <span className="chip chip-ghost mono">P {span.confidence.toFixed(2)}</span>
+                <span
+                  className="chip chip-ghost mono"
+                  title="measured by d1 · heuristic (local) · — unreported"
+                >
+                  P {formatP(span.confidence)}
+                </span>
                 {bbox && <span className="chip chip-orange">ROI</span>}
               </div>
               <div className="sup-excerpt">{truncate(span.excerpt, 66)}</div>
+              <span className="sup-muted mono">
+                {span.confidence === null
+                  ? 'unreported'
+                  : trace?.grounding?.source === 'd1-span'
+                    ? 'measured by d1'
+                    : 'local heuristic'}
+              </span>
             </div>
           ) : stageStates.B === 'running' ? (
             <span className="sup-running">Extracting span and bbox…</span>
@@ -413,11 +492,11 @@ function SupervisorCard({
               <div className="sup-prob-row">
                 <span className="sup-prob">
                   <span className="mono">P(correct)</span>
-                  <strong className="mono">{critic.pCorrect.toFixed(2)}</strong>
+                  <strong className="mono">{formatP(critic.pCorrect)}</strong>
                 </span>
                 <span className="sup-prob">
                   <span className="mono">safe</span>
-                  <strong className="mono">{critic.pSafe.toFixed(2)}</strong>
+                  <strong className="mono">{formatP(critic.pSafe)}</strong>
                 </span>
                 <span
                   className={cx(
@@ -431,13 +510,18 @@ function SupervisorCard({
               <div className="sup-checks mono">
                 {critic.checks.filter((check) => check.pass).length}/{critic.checks.length} checks pass
               </div>
+              <span className="sup-muted mono">
+                {critic.pCorrect === null
+                  ? 'local gates only · p unreported'
+                  : 'p measured by d1'}
+              </span>
             </div>
           ) : stageStates.C === 'running' ? (
             <span className="sup-running">Scoring proposed XML call…</span>
           ) : stageStates.C === 'skipped' ? (
             <span className="sup-muted">Critic bypassed — no worker call.</span>
           ) : (
-            <span className="sup-muted">Critic armed · execute at P ≥ 0.80</span>
+            <span className="sup-muted">Critic armed · local hard gates</span>
           )}
         </Stage>
       </div>
@@ -618,7 +702,7 @@ export function RuntimeRail({
       <RuntimeWiringCard
         runtimeHealth={runtimeHealth}
         refreshRuntime={refreshRuntime}
-        frameSource={trace?.frameSource}
+        trace={trace}
       />
       <SupervisorCard trace={trace} stageStates={stageStates} openTrace={openTrace} />
       <ContextCard usage={contextUsage} trace={trace} />
