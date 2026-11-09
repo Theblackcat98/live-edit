@@ -66,7 +66,7 @@ export function AboutDialog({ open, onClose }: AboutDialogProps) {
               <strong>Local LFM3 runtime</strong>
               <p>
                 Voice ASR (Omni-2B), chat replies (Omni-2B), routing and critic decisions
-                (d1-Omni-2B over /v1/systemone) and worker XML calls (VL-2B) run against local
+                (d1-Omni-2B over /v1/systemone) and worker XML calls (LFM3-1.7B; VL-2B covers visual crops and fallback) run against local
                 llama.cpp servers on 127.0.0.1. The Runtime truth card in the rail shows live
                 probes. Span grounding is a deterministic local span search; the diff engine,
                 snapshots and trace format run entirely in this tab. If a model server is down,

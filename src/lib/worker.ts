@@ -21,7 +21,7 @@ export function renderToolCallXml(
   return `<tool_call>\n<function=${name}>\n${body}\n</function>\n</tool_call>`
 }
 
-export const WORKER_SYSTEM_PROMPT = `You are the VL worker inside a local note-editing pipeline. The supervisor (d1) has already classified the command, grounded a target span in the note and pruned the tool set. Your single job: emit exactly one tool call in the XML contract.
+export const WORKER_SYSTEM_PROMPT = `You are the tool-call worker inside a local note-editing pipeline. The supervisor (d1) has already classified the command, grounded a target span in the note and pruned the tool set. Your single job: emit exactly one tool call in the XML contract.
 
 <tool_call>
 <function=edit_text>

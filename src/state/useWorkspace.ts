@@ -389,9 +389,10 @@ function liveWorkerCall(
   usageOutputTokens: number,
   plan: SupervisorPlan,
   note: string,
+  modelLabel: string,
 ): WorkerCall {
   const promptHints: string[] = [
-    `Decoded by LFM3-VL-2B · ${(ms / 1000).toFixed(1)}s · ${usagePromptTokens} prompt tokens`,
+    `Decoded by ${modelLabel} · ${(ms / 1000).toFixed(1)}s · ${usagePromptTokens} prompt tokens`,
   ]
   if (plan.span) {
     promptHints.push(
@@ -975,10 +976,15 @@ export function useWorkspace(): WorkspaceApi {
       await sleep(220)
 
       // --- A · route ------------------------------------------------------
+      // Undo/redo are pipeline directives, not model decisions: snapshot
+      // rollback must win even when d1-Omni is live, or a small model reads
+      // "undo that" as a file mutation and the run grounds against nothing.
       // Live path: d1-Omni-2B classifies the command over /v1/systemone in one
       // forward pass (watching the current frame). Fallback: local heuristics.
       let route: RouteDecision | null = null
-      if (endpointUp(healthRef.current, 'd1omni')) {
+      const localPre = routeCommand(command)
+      if (localPre.directive) route = localPre
+      if (!route && endpointUp(healthRef.current, 'd1omni')) {
         try {
           const frame = await resolveSceneFrame('full').catch(() => null)
           traceLocal.frameSource = frame?.source ?? 'none'
@@ -1008,6 +1014,63 @@ export function useWorkspace(): WorkspaceApi {
         const routeStarted = performance.now()
         route = routeCommand(command)
         traceLocal.timings.route = Number((performance.now() - routeStarted).toFixed(1))
+      }
+      // Deterministic syntax checks outrank the live route in two narrow
+      // cases: a question can never be a mutation (a small model reads
+      // hypotheticals as edits and deletes real content), and "replace X with
+      // Y" is always an edit_text — routing it as add_text would insert the
+      // replacement instead of swapping the span, and the blast-radius critic
+      // never sees the destructive intent.
+      if (route && !route.directive && route.action === 'file_mutation') {
+        const localSyntax = routeCommand(command)
+        if (
+          localSyntax.action === 'conversational_only' &&
+          /Interrogative turn/i.test(localSyntax.reason)
+        ) {
+          route = {
+            ...localSyntax,
+            reason: `${localSyntax.reason} Live d1 route said ${route.action}; the imperative-syntax check overrode it.`,
+          }
+          runtime.route = 'fallback'
+          } else if (
+            route.primaryTool &&
+            route.primaryTool !== 'edit_text' &&
+            /\b(?:replace|swap|substitute)\b/i.test(command) &&
+            /\bwith\b/i.test(command)
+          ) {
+            const pinned = Math.max(
+              0.3,
+              route.allowedTools.find((tool) => tool.name === 'edit_text')?.p ?? 0.3,
+            )
+            route = {
+              ...route,
+              primaryTool: 'edit_text',
+              allowedTools: [
+                { name: 'edit_text', p: Number(pinned.toFixed(3)) },
+                ...route.allowedTools.filter((tool) => tool.name !== 'edit_text'),
+              ],
+              reason: `${route.reason} · "replace … with …" pinned to edit_text by the syntax check.`,
+            }
+          } else if (
+            route.primaryTool &&
+            route.primaryTool !== 'extract_visual_to_note' &&
+            /\b(?:extract|pull|grab|copy|transcribe|ocr|import|capture|bring|take)\b/i.test(command) &&
+            /\b(?:slide|whiteboard|screen|camera|image|photo|frame|chart|diagram|sticky)\b/i.test(command)
+          ) {
+            const pinned = Math.max(
+              0.3,
+              route.allowedTools.find((tool) => tool.name === 'extract_visual_to_note')?.p ?? 0.3,
+            )
+            route = {
+              ...route,
+              primaryTool: 'extract_visual_to_note',
+              allowedTools: [
+                { name: 'extract_visual_to_note', p: Number(pinned.toFixed(3)) },
+                ...route.allowedTools.filter((tool) => tool.name !== 'extract_visual_to_note'),
+              ],
+              reason: `${route.reason} · extraction verb plus a named visual source pinned to extract_visual_to_note.`,
+            }
+          }
       }
       traceLocal.route = route
       publish()
@@ -1301,12 +1364,11 @@ export function useWorkspace(): WorkspaceApi {
       }
 
       const templateCall = buildWorkerCall(command, effectiveRoute, plan, noteAtStart)
-      // Long-context swap: text-only mutations with fat prompts (>~55K tokens)
-      // go to LFM3-1.7B (256K ctx) instead of VL-2B (128K). VL stays default,
-      // and a down text server falls back to VL, never failing the run.
-      const wantsText =
-        effectiveRoute.primaryTool !== 'extract_visual_to_note' &&
-        estimateTokens(`${command}\n${noteAtStart}`) > 55_000
+      // Worker selection: LFM3-1.7B (256K ctx) is the tool-call worker for
+      // every text mutation. Visual ROI extraction stays on VL-2B (image
+      // input); a down 1.7B falls back to VL, then to the deterministic
+      // template — a run never fails on worker availability alone.
+      const wantsText = effectiveRoute.primaryTool !== 'extract_visual_to_note'
       const workerEndpoint: 'vl' | 'text' =
         wantsText && endpointUp(healthRef.current, 'text')
           ? 'text'
@@ -1318,7 +1380,7 @@ export function useWorkspace(): WorkspaceApi {
         modelLabel: workerEndpoint === 'text' ? '1.7B' : undefined,
         thought:
           templateCall?.thought ??
-          'VL worker is decoding the grounded hints into one XML tool call.',
+          'The worker is decoding the grounded hints into one XML tool call.',
       }
       const delegationId = addMessage({
         role: 'tool',
@@ -1330,8 +1392,9 @@ export function useWorkspace(): WorkspaceApi {
       setStageStates({ A: 'done', B: 'done', C: 'idle' })
       setFlowModel('worker')
 
-      // Live path: LFM3-VL-2B emits the XML tool call over /v1/chat/completions,
-      // with the ROI crop attached for visual extraction. Fallback: template.
+      // Live path: the selected worker emits the XML tool call over
+      // /v1/chat/completions (1.7B for text, VL-2B for visual ROI), with the
+      // ROI crop attached for visual extraction. Fallback: template.
       let call: WorkerCall | null = null
       if (endpointUp(healthRef.current, workerEndpoint)) {
         try {
@@ -1392,6 +1455,7 @@ export function useWorkspace(): WorkspaceApi {
                 completion.usage.outputTokens,
                 plan,
                 noteAtStart,
+                workerEndpoint === 'text' ? 'LFM3-1.7B' : 'LFM3-VL-2B',
               )
               runtime.worker = 'live'
               traceLocal.workerModel = workerEndpoint

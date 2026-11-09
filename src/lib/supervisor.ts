@@ -116,7 +116,7 @@ export const ROUTE_QUESTIONS: Record<'action' | 'tool', D1Question> = {
       'Classify what the speaker wants relative to the note file and the attached slide. Statements about the user and questions about what you can see are conversation, not edits.',
     criteria: {
       conversational_only:
-        'the user is talking to you, not asking for an edit: greetings, thanks, questions about the conversation or about what the camera and slide show, or telling you something about themselves — their name, preferences, numbers, or a fact to remember later',
+        'the user is talking to you, not asking for an edit: greetings, thanks, questions about the conversation or about what the camera and slide show, or telling you something about themselves — their name, preferences, numbers, or a fact to remember later. Hypothetical questions about what an edit would do ("what happens if I remove…") are conversation — answer them, never edit',
       file_mutation:
         'an instruction to change the note file, addressed to you as a command: add, edit, remove or extract content',
       ambiguous_request:
@@ -127,7 +127,7 @@ export const ROUTE_QUESTIONS: Record<'action' | 'tool', D1Question> = {
     type: 'choice',
     instructions: 'If the note file should change, which tool fits the command best?',
     criteria: {
-      edit_text: 'replace existing lines with new text',
+      edit_text: 'replace existing lines with new text — any command shaped like "replace X with Y" is edit_text, never an insertion',
       remove_text: 'delete lines, a bullet or a table row',
       add_text: 'insert new content at a position or under a heading',
       extract_visual_to_note: 'read the visible slide and copy its content into the note',
@@ -256,7 +256,7 @@ export function routeCommand(command: string): RouteDecision {
         { name: 'add_text', p: 0.11 },
       ],
       primaryTool: 'extract_visual_to_note',
-      reason: 'Visual reference plus extraction verb. VL worker is the right target.',
+      reason: 'Visual reference plus extraction verb. The VL worker is the right target.',
     }
   }
 
@@ -961,6 +961,13 @@ function extractAddContent(command: string): string | null {
   content = content.replace(/\s+(?:at the (?:top|end|beginning)|please)[.!]?$/i, '')
   content = content.replace(/^(?:a|an|the)\s+/i, '')
   content = content.replace(/^(?:new\s+)?(?:note|line|bullet|item|section)\s+(?:about|on|for|called|titled)\s+/i, '')
+  // "add a line under Security: rotate keys monthly" — the target phrase is
+  // the insertion point, not payload; only a colon-separated heading name
+  // follows the location word, so drop everything up to it.
+  content = content.replace(
+    /^(?:new\s+)?(?:line|row|bullet|item|entry|point)\s+(?:under|in|inside|below|beneath)\s+[^:]{2,60}:\s*/i,
+    '',
+  )
   content = content.replace(/^(?:section|called|titled)\s+/i, '')
   content = content.trim()
   if (content.length < 2) return null
@@ -1084,6 +1091,28 @@ function findSpanForMutation(note: string, command: string): SpanSearchResult | 
     }
     const span = headingSpan(note, sectionTarget.heading)
     if (span) return { span, candidates: [] }
+  }
+
+  // "Rename the title to X" targets the document H1, not whichever body line
+  // shares tokens with the new title. Pin the span so the keyword search cannot
+  // ground the rename onto a table row that happens to contain those words.
+  const titleRename = command.match(
+    /\b(?:rename|change|edit|set)\s+(?:the\s+)?(?:doc(?:ument)?\s+)?title\s+(?:to|as)\s+(.+)$/i,
+  )
+  if (titleRename && titleRename[1]?.trim()) {
+    const headingIndex = splitLines(note).findIndex((line) => /^#\s+/.test(line))
+    if (headingIndex >= 0) {
+      return {
+        span: makeSpan(
+          note,
+          headingIndex + 1,
+          headingIndex + 1,
+          0.96,
+          'Title rename pinned to the document H1.',
+        ),
+        candidates: [],
+      }
+    }
   }
 
   return keywordSpan(note, command)
@@ -1506,11 +1535,11 @@ export function conversationalReply(
   }
 
   if (/\b(how (does|do) (this|you|it) work|explain (the |this )?(system|trinity|architecture|pipeline)|what model|which models)\b/i.test(lower)) {
-    return 'Three LFM3 models share one tri-hybrid backbone. Omni handles the live conversation, d1 runs zero-token checks to route and ground each command, and the VL worker writes the XML tool call. d1 verifies the call before the note engine touches a line.'
+    return 'Three LFM3 models share one tri-hybrid backbone. Omni handles the live conversation, d1 runs zero-token checks to route and ground each command, and the 1.7B worker writes the XML tool call. d1 verifies the call before the note engine touches a line.'
   }
 
   if (/\b(update me|give me an update|status|how many tokens|context budget|latency|memory)\b/i.test(lower)) {
-    return `The note is ${words} words, roughly ${tokens} tokens. Omni is holding a rolling conversation window; d1 sees the full grounded note; the VL worker only receives the pruned tool schema and the target span. The trinity is using 5.1 GB of the 8 GB budget.`
+    return `The note is ${words} words, roughly ${tokens} tokens. Omni is holding a rolling conversation window; d1 sees the full grounded note; the 1.7B worker only receives the pruned tool schema and the target span. The trinity is using 5.1 GB of the 8 GB budget.`
   }
 
   if (/^(help|commands)\b|\bwhat can you do\b|\bhow do i\b/i.test(lower)) {

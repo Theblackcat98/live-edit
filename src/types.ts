@@ -186,7 +186,7 @@ export interface Trace {
   promptTokens: number
   noteTokensAtStart: number
   workerNoteView: string
-  /** Which model decoded the worker XML when live: VL-2B default, 1.7B on long-context swap. */
+  /** Which model decoded the worker XML when live: 1.7B default, VL-2B for visual ROI / fallback. */
   workerModel?: 'vl' | 'text'
   runtime?: TraceRuntime
   frameSource?: FrameSource
@@ -213,7 +213,7 @@ export interface DelegationInfo {
   status: 'generating' | 'verified' | 'executed' | 'rejected'
   confidence?: number
   thought?: string
-  /** Short model label for the card title; defaults to the VL-2B worker. */
+  /** Short model label for the card title; defaults to the active worker (1.7B). */
   modelLabel?: string
 }
 
@@ -267,7 +267,7 @@ export interface TraceRuntime {
   asr?: RuntimeSource
   /** Route decision: d1-Omni /v1/systemone, or local heuristics. */
   route: RuntimeSource
-  /** Worker XML: LFM3-VL-2B /v1/chat/completions, or the template emitter. */
+  /** Worker XML: LFM3-1.7B / LFM3-VL-2B /v1/chat/completions, or the template emitter. */
   worker: RuntimeSource
   /** Critic verdict: d1-Omni semantic pass + local checks, or local checks only. */
   critic: RuntimeSource

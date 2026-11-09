@@ -5,8 +5,11 @@
  * ~/Documents/Models/lfm3.sh — the app runs on the three-model trinity:
  *
  *   LFM3-Omni-2B   :8083  chat + ASR (/v1/audio/transcriptions)
- *   LFM3-VL-2B     :8081  worker XML tool calls (with image input)
+ *   LFM3-1.7B      :8080  worker XML tool calls (text mutations, 256K ctx)
  *   d1-Omni-2B     :8085  routing / critic decisions (/v1/systemone)
+ *
+ * LFM3-VL-2B :8081 stays optional: visual ROI crops, and the worker
+ * fallback when the 1.7B is down.
  *
  * Every caller is live-first: on failure it falls back to the local
  * deterministic layer and the trace records which path ran.
@@ -24,10 +27,10 @@ export interface EndpointSpec {
 }
 
 export const ENDPOINTS: EndpointSpec[] = [
-  { id: 'omni', name: 'LFM3-Omni-2B', role: 'Interface · chat + ASR', port: 8083, alias: 'lfm3-omni-2b' },
-  { id: 'vl', name: 'LFM3-VL-2B', role: 'Worker · tool calls', port: 8081, alias: 'lfm3-vl-2b' },
+  { id: 'omni', name: 'LFM3-Omni-2B', role: 'Interface · chat + ASR + TTS', port: 8083, alias: 'lfm3-omni-2b' },
+  { id: 'vl', name: 'LFM3-VL-2B', role: 'Worker · fallback · visual ROI', port: 8081, alias: 'lfm3-vl-2b' },
   { id: 'd1omni', name: 'd1-Omni-2B', role: 'Supervisor · route/critic', port: 8085, alias: 'd1-omni-2b' },
-  { id: 'text', name: 'LFM3-1.7B', role: 'Worker · long-context text refactors', port: 8080, alias: 'lfm3-1.7b' },
+  { id: 'text', name: 'LFM3-1.7B', role: 'Worker · tool calls', port: 8080, alias: 'lfm3-1.7b' },
 ]
 
 const DEFAULT_TIMEOUT_MS = 30_000
