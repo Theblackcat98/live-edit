@@ -235,18 +235,36 @@ export function routeFromAnswers(answers: Record<string, D1Answer>): RouteDecisi
   const toolAnswer = answers.tool
   const probabilities =
     toolAnswer && toolAnswer.type === 'choice' ? (toolAnswer.probabilities ?? {}) : {}
-  const ranked = ROUTE_TOOLS.map((name) => ({ name, p: probabilities[name] ?? 0 })).sort(
-    (a, b) => b.p - a.p,
-  )
+  // d1's typed choice is the decision even when the server omits the
+  // distribution. Reading only `probabilities` turned a confident live route
+  // into `null` and silently downgraded the turn to the regex router.
+  const chosenTool =
+    toolAnswer &&
+    toolAnswer.type === 'choice' &&
+    ROUTE_TOOLS.includes(toolAnswer.choice as ToolName)
+      ? (toolAnswer.choice as ToolName)
+      : undefined
+  const hasProbabilities = Object.values(probabilities).some((value) => value > 0)
+  const scored = ROUTE_TOOLS.map((name) => ({
+    name,
+    p: hasProbabilities ? (probabilities[name] ?? 0) : chosenTool === name ? 0.7 : 0,
+  }))
+  const ranked = scored.sort((a, b) => b.p - a.p)
   const best = ranked[0]
   if (action !== 'conversational_only' && (!best || best.p <= 0)) return null
 
   const primaryTool = action === 'conversational_only' ? undefined : best.name
+  // Floor the primary tool at 0.6: routing, the grounding retry and the
+  // critic's `tool_match` membership check must agree on one scale, and the
+  // chosen tool must clear the p>0.02 prune with margin.
   const allowedTools =
     action === 'file_mutation'
       ? ranked
           .filter((tool) => tool.p > 0.02)
-          .map((tool) => ({ name: tool.name, p: Number(tool.p.toFixed(3)) }))
+          .map((tool) => ({
+            name: tool.name,
+            p: Number((tool.name === primaryTool ? Math.max(tool.p, 0.6) : tool.p).toFixed(3)),
+          }))
       : []
 
   return {
@@ -309,6 +327,46 @@ const FRAME_DESCRIPTIONS: Record<FrameSource, string> = {
   none: 'No frame is attached for this turn.',
 }
 
+/**
+ * Turns actually about the document get its full text; small talk does not.
+ * A 3,600-character dump on every turn dilutes a 2B model's attention and
+ * biases it into describing the note unasked.
+ */
+const NOTE_QUESTION =
+  /\b(note|notes|document|doc|section|table|heading|paragraph|bullet|line|lines|read it|what does it say|content|says|text)\b/i
+
+/** Title plus the first H2 headings as a one-line outline, no full dump. */
+function noteOutline(note: string): string {
+  const headings: string[] = []
+  for (const line of note.split(/\r?\n/)) {
+    const match = /^##\s+(.+?)\s*$/.exec(line)
+    if (!match) continue
+    headings.push(match[1])
+    if (headings.length >= 8) break
+  }
+  return headings.length > 0 ? `${NOTE_TITLE} · ${headings.join(' · ')}` : NOTE_TITLE
+}
+
+/**
+ * Omni has no tools, but a 2B model still improvises tool-call text on edit
+ * requests. Strip those artifacts before the reply is shown or spoken; an
+ * all-artifact reply becomes empty and falls through to the template.
+ */
+function sanitizeOmniText(text: string): string {
+  let clean = text.replace(/```[^\n]*\n[\s\S]*?```/g, (block) =>
+    /tool_call|function=/i.test(block) ? ' ' : block,
+  )
+  // Unterminated fence at the end of a truncated stream.
+  clean = clean.replace(/```[^\n]*\n[\s\S]*$/g, (block) =>
+    /tool_call|function=/i.test(block) ? ' ' : block,
+  )
+  clean = clean.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, ' ')
+  clean = clean.replace(/<tool_call>[\s\S]*$/i, ' ')
+  clean = clean.replace(/<function=[\s\S]*?<\/function>/gi, ' ')
+  clean = clean.replace(/<function=[^>]*>/gi, ' ')
+  return clean.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim()
+}
+
 function buildChatMessages(
   command: string,
   note: string,
@@ -318,7 +376,9 @@ function buildChatMessages(
 ): ChatMessage[] {
   const system = [
     'You are Omni — the conversational interface of a local multimodal note workspace.',
-    'The user talks to you; a separate worker pipeline performs all file edits, so never claim to have edited or promise to edit anything in this chat.',
+    'You have no tools. You cannot edit files, read tool output or run anything: a separate worker pipeline performs every file edit.',
+    'Never emit XML, JSON or code blocks as actions. A <tool_call>, a <function=…> fragment, or a fenced block is never an action here — the UI strips it as noise. Do not use them.',
+    'If the user asks for a note change, reply in ONE short sentence acknowledging that the edit pipeline takes it from here, e.g. "On it — the edit pipeline will handle that." Never promise details you cannot know (exact text, line numbers, results) and never claim something was already edited.',
     'Style: brief and natural, one or two sentences unless more is genuinely needed.',
     'Greetings, thanks and small talk: answer like a person — "Hey!", "Anytime." — and do NOT describe the note, the frame, or any statuses unless the user explicitly asks about them.',
     'Reference the note or the attached frame only when the question is actually about them. When asked what you can see, describe the attached frame itself — camera or screen captures are real scenes, not documents.',
@@ -326,7 +386,9 @@ function buildChatMessages(
 
   const textParts = [
     frame ? FRAME_DESCRIPTIONS[frame.source] : FRAME_DESCRIPTIONS.none,
-    `Current note (${NOTE_PATH}):\n${truncate(note, 3600)}`,
+    NOTE_QUESTION.test(command)
+      ? `Current note (${NOTE_PATH}):\n${truncate(note, 3600)}`
+      : `Current note (${NOTE_PATH}) outline: ${noteOutline(note)}`,
     lastRun
       ? `Last completed run: "${lastRun.command}" → ${lastRun.status}${
           lastRun.executionMessage ? ` (${lastRun.executionMessage})` : ''
@@ -1161,7 +1223,7 @@ export function useWorkspace(): WorkspaceApi {
           const now = performance.now()
           if (now - lastFlush < 48) return
           lastFlush = now
-          patchMessage(streamId, { text: reply })
+          patchMessage(streamId, { text: sanitizeOmniText(reply) })
         }
         // Live path: LFM3-Omni-2B over /v1/chat/completions, streamed. The frame
         // is attached only for visual-relevant turns — small talk stays fast.
@@ -1206,6 +1268,11 @@ export function useWorkspace(): WorkspaceApi {
             if (chatAbortRef.current === controller) chatAbortRef.current = null
           }
         }
+
+        // Omni is chat-only: strip tool-call artifacts it improvises before
+        // the reply is accepted, displayed or spoken. An all-artifact reply
+        // falls through to the deterministic template below.
+        reply = sanitizeOmniText(reply)
 
         if (aborted && !reply.trim()) {
           // Cut before the first token: never leave an empty bubble behind.
@@ -1291,9 +1358,22 @@ export function useWorkspace(): WorkspaceApi {
             noteAtStart,
           )
           if (!retryPlan.problem) {
+            // The critic's `tool_match` demands p>0.25 membership, so the
+            // switched tool must be visible in allowedTools — otherwise the
+            // retry wins grounding and is then guaranteed rejected.
+            const mergedTools = effectiveRoute.allowedTools.some(
+              (tool) => tool.name === alternative.name,
+            )
+              ? effectiveRoute.allowedTools.map((tool) =>
+                  tool.name === alternative.name
+                    ? { ...tool, p: Number(Math.max(tool.p, 0.5).toFixed(3)) }
+                    : tool,
+                )
+              : [...effectiveRoute.allowedTools, { name: alternative.name, p: 0.5 }]
             effectiveRoute = {
               ...effectiveRoute,
               primaryTool: alternative.name,
+              allowedTools: mergedTools,
               reason: `${effectiveRoute.reason} · grounded as ${alternative.name} after ${failedTool} found no target`,
             }
             plan = retryPlan
@@ -1436,14 +1516,24 @@ export function useWorkspace(): WorkspaceApi {
                 ? `<think>${completion.reasoning}</think>\n${rawText}`
                 : rawText
             const parsed = parseToolCallXml(xmlInput)
+            // Mismatched-but-sensible calls were dropped on both attempts: the
+            // 1.7B often picks the better tool (edit_text for an update routed
+            // as add_text). Accept any allowed tool with real routing support;
+            // the critic still gates execution afterwards.
+            const routed =
+              parsed !== null &&
+              (parsed.name === effectiveRoute.primaryTool ||
+                effectiveRoute.allowedTools.some(
+                  (tool) => tool.name === parsed.name && tool.p > 0.25,
+                ))
             const required = parsed
               ? TOOL_BY_NAME[parsed.name].params
                   .filter((param) => param.required)
                   .map((param) => param.name)
               : []
             const complete =
-              parsed &&
-              parsed.name === effectiveRoute.primaryTool &&
+              parsed !== null &&
+              routed &&
               required.every((name) => (parsed.params[name] ?? '').length > 0)
             if (parsed && complete) {
               call = liveWorkerCall(
@@ -1509,7 +1599,12 @@ export function useWorkspace(): WorkspaceApi {
           })
           const answer = decision.answers.sound
           if (answer && answer.type === 'noul') {
-            const accepted = answer.noul >= 0.5
+            // A 2B model's cautious 0.4–0.5 scores were vetoing calls whose
+            // local hard gates (anchor exactness, blast radius, bounds) all
+            // passed. This block only runs when they did; the semantic pass is
+            // an overlay, so only a confidently bad score rejects.
+            const localPassed = critic.verdict === 'verified'
+            const accepted = localPassed && answer.noul >= 0.35
             critic = {
               ...critic,
               pCorrect: clamp(answer.noul, 0.01, 0.99),

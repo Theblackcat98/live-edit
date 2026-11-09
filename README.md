@@ -1,8 +1,8 @@
 # LiquidScribe
 
 A local-first multimodal note workspace built around the LFM3 model trinity — **Omni 2B** for the live
-conversation, **d1-Omni-2B** as a zero-output-token supervisor, and **LFM3-VL-2B** as the tool-calling
-worker.
+conversation, **d1-Omni-2B** as a zero-output-token supervisor, and **LFM3-1.7B** as the tool-calling
+worker (with optional **LFM3-VL-2B** for visual extraction).
 
 Talk, show a slide, and watch the note change. Every edit is routed, grounded to an exact line span,
 generated as XML, verified by the critic, and then applied atomically to a snapshot stack.
@@ -34,8 +34,8 @@ npm run typecheck
 
 ## Runtime honesty
 
-The app talks to **real local LFM3 servers** (llama.cpp, started by
-`~/Documents/Models/lfm3.sh`):
+The app talks to **real local LFM3 servers** (llama.cpp, started by this repo's
+`scripts/start-models.sh`; `scripts/stop-models.sh` stops them):
 
 - **Voice ASR** — the mic is captured locally as 16 kHz WAV and transcribed by
   `LFM3-Omni-2B` (`/v1/audio/transcriptions` on :8083). The browser's
@@ -45,8 +45,9 @@ The app talks to **real local LFM3 servers** (llama.cpp, started by
   model answers from actual pixels.
 - **Routing** — `d1-Omni-2B` classifies every command (action + tool) over
   `/v1/systemone` in one zero-output-token forward pass, watching the slide.
-- **Worker** — `LFM3-VL-2B` decodes the XML tool call live (ROI crop attached
-  for visual extraction); the parser round-trips its output.
+- **Worker** — `LFM3-1.7B` decodes every text-mutation XML tool call live; the
+  parser round-trips its output. `LFM3-VL-2B` (optional) handles visual ROI
+  crops for `extract_visual_to_note` and is the fallback when the 1.7B is down.
 - **Critic** — deterministic local gates (anchor exactness, blast radius, range
   bounds) are hard checks; when they pass, `d1-Omni-2B` adds a semantic
   zero-token verdict.
@@ -60,9 +61,9 @@ FALLBACK or ENGINE. The decision trace records which path each stage took per
 run. If a model server is down, the affected stage falls back to a local
 deterministic layer and the UI says so — nothing silently fakes a model call.
 Stage timings are measured, and context budgets show real prompt-token usage
-when models answer. The visual frame is the fixed synthetic slide rendered to
-pixels; passing a live camera/screen frame into the bridge is still future
-work (plan.md §10).
+when models answer. Live camera and screen frames reach the bridge through
+`resolveSceneFrame` — d1 routing, Omni chat and visual extraction all see them;
+the rasterized synthetic slide is the fallback when no capture is active.
 
 ## Try these
 
@@ -108,22 +109,21 @@ their own snapshots.
 
 ## Limits
 
-- The model servers are not started by this repo — start the trinity first:
-  `~/Documents/Models/lfm3.sh omni`, `… vl`, `… d1-omni` (or `all` for the whole family;
-  `./lfm3.sh status` shows what is up). Without them the affected stages run their local
-  deterministic fallbacks and the rail's Runtime truth card shows what is down.
+- The repo starts the trinity with `scripts/start-models.sh` (idempotent: Omni `:8083`,
+  d1-Omni `:8085`, `LFM3-1.7B` `:8080`; `scripts/stop-models.sh` stops them). Without them the
+  affected stages run their local deterministic fallbacks and the rail's Runtime truth card shows
+  what is down.
 - Camera/screen capture requires browser permissions and a secure context (localhost works).
-  A live camera or screen feed is a local preview only: model calls still use the rasterized
-  synthetic review frame.
+  Live camera and screen frames feed the models (`resolveSceneFrame`); the rasterized
+  synthetic review frame is used only when no capture is active.
 - Voice capture records locally and is transcribed by the local Omni model; typing always works.
   Spoken replies use the browser's `speechSynthesis` (presentation only, no inference).
-- Notes live in this browser tab. The app does not upload them and does not persist them across
-  reloads in this demo build.
+- Notes live in this browser tab and the app does not upload them. The workspace persists across
+  reloads (localStorage).
 - The synthetic visual scene is a fixed prop: revenue table, north-star formula, quarterly bars and a
   finance sticky note.
-- The runtime rail shows the default visual worker (`LFM3-VL-2B`). The optional 256K
-  `LFM3-1.7B` worker swap for 64K+ text refactors is specified in `plan.md` but not wired into this
-  simulated build.
+- The runtime rail shows the active worker: `LFM3-1.7B` primary, with `LFM3-VL-2B` as the optional
+  visual fallback.
 - Below 820px the layout collapses to the note workspace. The Markdown editor remains usable, but
   the live session, command bar and runtime rail are desktop/tablet affordances in this build.
 
@@ -143,6 +143,13 @@ headless Chrome (CDP-driven) against the running trinity servers:
 - Runtime truth card probed 3/3 endpoints LIVE; a fresh page load recorded zero console
   errors. Killing a server flips the card to FALLBACK and the affected stage uses its local
   deterministic path.
+
+On 2026-11-08 the QA battery (`npm run qa`, 31 cases after the §10 hardening pass) ran fully
+green — 31/31 PASS, zero console errors, zero page exceptions — against the live trinity
+including the optional VL-2B (`:8081`). It covers natural-phrasing template creation ("The
+document is empty now, begin by writing a readme template .md doc"), chat-hygiene (no
+`<tool_call>`/`<function=` leakage in replies), blast-radius rejection, undo/redo, persistence
+and spoken-style phrasing.
 
 See [`plan.md`](./plan.md) for the full product and architecture plan.
 

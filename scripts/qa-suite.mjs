@@ -230,6 +230,19 @@ async function main() {
     })()`)
   }
 
+  /**
+   * Chat hygiene: an assistant reply must never surface raw action markup —
+   * no `<tool_call`, no `<function=`, and no fenced block that contains either
+   * (models sometimes "show their work" in a code fence).
+   */
+  function replyHygiene(text) {
+    const hits = []
+    if (text.includes('<tool_call')) hits.push('<tool_call')
+    if (text.includes('<function=')) hits.push('<function=')
+    if (/```[\s\S]*?(tool_call|function=)[\s\S]*?```/.test(text)) hits.push('fenced action block')
+    return { ok: hits.length === 0, hits }
+  }
+
   /** Wait until the persisted workspace stops changing (debounced save settled). */
   async function settleState(timeout = 6000) {
     let last = JSON.stringify(await getWs())
@@ -365,9 +378,10 @@ async function main() {
     const status = ws?.runs?.at(-1)?.status
     const noClarify = status !== 'clarify' && !ws?.messages?.some((m) => m.kind === 'clarify')
     const clean = !/revenue|pending|slide/i.test(reply.text)
-    record('2', `greeting "hey" → conversational, no clarify, clean reply`,
-      status === 'conversational' && noClarify && clean,
-      `status=${status}, reply="${reply.text.slice(0, 80)}", runtime.chat=${ws?.runs?.at(-1)?.runtime?.chat}`)
+    const hygiene = replyHygiene(reply.text)
+    record('2', `greeting "hey" → conversational, no clarify, clean reply, no action markup`,
+      status === 'conversational' && noClarify && clean && hygiene.ok,
+      `status=${status}, reply="${reply.text.slice(0, 80)}", runtime.chat=${ws?.runs?.at(-1)?.runtime?.chat}, hygiene=${hygiene.ok ? 'clean' : hygiene.hits.join('+')}`)
   }
 
   await submitCommand('remember that my favorite color is teal')
@@ -515,6 +529,34 @@ async function main() {
     record('12b', 'EMPTY DOC + changelog template → verified, # Changelog title',
       info.status === 'verified' && n.startsWith('# Changelog') && !/in this document/i.test(n),
       `status=${info.status}, head=${JSON.stringify(n.slice(0, 40))}${run.timedOut ? ', TIMEOUT' : ''}`)
+  }
+
+  // Natural phrasing: the verb is no longer first ("The document is empty
+  // now, begin by writing …") — normalization must still reach the template
+  // synthesizer and land verified.
+  await seedWorkspace({ version: 1, note: '', snapshots: [], messages: [], runs: [], rejectedTraces: [] })
+  await submitCommand('The document is empty now, begin by writing a readme template .md doc')
+  {
+    const run = await waitForRun()
+    const info = await runsInfo()
+    const n = (await getWs())?.note ?? ''
+    const junkLeak = /document is empty now/i.test(n)
+    record('12d', 'EMPTY DOC + sentence-style readme → verified synthesized README',
+      info.status === 'verified' && n.startsWith('# README') && n.split('\n').length >= 20 && !junkLeak,
+      `status=${info.status}, lines=${n.split('\n').length}, startsREADME=${n.startsWith('# README')}, junkLeak=${junkLeak}${run.timedOut ? ', TIMEOUT' : ''}`)
+  }
+
+  // Filler-prefixed phrasing ("hey, go ahead and …") on a fresh empty doc.
+  await seedWorkspace({ version: 1, note: '', snapshots: [], messages: [], runs: [], rejectedTraces: [] })
+  await submitCommand('hey, go ahead and create a changelog template')
+  {
+    const run = await waitForRun()
+    const info = await runsInfo()
+    const n = (await getWs())?.note ?? ''
+    const junkLeak = /hey, go ahead/i.test(n)
+    record('12e', 'EMPTY DOC + filler-prefixed changelog → verified, # Changelog title',
+      info.status === 'verified' && /^# Changelog/m.test(n) && !junkLeak,
+      `status=${info.status}, head=${JSON.stringify(n.slice(0, 40))}, junkLeak=${junkLeak}${run.timedOut ? ', TIMEOUT' : ''}`)
   }
 
   // Deterministic rejection on the demo note: replacing the long Risks

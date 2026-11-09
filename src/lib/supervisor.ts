@@ -46,8 +46,34 @@ export interface SupervisorPlan {
   spanCandidates?: SpanTarget[]
 }
 
-const MUTATION_VERBS =
-  /\b(add|append|insert|write|create|put|include|prepend|update|change|replace|edit|set|rename|correct|fix|amend|modify|adjust|shorten|rewrite|format|remove|delete|drop|erase|cut|clear|extract|pull|grab|copy|transcribe|ocr|import|capture|bring|take)\b/i
+/**
+ * Verb families shared by the router and the plan builder. Each stem carries
+ * its gerund form because natural speech names the action as a process
+ * ("begin by writing a readme") rather than an imperative. Keeping one
+ * inventory here stops the family regexes from drifting apart.
+ */
+const ADD_VERB_SOURCE =
+  'add(?:s|ing)?|append(?:s|ing)?|insert(?:s|ing)?|writ(?:e|es|ing)|creat(?:e|es|ing)|put(?:s|ting)?|include(?:s|ing)?|prepend(?:s|ing)?|make|makes|making|draft|drafts|drafting'
+const EDIT_VERB_SOURCE =
+  'update|updates|updating|change|changes|changing|replace|replaces|replacing|edit|edits|editing|set|sets|setting|rename|renames|renaming|correct|corrects|correcting|fix|fixes|fixing|amend|amends|amending|modify|modifies|modifying|adjust|adjusts|adjusting|shorten|shortens|shortening|rewrite|rewrites|rewriting|format|formats|formatting'
+const REMOVE_VERB_SOURCE =
+  'remove|removes|removing|delete|deletes|deleting|drop|drops|dropping|erase|erases|erasing|cut|cuts|cutting|clear|clears|clearing'
+const EXTRACT_VERB_SOURCE =
+  'extract|extracts|extracting|pull|pulls|pulling|grab|grabs|grabbing|copy|copies|copying|transcribe|transcribes|transcribing|ocr|import|imports|importing|capture|captures|capturing|bring|brings|bringing|take|takes|taking'
+
+const MUTATION_VERBS = new RegExp(
+  `\\b(?:${ADD_VERB_SOURCE}|${EDIT_VERB_SOURCE}|${REMOVE_VERB_SOURCE}|${EXTRACT_VERB_SOURCE})\\b`,
+  'i',
+)
+
+const ADD_VERB = new RegExp(`\\b(?:${ADD_VERB_SOURCE})\\b`, 'i')
+const EDIT_VERB = new RegExp(`\\b(?:${EDIT_VERB_SOURCE})\\b`, 'i')
+const REMOVE_VERB = new RegExp(`\\b(?:${REMOVE_VERB_SOURCE})\\b`, 'i')
+const EXTRACT_VERB = new RegExp(`\\b(?:${EXTRACT_VERB_SOURCE})\\b`, 'i')
+const ADD_FROM_VISUAL_VERB = new RegExp(
+  `\\b(?:${ADD_VERB_SOURCE}|save|saves|saving|copy|copies|copying|bring|brings|bringing)\\b`,
+  'i',
+)
 
 const VISUAL_NOUNS =
   /\b(slide|whiteboard|screen|camera|image|photo|video|frame|chart|graph|diagram|formula|table|sticky)\b/i
@@ -118,7 +144,7 @@ export const ROUTE_QUESTIONS: Record<'action' | 'tool', D1Question> = {
       conversational_only:
         'the user is talking to you, not asking for an edit: greetings, thanks, questions about the conversation or about what the camera and slide show, or telling you something about themselves — their name, preferences, numbers, or a fact to remember later. Hypothetical questions about what an edit would do ("what happens if I remove…") are conversation — answer them, never edit',
       file_mutation:
-        'an instruction to change the note file, addressed to you as a command: add, edit, remove or extract content',
+        'an instruction to change the note file, addressed to you as a command: add, edit, remove or extract content — creating or writing a whole document, note or template from scratch also counts as file_mutation',
       ambiguous_request:
         'a mutation verb, but the target object is missing or refers vaguely to "that" or "it"',
     },
@@ -138,8 +164,38 @@ export const ROUTE_QUESTIONS: Record<'action' | 'tool', D1Question> = {
 const VAGUE_MUTATION =
   /^(?:please\s+|could you\s+|can you\s+)?(?:delete|remove|change|update|edit|replace|fix|make|shorten|clean up|rewrite|amend)\s+(?:that|this|it|those|these)(?:\s+(?:part|bit|thing|section|line|text|one|stuff))?(?:\s+(?:to|into|with|so it)\s+.+)?[.!]?$/i
 
+const LEADING_FILLER = /^(?:(?:um|uh|er|ah|hey|okay|ok)[,!.]?\s+)+/i
+const SCENE_SETTING =
+  /^(?:(?:the|this)\s+(?:document|doc|note|page|file)\s+(?:is|seems|looks)\s+(?:currently\s+|still\s+|totally\s+|completely\s+|already\s+)?(?:empty|blank|clear)\s*(?:now|already|at the moment)?\s*[,.;:]?\s*)+/i
+const LEADING_HEDGE =
+  /^(?:(?:begin|start)\s+by\s+|go\s+ahead\s+and\s+|i\s+want\s+you\s+to\s+|i'?d\s+like\s+you\s+to\s+|please\s+|just\s+)+/i
+
+/**
+ * Strip the spoken scaffolding that precedes a real imperative. The trace and
+ * chat bubble keep the raw utterance; routing and planning see this form.
+ * Loops to a fixed point so it is idempotent and handles chained clauses
+ * ("the document is empty now, please go ahead and write…").
+ */
+export function normalizeCommand(command: string): string {
+  let text = command.trim().replace(/\s+/g, ' ')
+  let previous = ''
+  while (text !== previous) {
+    previous = text
+    text = text
+      .replace(LEADING_FILLER, '')
+      .replace(SCENE_SETTING, '')
+      .replace(LEADING_HEDGE, '')
+  }
+  return text.trim()
+}
+
+const STARTS_MUTATION = new RegExp(
+  `^(?:please\\s+|could you\\s+|can you\\s+|would you\\s+|will you\\s+)?(?:${ADD_VERB_SOURCE}|${EDIT_VERB_SOURCE}|${REMOVE_VERB_SOURCE}|${EXTRACT_VERB_SOURCE})\\b`,
+  'i',
+)
+
 export function routeCommand(command: string): RouteDecision {
-  const clean = command.trim().replace(/\s+/g, ' ')
+  const clean = normalizeCommand(command)
   const lower = clean.toLowerCase()
 
   const undoDirective =
@@ -178,10 +234,7 @@ export function routeCommand(command: string): RouteDecision {
     }
   }
 
-  const startsMutation =
-    /^(?:please\s+|could you\s+|can you\s+|would you\s+|will you\s+)?(?:add|append|insert|write|create|put|include|prepend|update|change|replace|edit|set|rename|correct|fix|amend|modify|adjust|shorten|rewrite|format|remove|delete|drop|erase|cut|clear|extract|pull|grab|copy|transcribe|ocr|import|capture|bring|take)\b/i.test(
-      clean,
-    )
+  const startsMutation = STARTS_MUTATION.test(clean)
 
   if (!startsMutation) {
     const conversational = CONVERSATIONAL_PATTERNS.find(({ pattern }) => pattern.test(clean))
@@ -234,11 +287,9 @@ export function routeCommand(command: string): RouteDecision {
   }
 
   const hasVisual = VISUAL_NOUNS.test(lower)
-  const extractsFromVisual =
-    /\b(extract|pull|grab|copy|transcribe|ocr|import|capture|bring|take)\b/i.test(lower) &&
-    hasVisual
+  const extractsFromVisual = EXTRACT_VERB.test(lower) && hasVisual
   const addsFromVisual =
-    /\b(add|insert|put|write|save|copy|bring)\b/i.test(lower) &&
+    ADD_FROM_VISUAL_VERB.test(lower) &&
     (/\bfrom\s+(?:the\s+|this\s+|my\s+)?(?:slide|screen|camera|image|whiteboard|frame)\b/i.test(
       lower,
     ) ||
@@ -260,18 +311,17 @@ export function routeCommand(command: string): RouteDecision {
     }
   }
 
-  const removeVerb = /\b(remove|delete|drop|erase|cut|clear)\b/i.test(lower)
-  const addVerb = /\b(add|append|insert|write|create|put|include|prepend)\b/i.test(lower)
-  const editVerb =
-    /\b(update|change|replace|edit|set|rename|correct|fix|amend|modify|adjust|shorten|rewrite|format)\b/i.test(
-      lower,
-    )
+  const removeVerb = REMOVE_VERB.test(lower)
+  const addVerb = ADD_VERB.test(lower)
+  const editVerb = EDIT_VERB.test(lower)
 
   let primaryTool: ToolName = 'edit_text'
   if (removeVerb) primaryTool = 'remove_text'
   else if (addVerb && !editVerb) primaryTool = 'add_text'
   else if (addVerb && editVerb) {
-    primaryTool = /\b(add|append|insert|create|put)\b/i.test(lower) ? 'add_text' : 'edit_text'
+    primaryTool = /\b(?:add|adding|append|appending|insert|inserting|create|creating|put|putting)\b/i.test(lower)
+      ? 'add_text'
+      : 'edit_text'
   }
 
   const allowedTools: ToolScore[] = [{ name: primaryTool, p: 0.88 + Math.random() * 0.07 }]
@@ -646,7 +696,7 @@ function sectionTargetHeading(
     if (heading) return { heading, scope: 'section' }
   }
   const match = command.match(
-    /\b(?:remove|delete|drop|erase|clear|update|change|edit|replace|amend|modify)\s+(?:the\s+)?(.+?)\s+(section|heading)\b/i,
+    /\b(?:remove|removing|delete|deleting|drop|dropping|erase|erasing|clear|clearing|update|updating|change|changing|edit|editing|replace|replacing|amend|amending|modify|modifying)\s+(?:the\s+)?(.+?)\s+(section|heading)\b/i,
   )
   if (!match) return null
   const phrase = match[1].trim()
@@ -800,9 +850,16 @@ function semanticAddContent(command: string): string | null {
  * H1 is also the document title, which is what "rename the title" asks for.
  */
 const TEMPLATE_NOUNS = /^(?:template|boilerplate|skeleton|scaffold|starter|outline)$/i
+const TEMPLATE_WORD = /\b(?:template|boilerplate|skeleton|outline|starter|scaffold)\b/i
+const DOC_TYPE_WORD = /\b(?:readme|read\s+me|changelog|faq|todo|meeting\s+notes|design\s+doc|spec)\b/i
 
-const CREATION_HEAD =
-  /^(?:please\s+)?(?:could you\s+|can you\s+|would you\s+|will you\s+)?(?:create|write|add|make|generate|draft|insert|start|set up|prepare)\b/i
+const CREATION_VERB_SOURCE =
+  'creat(?:e|es|ing)|writ(?:e|es|ing)|add(?:s|ing)?|make|makes|making|generate|generates|generating|draft|drafts|drafting|insert(?:s|ing)?|starting|starts|start|set up|prepar(?:e|es|ing)'
+
+const CREATION_HEAD = new RegExp(
+  `^(?:please\\s+)?(?:could you\\s+|can you\\s+|would you\\s+|will you\\s+)?(?:${CREATION_VERB_SOURCE})\\b`,
+  'i',
+)
 
 /** Words that end the created artifact's name ("a readme template for …"). */
 const TEMPLATE_SCOPE_STOPWORDS: Record<string, true> = {
@@ -843,6 +900,8 @@ const TEMPLATE_ARTIFACT_STOPWORDS: Record<string, true> = {
   full: true,
   complete: true,
   whole: true,
+  md: true,
+  markdown: true,
 }
 
 /** Conventional uppercase for document names that are acronyms by usage. */
@@ -855,16 +914,26 @@ const DOCUMENT_TITLE_FORMS: Record<string, string> = {
 }
 
 function templateTitle(command: string): string {
-  const withoutVerb = command.replace(
-    /^(?:please\s+)?(?:could you\s+|can you\s+|would you\s+|will you\s+)?(?:create|write|add|make|generate|draft|insert|start|set up|prepare)\s+(?:a\s+|an\s+|the\s+)?/i,
-    '',
-  )
+  const withoutVerb = command
+    .replace(/\.(?:md|markdown)\b/gi, ' ')
+    .replace(
+      new RegExp(
+        `^(?:please\\s+)?(?:could you\\s+|can you\\s+|would you\\s+|will you\\s+)?(?:${CREATION_VERB_SOURCE})\\s+(?:a\\s+|an\\s+|the\\s+)?`,
+        'i',
+      ),
+      '',
+    )
   const phrase = withoutVerb.match(
     /^([a-z][\w-]*(?:\s+[a-z][\w-]*){0,2})\s+(?:template|boilerplate|skeleton|scaffold|starter|outline)\b/i,
   )
-  let name = (phrase?.[1] ?? withoutVerb.match(/^(?:readme|read me)\b/i)?.[1] ?? '')
+  let name = (phrase?.[1] ?? withoutVerb.match(/^(?:readme|read me)\b/i)?.[0] ?? '')
     .toLowerCase()
     .replace(/^read me$/, 'readme')
+  if (!name) {
+    // Name the artifact by its document kind ("… needs a changelog template")
+    // before falling back to the generic template noun.
+    name = (withoutVerb.toLowerCase().match(DOC_TYPE_WORD)?.[0] ?? '').replace(/^read me$/, 'readme')
+  }
   if (!name) {
     // No artifact name ("create an outline") — title the template by its kind.
     name = (withoutVerb.toLowerCase().match(/\b(template|boilerplate|skeleton|scaffold|starter|outline)\b/)?.[1] ?? '')
@@ -880,7 +949,12 @@ function templateTitle(command: string): string {
 
 function wantsDocumentTemplate(command: string): boolean {
   const head = command.match(CREATION_HEAD)
-  if (!head) return false
+  if (!head) {
+    // Natural phrasing often hides the verb behind a clause ("a readme
+    // template would be good here"). A short command that names both a
+    // document kind and a template noun is still a creation request.
+    return command.length < 120 && DOC_TYPE_WORD.test(command) && TEMPLATE_WORD.test(command)
+  }
   const words = command
     .slice(head[0].length)
     .toLowerCase()
@@ -943,9 +1017,7 @@ function extractAddContent(command: string): string | null {
   const semantic = semanticAddContent(command)
   if (semantic) return semantic
 
-  const afterVerb = command.match(
-    /\b(?:add|append|insert|write|create|put|include|prepend)\s+(.+)$/i,
-  )
+  const afterVerb = command.match(new RegExp(`\\b(?:${ADD_VERB_SOURCE})\\s+(.+)$`, 'i'))
   if (!afterVerb) return null
   let content = afterVerb[1].trim()
   // A trailing clause that is itself an instruction ("…, rename the title
@@ -1054,7 +1126,7 @@ function findSpanForMutation(note: string, command: string): SpanSearchResult | 
   const quoted = allQuotes(command)
   const firstQuoteIsTarget =
     quoted.length >= 2 ||
-    /^(?:please\s+)?(?:replace|change|edit|update|remove|delete|drop|fix|rename)\s+["“'`]/i.test(
+    /^(?:please\s+)?(?:replace|replacing|change|changing|edit|editing|update|updating|remove|removing|delete|deleting|drop|dropping|fix|fixing|rename|renaming)\s+["“'`]/i.test(
       command,
     )
   if (quoted.length && firstQuoteIsTarget) {
@@ -1097,7 +1169,7 @@ function findSpanForMutation(note: string, command: string): SpanSearchResult | 
   // shares tokens with the new title. Pin the span so the keyword search cannot
   // ground the rename onto a table row that happens to contain those words.
   const titleRename = command.match(
-    /\b(?:rename|change|edit|set)\s+(?:the\s+)?(?:doc(?:ument)?\s+)?title\s+(?:to|as)\s+(.+)$/i,
+    /\b(?:rename|renaming|change|changing|edit|editing|set|setting)\s+(?:the\s+)?(?:doc(?:ument)?\s+)?title\s+(?:to|as)\s+(.+)$/i,
   )
   if (titleRename && titleRename[1]?.trim()) {
     const headingIndex = splitLines(note).findIndex((line) => /^#\s+/.test(line))
@@ -1119,10 +1191,11 @@ function findSpanForMutation(note: string, command: string): SpanSearchResult | 
 }
 
 export function buildPlan(
-  command: string,
+  rawCommand: string,
   route: RouteDecision,
   note: string,
 ): SupervisorPlan {
+  const command = normalizeCommand(rawCommand)
   const tool = route.primaryTool
   if (!tool || route.directive) return {}
 
@@ -1368,13 +1441,19 @@ export function critique(
   const checks: CriticCheck[] = []
   const params = call.params
 
+  const primary = call.name === route.primaryTool
   const allowed = route.allowedTools.some(
     (tool) => tool.name === call.name && tool.p > 0.25,
   )
+  const toolMatch = primary || allowed
   checks.push({
     label: 'tool_match',
-    pass: allowed,
-    detail: allowed ? `${call.name} was inside the pruned tool set.` : `${call.name} was not routed.`,
+    pass: toolMatch,
+    detail: toolMatch
+      ? primary
+        ? `${call.name} is the routed primary tool.`
+        : `${call.name} was inside the pruned tool set.`
+      : `${call.name} was not routed.`,
   })
 
   let rangeValid = true
@@ -1572,6 +1651,12 @@ export function buildClarification(
   const candidates = buildCandidates(note, tool, replacement)
 
   if (problem === 'missing_content') {
+    if (note.trim().length === 0) {
+      return {
+        text: "The document is empty — I can start it for you. Try 'create a readme template' or tell me the first line.",
+        actions: [],
+      }
+    }
     return {
       text: 'I found the target, but no replacement text came through. Tell me what it should say and I will keep the rest of the note untouched.',
       actions: [],

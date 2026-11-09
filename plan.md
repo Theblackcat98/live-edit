@@ -20,13 +20,13 @@ Instead of relying on a single monolithic cloud LLM or a brittle pipeline of sep
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Perceptual Front-End** | `LiquidAI/LFM3-Omni-2B` | 2.17B | 32K | Q4_K_M / MLX 4-bit / FP8 | ~1.5 GB |
 | **Decision Supervisor** | `LiquidAI/d1-Omni-2B` | 2.17B | 128K | BF16 / Q8_0 (for calibration accuracy) | ~2.3 GB |
-| **Visual/Text Worker** | `LiquidAI/LFM3-VL-2B` *(Primary)*<br>`LiquidAI/LFM3-1.7B` *(Heavy Text)* | 1.92B<br>1.73B | 128K<br>256K | Q4_K_M / JANG_6M / MLX 4-bit | ~1.3 GB |
+| **Visual/Text Worker** | `LiquidAI/LFM3-1.7B` *(Primary)*<br>`LiquidAI/LFM3-VL-2B` *(Visual ROI + fallback)* | 1.73B<br>1.92B | 256K<br>128K | Q4_K_M / JANG_6M / MLX 4-bit | ~1.3 GB |
 
 * **Total Concurrent Memory Footprint:** ~5.1 GB to 6.5 GB (runs fully locally on Apple Silicon Macs with 16GB+ Unified Memory, consumer GPUs with 8GB+ VRAM, or Intel/AMD AI PCs).
 * **Why `d1-Omni-2B` is kept at higher precision (Q8/BF16):** Decision models output calibrated probabilities in a single forward pass; preserving precision ensures probability calibration (`P(intent)`, span boundaries) remains sharp.
-* **Worker Selection Policy:**
-  * **Default Mode (`LFM3-VL-2B`):** Used whenever the task involves visual context (e.g., extracting diagrams, reading handwritten notes, referencing a screenshot) alongside file editing. It uses the exact `1.73B` LFM3 language backbone plus the 164M hybrid vision encoder.
-  * **High-Capacity Text Mode (`LFM3-1.7B`):** Used when the active file/note exceeds 64K tokens (up to 256K) or requires multi-step agentic refactoring across multiple files, benefiting from `LFM3-1.7B`'s 4th-stage Agentic RL post-training.
+* **Worker Selection Policy:** *(updated by the 1.7B-default swap, commit 345a042)*
+  * **Default Mode (`LFM3-1.7B`, :8080):** Decodes every text mutation (`add_text`, `edit_text`, `remove_text`) over its 256K context — its Agentic RL post-training closes the XML tool-call contract reliably. Decodes ~7–14 s at a 3000-token budget; two malformed attempts fall back further.
+  * **Visual Mode (`LFM3-VL-2B`, :8081, optional):** `extract_visual_to_note` (ROI crops need image input) and the worker fallback when the 1.7B is down. Must decode with `chat_template_kwargs: {"enable_thinking": false}` — under the servers' `--reasoning on` default the 2B never closes its `<think>` block at any budget.
 
 ---
 
@@ -75,7 +75,7 @@ Instead of relying on a single monolithic cloud LLM or a brittle pipeline of sep
 
 ---
 
-## 4. Deep Dive: How `d1-Omni-2B` Constantly Helps the `1.7B (VL)` Worker
+## 4. Deep Dive: How `d1-Omni-2B` Constantly Helps the Worker (`LFM3-1.7B` / `LFM3-VL-2B`)
 
 Small 1.7B–2B models can occasionally hallucinate tool parameters, pick the wrong edit operation (`add` vs `replace`), or misidentify which paragraph the user wants to change. **`d1-Omni-2B`** eliminates these failure modes via three millisecond-level interventions:
 
@@ -86,12 +86,12 @@ Whenever `LFM3-Omni-2B` detects an actionable request (or on every user turn via
 * **Decision Query 1 (`action_required`):** `["conversational_only", "file_mutation", "ambiguous_request"]`
   * *If `"ambiguous_request"` ($P > 0.60$):* Short-circuits the worker and instructs `LFM3-Omni-2B` to ask the user for clarification out loud.
 * **Decision Query 2 (`allowed_tools`):** Multi-select classification over the tool catalog:
-  * `["add_text", "edit_text", "remove_text", "create_section", "extract_visual_to_note", "format_note"]`
-  * *Benefit:* Instead of stuffing 15+ tool schemas into the `1.7B (VL)` prompt, only the top 1–2 tools with calibrated probability $P > 0.25$ are injected into `apply_chat_template(tools=...)`. This dramatically increases the 1.7B model's tool-calling accuracy.
+  * `["add_text", "edit_text", "remove_text", "extract_visual_to_note"]` *(the implemented catalog — the original sketch's `create_section`/`format_note` were folded into `add_text`/`edit_text`)*
+  * *Benefit:* Instead of stuffing 15+ tool schemas into the worker prompt, only the top 1–2 tools with calibrated probability $P > 0.25$ are injected into `apply_chat_template(tools=...)`. This dramatically increases the 1.7B model's tool-calling accuracy.
 
 ### Stage B: Zero-Token Grounding (Span & Bounding Box Extraction) (~8ms)
 
-Before the `1.7B (VL)` model generates a single token, `d1-Omni-2B` uses its typed output heads in the same forward pass:
+Before the worker model generates a single token, `d1-Omni-2B` uses its typed output heads in the same forward pass:
 
 1. **Text Span Extraction:** Given the active note text and the user's spoken instruction (e.g., *"Change the deadline in the second paragraph to Friday"* or *"Remove the bullet point about Redis"*), `d1-Omni-2B` extracts the **exact character/line span** (`start_char`, `end_char`, `matched_substring`) from the file.
 2. **Visual Bounding Box Extraction:** If the user references the camera/screen (e.g., *"Grab the formula in the top right of this slide and add it under section 2"*), `d1-Omni-2B` returns the open-vocabulary bounding box `[x1, y1, x2, y2]` with calibrated confidence.
@@ -107,7 +107,8 @@ Once `LFM3-1.7B` / `LFM3-VL-2B` outputs its `<think>` block and `<tool_call>`, t
   2. `destructive_safety_check`: `["safe", "unintended_data_loss"]`
 * **Feedback Loop:**
   * If $P(\text{"yes"}) \ge 0.80$ and $P(\text{"safe"}) \ge 0.85$: Execute the tool call immediately.
-  * If rejected: Append a system critique message to the `1.7B (VL)` context (e.g., *"Supervisor rejected call: `no_wrong_target_span`. Expected edit within lines 14–18 (`matched_substring`), but tool targeted lines 30–35. Retry."*) and regenerate with `temperature=0.1`.
+  * If rejected: Append a system critique message to the worker context (e.g., *"Supervisor rejected call: `no_wrong_target_span`. Expected edit within lines 14–18 (`matched_substring`), but tool targeted lines 30–35. Retry."*) and regenerate with `temperature=0.1`.
+  * *Implementation deviation:* the built critic runs one typed `noul` question (not the two typed questions above) and does **not** loop a critique back into the worker — two decode attempts, then the deterministic template emitter, keep runs finite. §10 WS1 tunes the gate.
 
 ---
 
@@ -154,7 +155,7 @@ All file tools operate on line-indexed or span-verified views of the target Mark
 
 ### 5.2 Example LFM3 Worker Generation
 
-When guided by `d1-Omni-2B`, the `1.7B (VL)` model receives the supervisor's hints in its prompt and outputs:
+When guided by `d1-Omni-2B`, the worker receives the supervisor's hints in its prompt and outputs:
 
 ```xml
 <think>
@@ -189,10 +190,10 @@ notes/quarterly_review.md
 
 Because each LFM3 model has a different context window and modality contract, the Orchestrator manages three synchronized views of state:
 
-1. **`LFM3-Omni-2B` Context (32K Limit — Rolling Window):**
-   * Keeps only the last ~5–10 turns of spoken conversation, active video frames (sampled at 2 fps, 4–64 frames per interaction), and a **compact Document Table of Contents (ToC) + Last Edit Summary** (max ~2K tokens).
-   * Prevents audio/video tokens from overflowing the 32K context window.
-   * Generation parameters: `audio_temperature=1.0, audio_top_k=128, audio_repetition_penalty=1.1` for natural 24kHz speech output.
+1. **`LFM3-Omni-2B` Context (128K — Rolling Chat Window):**
+   * Implemented: the last 6 (user command, assistant reply) turns, the current note (resent each turn, truncated to 3,600 chars — prefix caching absorbs most of it), a one-line last-run status, and the live frame attached only on visual-relevant turns.
+   * Implemented (§10 WS2, 2026-11-08): non-note turns receive a compact ToC outline (title + H2 headings) instead of the full note dump.
+   * Chat decodes at `temperature=0.3` with a 500-token budget, streamed; TTS rides the same server's `/tts` (24 kHz WAV).
 
 2. **`d1-Omni-2B` Context (128K Limit — Stateless Single-Pass Window):**
    * Constructed fresh on each decision pass: `[Last 15s Audio Clip] + [Current Keyframe] + [Last 3 Conversation Turns] + [Full Active Note Text (up to 64K tokens for optimal calibration)]`.
@@ -244,8 +245,8 @@ Because each LFM3 model has a different context window and modality contract, th
 | Failure Scenario | How the Trinity Architecture Handles It |
 | :--- | :--- |
 | **User is just thinking out loud / coughing / talking to someone else** | `d1-Omni-2B` evaluates raw audio + visual state in one pass and classifies `action_required = "conversational_only"` (or `"ignore"`), preventing false-positive file edits. |
-| **User gives an ambiguous command (*"Delete that part"*)** | `d1-Omni-2B`'s span extraction returns low confidence / multiple competing spans. The orchestrator blocks the `1.7B (VL)` worker and prompts `LFM3-Omni-2B` to ask: *"Did you mean the first bullet point or the whole section?"* |
-| **`1.7B (VL)` hallucinates line numbers or overwrites adjacent text** | `d1-Omni-2B` Stage B provides exact `old_text_anchor` spans beforehand, and Stage C Critic compares the proposed edit span against the extracted span, rejecting mismatches in ~6ms before the file is touched. |
+| **User gives an ambiguous command (*"Delete that part"*)** | `d1-Omni-2B`'s span extraction returns low confidence / multiple competing spans. The orchestrator blocks the worker and prompts `LFM3-Omni-2B` to ask: *"Did you mean the first bullet point or the whole section?"* |
+| **The worker hallucinates line numbers or overwrites adjacent text** | `d1-Omni-2B` Stage B provides exact `old_text_anchor` spans beforehand, and Stage C Critic compares the proposed edit span against the extracted span, rejecting mismatches in ~6ms before the file is touched. |
 | **Note grows too large (>32K tokens) for `LFM3-Omni-2B`** | `LFM3-Omni-2B` never holds the full file—only a ~1K-token ToC/summary. `d1-Omni-2B` (128K context) and `LFM3-VL-2B` (128K) / `LFM3-1.7B` (256K) handle the full document state. |
 | **License Compliance** | All models run under the **LFM Open License v1.0** (free commercial use under $10M annual revenue; verify organizational revenue thresholds prior to commercial redistribution). |
 
@@ -269,18 +270,27 @@ A complete, self-contained LiquidScribe desktop workspace in **Vite + React + Ty
   pruned tool schema, full worker XML, critic checks, execution diff.
 - **Tooling:** `add_text`, `edit_text`, `remove_text`, `extract_visual_to_note` implemented against
   a real Markdown editor with atomic execution and history.
-- **Voice:** browser SpeechRecognition and SpeechSynthesis when available, with a typed fallback.
-  Microphone level drives the waveform; camera/screen capture are opt-in.
+- **Voice:** live Omni-2B ASR (`/v1/audio/transcriptions`) and model TTS (`/tts`, 24 kHz WAV) with
+  browser speech fallbacks; auto-stop capture, barge-in and a speaker toggle. Camera/screen capture
+  are opt-in and feed real frames into d1 routing, Omni chat and visual extraction.
+- **QA:** `scripts/qa-suite.mjs` — 31-case CDP battery over the live trinity (`npm run qa`).
 
-## 9.2 Runtime honesty
+## 9.2 Runtime (live trinity + deterministic fallbacks)
 
-No model server is connected in this build. The app ships with a deterministic **simulated inference
-layer** behind the same interfaces (router, grounding, worker, critic, executor). Local LFM3 GGUF
-files exist on the development machine for text, VL, Audio and Omni, but the d1/d1-Omni supervisor
-checkpoints are not installed and this repo has no native model bridge. Camera and screen inputs are
-local previews; simulated visual reasoning still uses the synthetic review frame. Every surface
-labels the runtime as simulated. The UI, tool contracts, trace format and execution engine are real
-and are the integration points for a native model bridge.
+The native bridge landed (b1c76ec, hardened through 345a042). Three llama.cpp servers serve the
+trinity — started with `scripts/start-models.sh` (idempotent; `scripts/stop-models.sh` to stop):
+
+- **LFM3-Omni-2B :8083** — chat (streamed), ASR, TTS.
+- **d1-Omni-2B :8085** — typed routing + critic decisions over `/v1/systemone`.
+- **LFM3-1.7B :8080** — worker XML tool calls (primary worker).
+- **LFM3-VL-2B :8081 (optional)** — visual ROI crops; worker fallback when the 1.7B is down.
+
+Every caller is live-first with a local deterministic fallback (regex router, keyword grounding,
+template worker emitter, canned conversational replies); the trace records which path ran, and the
+Runtime truth card probes every endpoint every 10 s. Live camera/screen frames reach d1 routing,
+Omni chat and visual extraction through `resolveSceneFrame`; the synthetic review slide is the
+fallback prop. Note: `./lfm3.sh stop` does not manage servers started outside the family script —
+prefer this repo's start/stop scripts.
 
 ## 9.3 Directory map
 
@@ -300,14 +310,22 @@ npm install
 npm run dev       # http://localhost:5173
 npm run build
 npm run typecheck
+npm run qa        # 31-case CDP battery — needs the dev server + trinity up
+                  # (scripts/start-models.sh; VL :8081 via lfm3.sh vl, or 1b logs probe noise)
 ```
 
 ## 9.5 Known scope limits
 
-- The model bridge is simulated; latencies shown with a SIM marker are synthetic pacing values.
-- Camera/screen capture depends on browser permissions; the synthetic slide is the default.
-- Speech recognition/synthesis depend on browser support (`SpeechRecognition`, `speechSynthesis`).
-- The synthetic visual scene is a fixed prop: table, formula card, bar chart and sticky note.
+- Span grounding is still local keyword/quote search plus hand-pinned special cases (e.g. the
+  title→H1 pin in `findSpanForMutation`); d1's typed span extraction (§4 Stage B) never replaced it.
+- Natural phrasing is normalized before routing/planning (`normalizeCommand` strips fillers,
+  scene-setting clauses and hedges; gerund verb forms match everywhere), and template detection
+  no longer requires verb-first phrasing — §10 WS3, QA cases 12d/12e.
+- The 1.7B worker decodes ~7–14 s per mutation (it reasons at length inside `<think>`) — expected,
+  not a hang.
+- Chat context: the full note is resent every chat turn (prefix caching absorbs most of it).
+- Vite HMR can serve a stale module graph after import changes — restart `npm run dev`.
+- Speech fallbacks still depend on browser support when a model server is down.
 
 ## 9.6 Build status
 
@@ -322,11 +340,18 @@ npm run typecheck
 - [x] `npm run typecheck` and `npm run build` pass.
 - [x] Headless Chromium test pass on 2026-11-08 (see 9.7).
 - [x] Native LFM3 bridge (2026-11-08): Omni-2B ASR + chat (:8083), d1-Omni-2B routing/critic
-      over `/v1/systemone` (:8085), VL-2B worker decode (:8081). d1 checkpoints fetched from
+      over `/v1/systemone` (:8085), worker decode via llama.cpp. d1 checkpoints fetched from
       LiquidAI HF repos. Local deterministic fallbacks remain when a server is down, and the
       Runtime truth card probes every endpoint every 10 s.
-- [ ] Persistent workspace storage across reloads (demo is intentionally in-memory).
-- [ ] Domain LoRA fine-tuning on rejected traces.
+- [x] 1.7B-default worker swap (345a042): LFM3-1.7B (:8080) decodes every text mutation; VL-2B
+      (:8081, optional) keeps visual ROI crops and serves as worker fallback.
+- [x] CDP QA battery — 31 live cases over the real trinity (`npm run qa`, c9bc352 + §10 WS4).
+- [x] Persistent workspace storage across reloads (landed in b1c76ec; QA case 15 covers it).
+- [x] Rejected-trace JSONL export (produces the SFT dataset for the backlog item below).
+- [x] §10 MVP hardening (2026-11-08): d1 tool choice honored + thresholds unified (WS1), Omni
+      chat contract + output sanitizer (WS2), natural-phrasing document creation (WS3), QA
+      cases 12d/12e + chat hygiene (WS4) — battery green 31/31.
+- [ ] Domain LoRA fine-tuning on rejected traces (§7 Phase 5; the data export already lands).
 
 ## 9.7 Live test pass (2026-11-08)
 
@@ -365,11 +390,168 @@ responsive hand-off to the note-only layout.
 
 ## 9.8 Next steps
 
-1. Wire a native bridge and start the local LFM3 servers: `LFM3-Omni-2B` for the interface,
-   `LFM3-VL-2B` for worker calls and `LFM3-1.7B` for large text refactors.
-2. Fetch the public d1-2B / d1-Omni-2B weights and connect `/v1/systemone` for real typed routing,
-   grounding and critic decisions.
-3. Pass live camera/screen frames and audio into the bridge instead of using the synthetic scene.
-4. Add a persistent workspace (IndexedDB or a local server store) and a real mobile command surface.
-5. Log held traces for the optional LoRA/tool-call SFT pass.
+1. [x] Wire a native bridge and start the local LFM3 servers (Omni :8083, d1-Omni :8085, 1.7B :8080;
+   `scripts/start-models.sh`).
+2. [x] Fetch the public d1-2B / d1-Omni-2B weights and connect `/v1/systemone` for typed routing,
+   grounding disambiguation and critic decisions.
+3. [x] Pass live camera/screen frames into the bridge (`resolveSceneFrame` feeds d1 routing, Omni
+   chat and visual extraction); the synthetic scene is the fallback.
+4. [x] Persistent workspace (localStorage, b1c76ec). *Open:* a real mobile command surface.
+5. [x] Log rejected traces — the JSONL export already produces the SFT dataset. *Open:* the
+   LoRA/tool-call SFT pass itself (backlog).
 
+Current work continues in §10.
+
+---
+
+# 10. Action Plan — MVP Hardening (2026-11-08)
+
+Three live-session complaints drive this pass. Root cause everywhere: the deterministic layer
+demands verb-first imperatives, and live d1 decisions are dropped or vetoed at four inconsistent
+probability thresholds. **No architecture change** — the trinity flow (Omni chats, d1
+routes/critiques, 1.7B writes XML) stays as designed; the deterministic layer becomes forgiving,
+the thresholds align, and Omni's chat contract becomes honest.
+
+## 10.1 Diagnosis
+
+**A. "The decision model still blocks a bunch of tool calls"** — four silent gates:
+
+| Gate | Bug | Location |
+| :--- | :--- | :--- |
+| d1's tool pick is thrown away | `routeFromAnswers` reads only `toolAnswer.probabilities` and never `toolAnswer.choice`; a choice without probabilities returns `null` and silently downgrades to the regex router | `src/state/useWorkspace.ts:229-242` |
+| Threshold mismatch | `allowedTools` filtered at p>0.02 (route, `useWorkspace.ts:248`), retry alternatives at p>0.2 (`useWorkspace.ts:1284`), critic `tool_match` demands p>0.25 (`src/lib/supervisor.ts:1371`). A tool with p=0.22 passes routing, wins the grounding retry, then is *guaranteed* rejected — and the retry switches `primaryTool` without updating `allowedTools` | as listed |
+| d1 semantic critic is a hard gate with no retry | `noul >= 0.5` rejects even when all local hard gates pass; the critic feedback says "Retry…" but nothing retries | `useWorkspace.ts:1511-1519` |
+| Worker must echo the primary tool | A well-formed 1.7B call for a different sensible tool (e.g. `edit_text` when routed `add_text`) is discarded on both attempts → template fallback or run failure | `useWorkspace.ts:1444-1447` |
+
+**B. "Omni acts dumb; doesn't understand it should just delegate"**
+
+- Omni only ever sees `conversational_only` turns — mutation turns bypass it entirely (canned
+  ack/result templates speak instead), so it has no lived context of edits
+  (`useWorkspace.ts:1135-1238`).
+- Its system prompt (`useWorkspace.ts:319-325`) never says "you have no tools / never emit XML /
+  hand edits to the worker" — misrouted edit intent makes a 2B model improvise promises or
+  tool-call-like text, and nothing sanitizes that output.
+- Every chat turn — including small talk — carries a 3,600-char note dump plus frame notice before
+  the actual question (`useWorkspace.ts:327-336`), diluting a 2B model's attention (QA case 2
+  already fights this with its "clean reply" assertion).
+
+**C. "Crumbles on 'The document is empty now, begin by writing a readme template .md doc'"**
+
+That sentence dies at every layer because the regexes demand verb-first imperatives:
+
+- `startsMutation` (`supervisor.ts:182`) requires the sentence to *begin* with the verb — this one
+  begins with "The".
+- `MUTATION_VERBS` (`supervisor.ts:50`) matches `\bwrite\b` — "writing" doesn't match (word
+  boundary). Local router: `conversational_only` 0.82.
+- Even when d1 routes it `file_mutation/add_text`, `wantsDocumentTemplate` requires the verb-initial
+  `CREATION_HEAD` (`supervisor.ts:802-934`), and `extractAddContent`'s `afterVerb` also needs the
+  bare verb "write" → null → `missing_content` clarification: *"I found the target, but no
+  replacement text came through"* — nonsense on an empty document that has no target. QA case 12
+  passes only because it is phrased verb-first ("Create a readme template…").
+
+## 10.2 Workstreams
+
+**WS1 — stop the over-blocking** (`useWorkspace.ts`, `supervisor.ts`)
+
+1. Honor d1's tool choice: if `toolAnswer.choice` exists but probabilities are missing/zero, use
+   the chosen name with p=0.7; floor the primary tool's p at 0.6 in `allowedTools`.
+2. One threshold everywhere: critic `tool_match` passes if `call.name === route.primaryTool` **or**
+   membership in `allowedTools` with p>0.25; the grounding retry merges the switched tool into
+   `allowedTools` at p≥0.5.
+3. Soften the d1 semantic critic: reject only on `noul < 0.35` when local hard gates pass (the
+   score still lands in the trace). Local hard gates — anchor exactness, blast radius (QA case
+   12c) — remain absolute.
+4. Accept good worker calls: the attempt loop accepts a parsed call for any allowed tool (p>0.25)
+   with all required params non-empty, not just the primary. Critique still gates it.
+
+**WS2 — Omni chat contract** (`useWorkspace.ts`)
+
+1. Rewrite the system prompt: explicit contract — no tools, cannot edit files, never emit XML/JSON/
+   code blocks as actions; if the user asks for a note change, reply in one short sentence that the
+   edit pipeline takes it from here.
+2. Slim the payload for non-note turns: full note only when the question is note-related (keyword
+   check like the existing `wantsVisual`); otherwise a one-line outline (title + H2 headings via
+   `getHeadings`) — moves §6.1 toward its original ToC design.
+3. Sanitize Omni output: strip `<tool_call>`/`<function=`/fenced action blocks from the final reply
+   before display/TTS; empty after sanitize → existing `conversationalReply` fallback.
+
+**WS3 — natural-phrasing document creation** (`supervisor.ts`)
+
+1. `normalizeCommand()`: strip leading fillers ("um,", "hey,", "okay,"), scene-setting clauses
+   ("the document is empty now,", "the doc is blank,"), and hedges ("begin by", "start by", "go
+   ahead and", "I want you to"). Applied at the top of `routeCommand` and `buildPlan` (both pure
+   and idempotent); the trace and chat bubble keep the raw text.
+2. Gerund verbs in `MUTATION_VERBS`, `startsMutation`, `CREATION_HEAD` (writing, adding, creating,
+   making, drafting…). After normalization the failing sentence becomes "write a readme template
+   .md doc" → matches.
+3. `wantsDocumentTemplate` fallback: when not verb-first, still detect
+   `readme|changelog|faq|todo…` + `template|boilerplate|skeleton|outline` anywhere in a short
+   command; tolerate ".md"/"markdown" suffixes (`templateTitle` already ignores them).
+4. Honest empty-doc clarification in `buildClarification`: "The document is empty — I can start it
+   for you. Try 'create a readme template' or tell me the first line."
+5. One criteria line for `ROUTE_QUESTIONS.file_mutation`: creating or writing a whole document or
+   template counts as `file_mutation` (add_text).
+
+**WS4 — lock it in with the QA battery** (`scripts/qa-suite.mjs`)
+
+- Empty seed + the exact failing sentence "The document is empty now, begin by writing a readme
+  template .md doc" → `verified`, note starts `# README`, ≥20 lines.
+- "hey, go ahead and create a changelog template" → `verified`, `# Changelog`.
+- Chat-hygiene assertion on an existing conversational case: the reply contains no `<tool_call>` /
+  `<function=` / fenced actions.
+
+## 10.3 Path of least resistance
+
+Ordered; each step independently shippable and verifiable:
+
+1. **WS3** — pure deterministic code, no model-behavior risk, kills the most visible failure.
+   Verify with the new QA case alone.
+2. **WS1** — four targeted edits; verify QA cases 6/7/8/9/12c stay green (blocking should now only
+   trigger on real faults like blast radius).
+3. **WS2** — prompt strings + one sanitizer helper; verify cases 2/3/4/5 plus the new hygiene
+   assertion.
+4. **WS4 full run** — `npm run typecheck`; with the trinity up (`scripts/start-models.sh`) and the
+   dev server on :5173, `npm run qa` to green; then sync TODO.md/README and commit (the swap+QA
+   commit TODO.md is waiting on).
+
+Rough diff: \~120 lines across `supervisor.ts`, `useWorkspace.ts`, `qa-suite.mjs` — no new files, no
+type changes, no dependency changes.
+
+**Status (2026-11-08): landed and green.** WS1–WS4 implemented in `supervisor.ts`,
+`useWorkspace.ts` and `qa-suite.mjs`; `npm run typecheck` and `npm run build` pass; the QA
+battery ran 31/31 PASS with zero console errors against the live trinity (Omni :8083,
+d1-Omni :8085, LFM3-1.7B :8080, VL-2B :8081).
+
+
+
+---
+
+Implement plan.md §10 — MVP hardening (WS3 → WS1 → WS2 → WS4)
+Context
+Three live-session complaints: d1 blocks legitimate tool calls; Omni chat acts context-blind and tries to act on edits itself; the pipeline crumbles on naturally phrased creation commands ("The document is empty now, begin by writing a readme template .md doc"). Root causes are diagnosed in plan.md §10 (merged earlier this session): verb-first regex assumptions and four inconsistent probability thresholds (0.02 / 0.2 / 0.25 / 0.5). Scope confirmed with user: §10 as-is — no vitest, no grammar-constraint spike. No architecture change; \~120 lines across three files.
+
+Step 1 — WS3: natural-phrasing creation (src/lib/supervisor.ts)
+Add normalizeCommand(): strip leading fillers ("um,", "hey,", "okay,", "so,"), scene-setting clauses ("the document/note/doc/file is (now) empty/blank/cleared" + delimiter), and hedges ("begin by", "start by", "go ahead and", "I want you to"). Apply at the top of routeCommand() (supervisor.ts:141) and buildPlan() (supervisor.ts:1121) — both pure, normalization idempotent; trace/chat bubbles keep the raw command.
+Gerund verb forms in MUTATION_VERBS (supervisor.ts:50), startsMutation (supervisor.ts:182), and CREATION_HEAD (supervisor.ts:804): writing, adding, creating, making, drafting, generating… After clause-stripping the failing sentence becomes "write a readme template .md doc" → matches.
+wantsDocumentTemplate fallback (supervisor.ts:881): when not verb-initial, still match readme|changelog|faq|todo… + template|boilerplate|skeleton|outline in a short command; strip ".md"/"markdown" tokens so they neither count as content words nor break the word limit (templateTitle already ignores the tail).
+buildClarification (supervisor.ts:1564): empty-note-aware copy for missing_content — "The document is empty — I can start it for you…" instead of the current target-talk.
+ROUTE_QUESTIONS.file_mutation criteria (supervisor.ts:120): add "creating or writing a whole document or template counts as file_mutation (add_text)".
+Step 2 — WS1: stop the over-blocking (src/state/useWorkspace.ts, src/lib/supervisor.ts)
+routeFromAnswers (useWorkspace.ts:229): honor toolAnswer.choice when probabilities are missing/zero (use chosen name at p=0.7); floor the primary tool's p at 0.6 in allowedTools.
+Grounding retry (useWorkspace.ts:1282-1303): when switching primaryTool to an alternative, merge it into allowedTools at p≥0.5.
+critique tool_match (supervisor.ts:1371): pass when call.name === route.primaryTool or membership in allowedTools with p>0.25.
+d1 semantic critic (useWorkspace.ts:1511): reject only on noul < 0.35 when local hard gates pass; score still recorded in the trace. Local hard gates (anchor exactness, blast radius — QA case 12c) stay absolute.
+Worker attempt acceptance (useWorkspace.ts:1444): accept a parsed call for any allowedTools member (p>0.25) with all required params non-empty — not just the primary. Critique still gates it.
+Step 3 — WS2: Omni chat contract (src/state/useWorkspace.ts)
+Rewrite buildChatMessages system prompt (useWorkspace.ts:319): explicit contract — no tools, cannot edit files, never emit XML/JSON/code blocks as actions; edit requests get a one-sentence hand-off to the edit pipeline.
+Slim payload: full note only on note-relevant turns (keyword check, pattern of the existing wantsVisual at useWorkspace.ts:1170); otherwise title + H2 headings via existing getHeadings (src/lib/doc.ts).
+Add sanitizeReply(): strip <tool_call> / \<function= / fenced action blocks from the final streamed reply before display/TTS; empty after sanitize → existing conversationalReply fallback.
+Step 4 — WS4: QA cases + green run (scripts/qa-suite.mjs)
+Group C: empty seed + exact sentence "The document is empty now, begin by writing a readme template .md doc" → verified, note starts # README, ≥20 lines.
+Group E: "hey, go ahead and create a changelog template" → verified, # Changelog.
+Chat hygiene: assert conversational replies contain no <tool_call> / \<function= / fenced actions (attach to case 5).
+Verification
+npm run typecheck.
+Trinity already verified up (:8080/:8083/:8085); start npm run dev in background, run npm run qa — all 29 existing cases + new ones green (case 9 landing in clarify remains the documented known-behavior).
+Manual spot-check in the app of the three complaint sentences.
+Sync TODO.md (close the in-flight QA/commit item, note §10 landed) and commit once green.
