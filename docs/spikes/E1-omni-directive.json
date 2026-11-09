@@ -1,0 +1,2129 @@
+{
+ "spike": "E1 — Omni directive emission",
+ "generated_at": "2026-11-09T11:28:01.547Z",
+ "server": {
+  "base_url": "http://127.0.0.1:8083",
+  "model": "lfm3-omni-2b",
+  "health": "ok"
+ },
+ "sampling": {
+  "temperature": 0.3,
+  "max_tokens": 500,
+  "delay_ms": 250,
+  "request_timeout_ms": 120000,
+  "seed": "server default (not pinned)"
+ },
+ "directive_schema": "design.md §5: {task: create|insert|edit|remove|extract, instruction, target?, verbatim?, constraints?, frame_relevant} — task/instruction/frame_relevant required",
+ "scoring_rules": {
+  "valid": "expected outcome via the mechanism; for delegate turns: schema-valid AND task matches AND instruction carries the user-specified specifics (mustMention)",
+  "repair": "triggered only by parse/schema failures (one retry with the error appended); semantic misses are scored invalid without repair",
+  "wrong_outcome": "delegated a chat/clarify/action turn, or answered/chatted/clarified on an edit or action turn, or claimed an ACTION on a non-action turn",
+  "error": "HTTP/network/timeout failure — recorded as failure, never valid"
+ },
+ "history_policy": "rolling API-level history contains ONLY model-authored output plus tool results (no harness-invented assistant prose — runs 1 and 2 of this spike showed the 2B few-shot-copies repeated harness strings, which invalidated those runs; fixed): valid native delegation = assistant tool_call + tool \"Executed\"; failed native delegation = assistant tool_call + tool \"Execution failed\"; delimited delegation = raw completion incl. block; other replies verbatim; no-output turns add no assistant message; note frozen at the seed note (no worker in the spike)",
+ "turn_set_verbatim": [
+  {
+   "id": "T01",
+   "text": "hey",
+   "expect": "answer",
+   "expected_task": null,
+   "frame": false
+  },
+  {
+   "id": "T02",
+   "text": "what can you see?",
+   "expect": "answer",
+   "expected_task": null,
+   "frame": true
+  },
+  {
+   "id": "T03",
+   "text": "remember that my favorite color is teal",
+   "expect": "answer",
+   "expected_task": null,
+   "frame": false
+  },
+  {
+   "id": "T04",
+   "text": "what is my favorite color?",
+   "expect": "answer",
+   "expected_task": null,
+   "frame": false
+  },
+  {
+   "id": "T05",
+   "text": "update the Q3 revenue row to $1.45M Final",
+   "expect": "delegate",
+   "expected_task": "edit",
+   "frame": false
+  },
+  {
+   "id": "T06",
+   "text": "do the same for Q4 to $1.5M",
+   "expect": "delegate",
+   "expected_task": "edit",
+   "frame": false
+  },
+  {
+   "id": "T07",
+   "text": "summarize the note so far in two sentences",
+   "expect": "answer",
+   "expected_task": null,
+   "frame": false
+  },
+  {
+   "id": "T08",
+   "text": "remove the bullet about Redis",
+   "expect": "delegate",
+   "expected_task": "remove",
+   "frame": false
+  },
+  {
+   "id": "T09",
+   "text": "undo that",
+   "expect": "action",
+   "expected_task": null,
+   "frame": false
+  },
+  {
+   "id": "T10",
+   "text": "change the number",
+   "expect": "clarify",
+   "expected_task": null,
+   "frame": false
+  },
+  {
+   "id": "T11",
+   "text": "add a line under Security: rotate keys monthly",
+   "expect": "delegate",
+   "expected_task": "insert",
+   "frame": false
+  },
+  {
+   "id": "T12",
+   "text": "pull the LTV/CAC formula from the slide into Revenue",
+   "expect": "delegate",
+   "expected_task": "extract",
+   "frame": true
+  },
+  {
+   "id": "T13",
+   "text": "write a README template document to begin",
+   "expect": "delegate",
+   "expected_task": "create",
+   "frame": false
+  },
+  {
+   "id": "T14",
+   "text": "rename the title to Q3 Review Final",
+   "expect": "delegate",
+   "expected_task": "edit",
+   "frame": false
+  },
+  {
+   "id": "T15",
+   "text": "make it better",
+   "expect": "clarify",
+   "expected_task": null,
+   "frame": false
+  },
+  {
+   "id": "T16",
+   "text": "hey, could you add a bullet under Follow-ups saying send the deck to finance",
+   "expect": "delegate",
+   "expected_task": "insert",
+   "frame": false
+  },
+  {
+   "id": "T17",
+   "text": "um, please delete the bullet about API keys",
+   "expect": "delegate",
+   "expected_task": "remove",
+   "frame": false
+  },
+  {
+   "id": "T18",
+   "text": "create a changelog template in this document",
+   "expect": "delegate",
+   "expected_task": "create",
+   "frame": false
+  },
+  {
+   "id": "T19",
+   "text": "what happens if I remove the Q3 row?",
+   "expect": "answer",
+   "expected_task": null,
+   "frame": false
+  },
+  {
+   "id": "T20",
+   "text": "delete the Q1 row from the revenue table",
+   "expect": "delegate",
+   "expected_task": "remove",
+   "frame": false
+  }
+ ],
+ "must_mention_table": {
+  "T05": [
+   "/\\bq3\\b/i",
+   "/\\$1\\.45\\s*m/i"
+  ],
+  "T06": [
+   "/\\bq4\\b/i",
+   "/\\$1\\.5\\s*m/i"
+  ],
+  "T08": [
+   "/redis/i"
+  ],
+  "T11": [
+   "/security/i",
+   "/rotate\\s+keys\\s+monthly/i"
+  ],
+  "T12": [
+   "/ltv|formula/i",
+   "/revenue/i"
+  ],
+  "T13": [
+   "/readme/i",
+   "/template|section|overview|getting started|standard/i"
+  ],
+  "T14": [
+   "/q3\\s+review\\s+final/i"
+  ],
+  "T16": [
+   "/follow-?\\s*ups/i",
+   "/send\\s+the\\s+deck\\s+to\\s+finance/i"
+  ],
+  "T17": [
+   "/api\\s*keys/i"
+  ],
+  "T18": [
+   "/changelog/i",
+   "/template|version|section/i"
+  ],
+  "T20": [
+   "/\\bq1\\b/i",
+   "/row|table/i"
+  ]
+ },
+ "mechanisms": {
+  "native-tools": {
+   "system_prompt": "You are Omni, the interface model of a note-editing app. The user talks to you; you can see the current note below and, when an image is attached to a user turn, the visual frame (what the user calls \"the slide\", \"the chart\" or \"the screen\").\n\nCurrent note (markdown):\n<note>\n# Q3 Business Review\n\nPrepared for the operating review on 14 November. Figures are provisional until finance sign-off. The narrative below focuses on revenue quality, product execution, and the decisions needed before the board meeting.\n\n## 1. Executive summary\n\nRevenue grew 18% quarter over quarter, led by self-serve expansion in the mid-market. Net revenue retention held at 112%, while gross margin improved 2.1 points.\n\n> Decision needed: approve the Q4 hiring plan before the next board meeting.\n\n## 2. Revenue\n\n| Quarter | Revenue | Status |\n| --- | --- | --- |\n| Q1 | $0.92M | Closed |\n| Q2 | $1.08M | Closed |\n| Q3 | $1.2M | Pending |\n| Q4 | $1.35M | Forecast |\n\nThe Q3 figure is waiting on the final enterprise invoice reconciliation. Finance expects to close the gap this week.\n\n## 3. Product notes\n\n- Shipped the new workspace permissions model.\n- Redis cache migration was postponed to Q4.\n- Mobile capture beta reached 1,200 weekly users.\n\n## 4. Risks\n\n1. Enterprise pipeline concentration remains high.\n2. Support volume is tracking 12% above plan.\n3. Hiring depends on the revised Q4 plan.\n\n## 5. Follow-ups\n\n- Finance to confirm Q3 revenue by Friday.\n- Dana to share the revised hiring model.\n\n## 6. Security\n\n- Rotate production API keys before 30 November.\n- Complete the SSO audit with IT.\n\n</note>\n\nOn every user turn, do exactly one of three things:\n\n1. ANSWER - reply in plain conversational text: greetings, questions, chat, statements about the user, hypotheticals — anything that does not require changing the note. You never author note content yourself, not even as a draft in chat: content in the note is written only by a worker model, and the only way to reach it is the delegation mechanism below.\n\n2. DELEGATE - when the user wants content added, changed, created, removed, or extracted in the note, emit ONE directive (mechanism below). Even when the user says \"write\" or \"create\", the mechanism is always delegation — you never produce the content yourself. The directive is a brief for a worker model that never sees this conversation:\n   - task: create | insert | edit | remove | extract\n   - instruction: pack in EVERYTHING the user specified about the content (sections named, values given, exact wording dictated, tone asked for) and resolve references like \"the same for Q4\" or \"that bullet\" from the conversation. A brief, not the content itself.\n   - target: optional object {\"description\": where the change belongs, \"heading\": section heading or null}\n   - verbatim: exact dictated text only when the user dictated exact words to appear in the note, otherwise null\n   - constraints: optional array of requirements, e.g. [\"markdown\", \"keep the existing content intact\"]\n   - frame_relevant: true only when the task depends on the attached visual frame\n\n3. ACTION - if the user asks to undo or redo the last change, reply with exactly \"ACTION undo\" or \"ACTION redo\" and nothing else. These are harness actions: never delegate them as a task, never claim you performed them yourself.\n\nIf the user's request would change the note but is too ambiguous to form a responsible directive, ANSWER with a single short clarifying question instead of delegating a guess.\n\nDELEGATE mechanism: call the function delegate_edit with the directive as its arguments (exactly one call, nothing else in that turn). Do not call it when the turn only needs an answer.",
+   "summary": {
+    "turns": 20,
+    "valid_first_try": 13,
+    "valid_after_repair": 0,
+    "valid_total": 13,
+    "invalid": 6,
+    "wrong_outcome": 1,
+    "error": 0,
+    "wrong_outcome_ids": [
+     "T10"
+    ],
+    "invalid_ids": [
+     "T05",
+     "T06",
+     "T11",
+     "T12",
+     "T15",
+     "T20"
+    ],
+    "error_ids": [],
+    "destructive_wrong_outcome_count": 0,
+    "destructive_wrong_outcome_ids": [],
+    "pass_bar": {
+     "rule": ">=18/20 valid after <=1 repair AND zero wrong-outcome on remove/edit turns",
+     "valid_ok": false,
+     "destructive_ok": true,
+     "met": false
+    },
+    "latency": {
+     "requests": 20,
+     "mean_ms": 496,
+     "median_ms": 390,
+     "p95_ms": 1369
+    },
+    "wall_ms": 14957
+   },
+   "turns": [
+    {
+     "turnId": "T01",
+     "text": "hey",
+     "expect": "answer",
+     "expectedTask": null,
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 117,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 13,
+        "prompt_tokens": 1170,
+        "total_tokens": 1183,
+        "prompt_tokens_details": {
+         "cached_tokens": 654
+        }
+       },
+       "content": "Hey! What would you like to do with the note?",
+       "isQuestion": true,
+       "actionLine": null,
+       "hygieneHits": []
+      }
+     ],
+     "finalClass": "valid_first_try",
+     "reason": null,
+     "valid": true,
+     "wrongOutcome": false,
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T02",
+     "text": "what can you see?",
+     "expect": "answer",
+     "expectedTask": null,
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 997,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 217,
+        "prompt_tokens": 1537,
+        "total_tokens": 1754,
+        "prompt_tokens_details": {
+         "cached_tokens": 654
+        }
+       },
+       "content": "I can see a screenshot of a finance operating review dashboard titled \"Q3 Operating Review – Revenue & Operating Efficiency\" (Confidential, dated 14 November). The key sections visible are:\n\n- **Revenue by Quarter**: Q1 $0.92M (Closed), Q2 $1.08M (Closed), Q3 $1.20M (Pending), Q4 $1.35M (Forecast)\n- **North Star**: LTV / CAC = 3.4X, Target >= 3.0X\n- **Trajectory**: Bar chart showing Q1 $0.92M, Q2 $1.08M, Q3 $1.20M, Q4 $1.35M (with 03–2026 footer)\n- **Finance Note**: \"FINANCE NOTE – FINAL INVOICE – RECON STILL PENDING.\"\n- **LFM – Operating Review** footer\n\nThe Q3 figure is pending, and the finance note indicates the final invoice reconciliation is still pending.",
+       "isQuestion": false,
+       "actionLine": null,
+       "hygieneHits": []
+      }
+     ],
+     "finalClass": "valid_first_try",
+     "reason": null,
+     "valid": true,
+     "wrongOutcome": false,
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T03",
+     "text": "remember that my favorite color is teal",
+     "expect": "answer",
+     "expectedTask": null,
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 177,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 23,
+        "prompt_tokens": 1436,
+        "total_tokens": 1459,
+        "prompt_tokens_details": {
+         "cached_tokens": 654
+        }
+       },
+       "content": "Got it — teal is your favorite color. I'll keep that in mind for any future interactions.",
+       "isQuestion": false,
+       "actionLine": null,
+       "hygieneHits": []
+      }
+     ],
+     "finalClass": "valid_first_try",
+     "reason": null,
+     "valid": true,
+     "wrongOutcome": false,
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T04",
+     "text": "what is my favorite color?",
+     "expect": "answer",
+     "expectedTask": null,
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 102,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 8,
+        "prompt_tokens": 1476,
+        "total_tokens": 1484,
+        "prompt_tokens_details": {
+         "cached_tokens": 920
+        }
+       },
+       "content": "Your favorite color is teal.",
+       "isQuestion": false,
+       "actionLine": null,
+       "hygieneHits": []
+      }
+     ],
+     "finalClass": "valid_first_try",
+     "reason": null,
+     "valid": true,
+     "wrongOutcome": false,
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T05",
+     "text": "update the Q3 revenue row to $1.45M Final",
+     "expect": "delegate",
+     "expectedTask": "edit",
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 427,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "tool_calls",
+       "usage": {
+        "completion_tokens": 87,
+        "prompt_tokens": 1508,
+        "total_tokens": 1595,
+        "prompt_tokens_details": {
+         "cached_tokens": 960
+        }
+       },
+       "content": "",
+       "toolCalls": [
+        {
+         "name": "delegate_edit",
+         "arguments": "{\"task\":\"insert\",\"instruction\":\"Add a new row to the Revenue table in the Q3 row with value $1.45M Final. Keep the existing Q1, Q2, Q4 rows unchanged. Maintain the existing table structure with | Quarter | Revenue | Status | header row.\",\"frame_relevant\":true}"
+        }
+       ],
+       "directive": {
+        "task": "insert",
+        "instruction": "Add a new row to the Revenue table in the Q3 row with value $1.45M Final. Keep the existing Q1, Q2, Q4 rows unchanged. Maintain the existing table structure with | Quarter | Revenue | Status | header row.",
+        "frame_relevant": true
+       },
+       "schemaErrors": [],
+       "semantic": {
+        "problems": [
+         "task mismatch: got \"insert\", expected \"edit\""
+        ],
+        "missing": [],
+        "extrasMet": true,
+        "frameRelevant": true
+       }
+      }
+     ],
+     "finalClass": "invalid",
+     "reason": "semantically inadequate (no repair for semantics): task mismatch: got \"insert\", expected \"edit\"",
+     "valid": false,
+     "wrongOutcome": false,
+     "directive": {
+      "task": "insert",
+      "instruction": "Add a new row to the Revenue table in the Q3 row with value $1.45M Final. Keep the existing Q1, Q2, Q4 rows unchanged. Maintain the existing table structure with | Quarter | Revenue | Status | header row.",
+      "frame_relevant": true
+     },
+     "history_appended": "assistant tool_call + tool result (execution failed)"
+    },
+    {
+     "turnId": "T06",
+     "text": "do the same for Q4 to $1.5M",
+     "expect": "delegate",
+     "expectedTask": "edit",
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 423,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "tool_calls",
+       "usage": {
+        "completion_tokens": 86,
+        "prompt_tokens": 1636,
+        "total_tokens": 1722,
+        "prompt_tokens_details": {
+         "cached_tokens": 992
+        }
+       },
+       "content": "",
+       "toolCalls": [
+        {
+         "name": "delegate_edit",
+         "arguments": "{\"task\":\"insert\",\"instruction\":\"Add a new row to the Revenue table in the Q4 row with value $1.5M. Keep the existing Q1, Q2, Q3 rows unchanged. Maintain the existing table structure with | Quarter | Revenue | Status | header row.\",\"frame_relevant\":true}"
+        }
+       ],
+       "directive": {
+        "task": "insert",
+        "instruction": "Add a new row to the Revenue table in the Q4 row with value $1.5M. Keep the existing Q1, Q2, Q3 rows unchanged. Maintain the existing table structure with | Quarter | Revenue | Status | header row.",
+        "frame_relevant": true
+       },
+       "schemaErrors": [],
+       "semantic": {
+        "problems": [
+         "task mismatch: got \"insert\", expected \"edit\""
+        ],
+        "missing": [],
+        "extrasMet": true,
+        "frameRelevant": true
+       }
+      }
+     ],
+     "finalClass": "invalid",
+     "reason": "semantically inadequate (no repair for semantics): task mismatch: got \"insert\", expected \"edit\"",
+     "valid": false,
+     "wrongOutcome": false,
+     "directive": {
+      "task": "insert",
+      "instruction": "Add a new row to the Revenue table in the Q4 row with value $1.5M. Keep the existing Q1, Q2, Q3 rows unchanged. Maintain the existing table structure with | Quarter | Revenue | Status | header row.",
+      "frame_relevant": true
+     },
+     "history_appended": "assistant tool_call + tool result (execution failed)"
+    },
+    {
+     "turnId": "T07",
+     "text": "summarize the note so far in two sentences",
+     "expect": "answer",
+     "expectedTask": null,
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 327,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 61,
+        "prompt_tokens": 1759,
+        "total_tokens": 1820,
+        "prompt_tokens_details": {
+         "cached_tokens": 1120
+        }
+       },
+       "content": "Revenue grew 18% quarter over quarter, led by self-serve expansion in the mid-market, with net revenue retention at 112% and gross margin improving 2.1 points. The Q3 revenue figure is pending final invoice reconciliation, and finance expects to close the gap this week.",
+       "isQuestion": false,
+       "actionLine": null,
+       "hygieneHits": []
+      }
+     ],
+     "finalClass": "valid_first_try",
+     "reason": null,
+     "valid": true,
+     "wrongOutcome": false,
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T08",
+     "text": "remove the bullet about Redis",
+     "expect": "delegate",
+     "expectedTask": "remove",
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 327,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "tool_calls",
+       "usage": {
+        "completion_tokens": 62,
+        "prompt_tokens": 1836,
+        "total_tokens": 1898,
+        "prompt_tokens_details": {
+         "cached_tokens": 1243
+        }
+       },
+       "content": "",
+       "toolCalls": [
+        {
+         "name": "delegate_edit",
+         "arguments": "{\"task\":\"remove\",\"instruction\":\"Remove the bullet point about Redis cache migration from the Product notes section. Keep the existing bullets about workspace permissions model and mobile capture beta.\",\"frame_relevant\":true}"
+        }
+       ],
+       "directive": {
+        "task": "remove",
+        "instruction": "Remove the bullet point about Redis cache migration from the Product notes section. Keep the existing bullets about workspace permissions model and mobile capture beta.",
+        "frame_relevant": true
+       },
+       "schemaErrors": [],
+       "semantic": {
+        "problems": [],
+        "missing": [],
+        "extrasMet": true,
+        "frameRelevant": true
+       }
+      }
+     ],
+     "finalClass": "valid_first_try",
+     "reason": null,
+     "valid": true,
+     "wrongOutcome": false,
+     "directive": {
+      "task": "remove",
+      "instruction": "Remove the bullet point about Redis cache migration from the Product notes section. Keep the existing bullets about workspace permissions model and mobile capture beta.",
+      "frame_relevant": true
+     },
+     "history_appended": "assistant tool_call + tool result (executed remove)"
+    },
+    {
+     "turnId": "T09",
+     "text": "undo that",
+     "expect": "action",
+     "expectedTask": null,
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 93,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 4,
+        "prompt_tokens": 1928,
+        "total_tokens": 1932,
+        "prompt_tokens_details": {
+         "cached_tokens": 1320
+        }
+       },
+       "content": "ACTION undo",
+       "isQuestion": false,
+       "actionLine": "undo",
+       "hygieneHits": []
+      }
+     ],
+     "finalClass": "valid_first_try",
+     "reason": null,
+     "valid": true,
+     "wrongOutcome": false,
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T10",
+     "text": "change the number",
+     "expect": "clarify",
+     "expectedTask": null,
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 373,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "tool_calls",
+       "usage": {
+        "completion_tokens": 75,
+        "prompt_tokens": 1946,
+        "total_tokens": 2021,
+        "prompt_tokens_details": {
+         "cached_tokens": 1412
+        }
+       },
+       "content": "",
+       "toolCalls": [
+        {
+         "name": "delegate_edit",
+         "arguments": "{\"task\":\"edit\",\"instruction\":\"Change the number in the Redis cache migration bullet from 'postponed to Q4' to 'postponed to Q3'. Keep the existing bullets about workspace permissions model and mobile capture beta.\",\"frame_relevant\":true}"
+        }
+       ],
+       "classification": "delegation-on-nondelegate-turn"
+      }
+     ],
+     "finalClass": "wrong_outcome",
+     "reason": "delegated a turn that expected \"clarify\"",
+     "valid": false,
+     "wrongOutcome": true,
+     "directive": {
+      "task": "edit",
+      "instruction": "Change the number in the Redis cache migration bullet from 'postponed to Q4' to 'postponed to Q3'. Keep the existing bullets about workspace permissions model and mobile capture beta.",
+      "frame_relevant": true
+     },
+     "history_appended": "assistant tool_call + tool result (execution failed)"
+    },
+    {
+     "turnId": "T11",
+     "text": "add a line under Security: rotate keys monthly",
+     "expect": "delegate",
+     "expectedTask": "insert",
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 390,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "tool_calls",
+       "usage": {
+        "completion_tokens": 77,
+        "prompt_tokens": 2059,
+        "total_tokens": 2136,
+        "prompt_tokens_details": {
+         "cached_tokens": 1430
+        }
+       },
+       "content": "",
+       "toolCalls": [
+        {
+         "name": "delegate_edit",
+         "arguments": "{\"task\":\"insert\",\"instruction\":\"Add a new line under the Security section with the text 'Rotate production API keys monthly.' Keep the existing Security bullets (rotate production API keys before 30 November, complete the SSO audit with IT) unchanged.\",\"frame_relevant\":true}"
+        }
+       ],
+       "directive": {
+        "task": "insert",
+        "instruction": "Add a new line under the Security section with the text 'Rotate production API keys monthly.' Keep the existing Security bullets (rotate production API keys before 30 November, complete the SSO audit with IT) unchanged.",
+        "frame_relevant": true
+       },
+       "schemaErrors": [],
+       "semantic": {
+        "problems": [
+         "instruction does not carry user-specified specifics (failed: /rotate\\s+keys\\s+monthly/i)"
+        ],
+        "missing": [
+         "/rotate\\s+keys\\s+monthly/i"
+        ],
+        "extrasMet": true,
+        "frameRelevant": true
+       }
+      }
+     ],
+     "finalClass": "invalid",
+     "reason": "semantically inadequate (no repair for semantics): instruction does not carry user-specified specifics (failed: /rotate\\s+keys\\s+monthly/i)",
+     "valid": false,
+     "wrongOutcome": false,
+     "directive": {
+      "task": "insert",
+      "instruction": "Add a new line under the Security section with the text 'Rotate production API keys monthly.' Keep the existing Security bullets (rotate production API keys before 30 November, complete the SSO audit with IT) unchanged.",
+      "frame_relevant": true
+     },
+     "history_appended": "assistant tool_call + tool result (execution failed)"
+    },
+    {
+     "turnId": "T12",
+     "text": "pull the LTV/CAC formula from the slide into Revenue",
+     "expect": "delegate",
+     "expectedTask": "extract",
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 756,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "tool_calls",
+       "usage": {
+        "completion_tokens": 155,
+        "prompt_tokens": 2516,
+        "total_tokens": 2671,
+        "prompt_tokens_details": {
+         "cached_tokens": 1543
+        }
+       },
+       "content": "",
+       "toolCalls": [
+        {
+         "name": "delegate_edit",
+         "arguments": "{\"task\":\"insert\",\"instruction\":\"Add a new row to the Revenue table in the North Star section with the text 'LTV / CAC = 3.4X' and 'TARGET >= 3.0X'. Keep the existing Revenue by Quarter rows (01 $0.92M CLOSED, 02 $1.08M CLOSED, 03 $1.20M PENDING, 04 $1.35M FORECAST) and the existing North Star box (LTV / CAC = 3.4X, TARGET >= 3.0X) unchanged.\",\"frame_relevant\":true}"
+        }
+       ],
+       "directive": {
+        "task": "insert",
+        "instruction": "Add a new row to the Revenue table in the North Star section with the text 'LTV / CAC = 3.4X' and 'TARGET >= 3.0X'. Keep the existing Revenue by Quarter rows (01 $0.92M CLOSED, 02 $1.08M CLOSED, 03 $1.20M PENDING, 04 $1.35M FORECAST) and the existing North Star box (LTV / CAC = 3.4X, TARGET >= 3.0X) unchanged.",
+        "frame_relevant": true
+       },
+       "schemaErrors": [],
+       "semantic": {
+        "problems": [
+         "task mismatch: got \"insert\", expected \"extract\""
+        ],
+        "missing": [],
+        "extrasMet": true,
+        "frameRelevant": true
+       }
+      }
+     ],
+     "finalClass": "invalid",
+     "reason": "semantically inadequate (no repair for semantics): task mismatch: got \"insert\", expected \"extract\"",
+     "valid": false,
+     "wrongOutcome": false,
+     "directive": {
+      "task": "insert",
+      "instruction": "Add a new row to the Revenue table in the North Star section with the text 'LTV / CAC = 3.4X' and 'TARGET >= 3.0X'. Keep the existing Revenue by Quarter rows (01 $0.92M CLOSED, 02 $1.08M CLOSED, 03 $1.20M PENDING, 04 $1.35M FORECAST) and the existing North Star box (LTV / CAC = 3.4X, TARGET >= 3.0X) unchanged.",
+      "frame_relevant": true
+     },
+     "history_appended": "assistant tool_call + tool result (execution failed)"
+    },
+    {
+     "turnId": "T13",
+     "text": "write a README template document to begin",
+     "expect": "delegate",
+     "expectedTask": "create",
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 1284,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "tool_calls",
+       "usage": {
+        "completion_tokens": 294,
+        "prompt_tokens": 2370,
+        "total_tokens": 2664,
+        "prompt_tokens_details": {
+         "cached_tokens": 1543
+        }
+       },
+       "content": "",
+       "toolCalls": [
+        {
+         "name": "delegate_edit",
+         "arguments": "{\"task\":\"create\",\"instruction\":\"Create a README template document with the following content:\\n# Q3 Operating Review – Revenue & Operating Efficiency\\n\\n## Overview\\nThis document provides a summary of the Q3 operating review, including revenue performance, product notes, risks, and follow-ups.\\n\\n## Revenue\\n- Q1: $0.92M (Closed)\\n- Q2: $1.08M (Closed)\\n- Q3: $1.20M (Pending)\\n- Q4: $1.35M (Forecast)\\n\\n## North Star\\n- LTV / CAC = 3.4X\\n- TARGET >= 3.0X\\n\\n## Product Notes\\n- Shipped the new workspace permissions model.\\n- Mobile capture beta reached 1,200 weekly users.\\n\\n## Risks\\n1. Enterprise pipeline concentration remains high.\\n2. Support volume is tracking 12% above plan.\\n3. Hiring depends on the revised Q4 plan.\\n\\n## Follow-ups\\n- Finance to confirm Q3 revenue by Friday.\\n- Dana to share the revised hiring model.\\n\\n## Security\\n- Rotate production API keys before 30 November.\\n- Complete the SSO audit with IT.\\n\\n## Next Steps\\n- Finance to confirm Q3 revenue by Friday.\\n- Dana to share the revised hiring model.\",\"frame_relevant\":true}"
+        }
+       ],
+       "directive": {
+        "task": "create",
+        "instruction": "Create a README template document with the following content:\n# Q3 Operating Review – Revenue & Operating Efficiency\n\n## Overview\nThis document provides a summary of the Q3 operating review, including revenue performance, product notes, risks, and follow-ups.\n\n## Revenue\n- Q1: $0.92M (Closed)\n- Q2: $1.08M (Closed)\n- Q3: $1.20M (Pending)\n- Q4: $1.35M (Forecast)\n\n## North Star\n- LTV / CAC = 3.4X\n- TARGET >= 3.0X\n\n## Product Notes\n- Shipped the new workspace permissions model.\n- Mobile capture beta reached 1,200 weekly users.\n\n## Risks\n1. Enterprise pipeline concentration remains high.\n2. Support volume is tracking 12% above plan.\n3. Hiring depends on the revised Q4 plan.\n\n## Follow-ups\n- Finance to confirm Q3 revenue by Friday.\n- Dana to share the revised hiring model.\n\n## Security\n- Rotate production API keys before 30 November.\n- Complete the SSO audit with IT.\n\n## Next Steps\n- Finance to confirm Q3 revenue by Friday.\n- Dana to share the revised hiring model.",
+        "frame_relevant": true
+       },
+       "schemaErrors": [],
+       "semantic": {
+        "problems": [],
+        "missing": [],
+        "extrasMet": true,
+        "frameRelevant": true
+       }
+      }
+     ],
+     "finalClass": "valid_first_try",
+     "reason": null,
+     "valid": true,
+     "wrongOutcome": false,
+     "directive": {
+      "task": "create",
+      "instruction": "Create a README template document with the following content:\n# Q3 Operating Review – Revenue & Operating Efficiency\n\n## Overview\nThis document provides a summary of the Q3 operating review, including revenue performance, product notes, risks, and follow-ups.\n\n## Revenue\n- Q1: $0.92M (Closed)\n- Q2: $1.08M (Closed)\n- Q3: $1.20M (Pending)\n- Q4: $1.35M (Forecast)\n\n## North Star\n- LTV / CAC = 3.4X\n- TARGET >= 3.0X\n\n## Product Notes\n- Shipped the new workspace permissions model.\n- Mobile capture beta reached 1,200 weekly users.\n\n## Risks\n1. Enterprise pipeline concentration remains high.\n2. Support volume is tracking 12% above plan.\n3. Hiring depends on the revised Q4 plan.\n\n## Follow-ups\n- Finance to confirm Q3 revenue by Friday.\n- Dana to share the revised hiring model.\n\n## Security\n- Rotate production API keys before 30 November.\n- Complete the SSO audit with IT.\n\n## Next Steps\n- Finance to confirm Q3 revenue by Friday.\n- Dana to share the revised hiring model.",
+      "frame_relevant": true
+     },
+     "history_appended": "assistant tool_call + tool result (executed create)"
+    },
+    {
+     "turnId": "T14",
+     "text": "rename the title to Q3 Review Final",
+     "expect": "delegate",
+     "expectedTask": "edit",
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 342,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "tool_calls",
+       "usage": {
+        "completion_tokens": 71,
+        "prompt_tokens": 2701,
+        "total_tokens": 2772,
+        "prompt_tokens_details": {
+         "cached_tokens": 2366
+        }
+       },
+       "content": "",
+       "toolCalls": [
+        {
+         "name": "delegate_edit",
+         "arguments": "{\"task\":\"edit\",\"instruction\":\"Rename the title of the README template document from 'Q3 Operating Review – Revenue & Operating Efficiency' to 'Q3 Review Final'. Keep the rest of the content unchanged.\",\"frame_relevant\":true}"
+        }
+       ],
+       "directive": {
+        "task": "edit",
+        "instruction": "Rename the title of the README template document from 'Q3 Operating Review – Revenue & Operating Efficiency' to 'Q3 Review Final'. Keep the rest of the content unchanged.",
+        "frame_relevant": true
+       },
+       "schemaErrors": [],
+       "semantic": {
+        "problems": [],
+        "missing": [],
+        "extrasMet": true,
+        "frameRelevant": true
+       }
+      }
+     ],
+     "finalClass": "valid_first_try",
+     "reason": null,
+     "valid": true,
+     "wrongOutcome": false,
+     "directive": {
+      "task": "edit",
+      "instruction": "Rename the title of the README template document from 'Q3 Operating Review – Revenue & Operating Efficiency' to 'Q3 Review Final'. Keep the rest of the content unchanged.",
+      "frame_relevant": true
+     },
+     "history_appended": "assistant tool_call + tool result (executed edit)"
+    },
+    {
+     "turnId": "T15",
+     "text": "make it better",
+     "expect": "clarify",
+     "expectedTask": null,
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 1369,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 323,
+        "prompt_tokens": 2803,
+        "total_tokens": 3126,
+        "prompt_tokens_details": {
+         "cached_tokens": 2366
+        }
+       },
+       "content": "Here's an improved version of the README template:\n\n# Q3 Review Final\n\n## Executive Summary\nRevenue grew 18% quarter over quarter, led by self-serve expansion in the mid-market. Net revenue retention held at 112%, while gross margin improved 2.1 points. The Q3 revenue figure is pending final invoice reconciliation, and finance expects to close the gap this week.\n\n## Revenue Performance\n| Quarter | Revenue | Status |\n| --- | --- | --- |\n| Q1 | $0.92M | Closed |\n| Q2 | $1.08M | Closed |\n| Q3 | $1.20M | Pending |\n| Q4 | $1.35M | Forecast |\n\n## North Star Metrics\n- LTV / CAC = 3.4X\n- TARGET >= 3.0X\n\n## Product Notes\n- Shipped the new workspace permissions model.\n- Mobile capture beta reached 1,200 weekly users.\n\n## Risks\n1. Enterprise pipeline concentration remains high.\n2. Support volume is tracking 12% above plan.\n3. Hiring depends on the revised Q4 plan.\n\n## Follow-ups\n- Finance to confirm Q3 revenue by Friday.\n- Dana to share the revised hiring model.\n\n## Security\n- Rotate production API keys before 30 November.\n- Complete the SSO audit with IT.\n\n## Next Steps\n- Finance to confirm Q3 revenue by Friday.\n- Dana to share the revised hiring model.\n\nLet me know if you'd like any further improvements!",
+       "isQuestion": false,
+       "actionLine": null,
+       "hygieneHits": []
+      }
+     ],
+     "finalClass": "invalid",
+     "reason": "clarify turn answered without a question: \"Here's an improved version of the README template:\n\n# Q3 Review Final\n\n## Executive Summary\nRevenue grew 18% quarter ove\"",
+     "valid": false,
+     "wrongOutcome": false,
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T16",
+     "text": "hey, could you add a bullet under Follow-ups saying send the deck to finance",
+     "expect": "delegate",
+     "expectedTask": "insert",
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 382,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "tool_calls",
+       "usage": {
+        "completion_tokens": 80,
+        "prompt_tokens": 3153,
+        "total_tokens": 3233,
+        "prompt_tokens_details": {
+         "cached_tokens": 2799
+        }
+       },
+       "content": "",
+       "toolCalls": [
+        {
+         "name": "delegate_edit",
+         "arguments": "{\"task\":\"insert\",\"instruction\":\"Add a new bullet under the Follow-ups section with the text 'Send the deck to finance.' Keep the existing Follow-ups bullets (Finance to confirm Q3 revenue by Friday, Dana to share the revised hiring model) unchanged.\",\"frame_relevant\":true}"
+        }
+       ],
+       "directive": {
+        "task": "insert",
+        "instruction": "Add a new bullet under the Follow-ups section with the text 'Send the deck to finance.' Keep the existing Follow-ups bullets (Finance to confirm Q3 revenue by Friday, Dana to share the revised hiring model) unchanged.",
+        "frame_relevant": true
+       },
+       "schemaErrors": [],
+       "semantic": {
+        "problems": [],
+        "missing": [],
+        "extrasMet": true,
+        "frameRelevant": true
+       }
+      }
+     ],
+     "finalClass": "valid_first_try",
+     "reason": null,
+     "valid": true,
+     "wrongOutcome": false,
+     "directive": {
+      "task": "insert",
+      "instruction": "Add a new bullet under the Follow-ups section with the text 'Send the deck to finance.' Keep the existing Follow-ups bullets (Finance to confirm Q3 revenue by Friday, Dana to share the revised hiring model) unchanged.",
+      "frame_relevant": true
+     },
+     "history_appended": "assistant tool_call + tool result (executed insert)"
+    },
+    {
+     "turnId": "T17",
+     "text": "um, please delete the bullet about API keys",
+     "expect": "delegate",
+     "expectedTask": "remove",
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 360,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "tool_calls",
+       "usage": {
+        "completion_tokens": 72,
+        "prompt_tokens": 3270,
+        "total_tokens": 3342,
+        "prompt_tokens_details": {
+         "cached_tokens": 2799
+        }
+       },
+       "content": "",
+       "toolCalls": [
+        {
+         "name": "delegate_edit",
+         "arguments": "{\"task\":\"remove\",\"instruction\":\"Remove the bullet about rotating production API keys from the Security section. Keep the existing Security bullets (Rotate production API keys before 30 November, Complete the SSO audit with IT) unchanged.\",\"frame_relevant\":true}"
+        }
+       ],
+       "directive": {
+        "task": "remove",
+        "instruction": "Remove the bullet about rotating production API keys from the Security section. Keep the existing Security bullets (Rotate production API keys before 30 November, Complete the SSO audit with IT) unchanged.",
+        "frame_relevant": true
+       },
+       "schemaErrors": [],
+       "semantic": {
+        "problems": [],
+        "missing": [],
+        "extrasMet": true,
+        "frameRelevant": true
+       }
+      }
+     ],
+     "finalClass": "valid_first_try",
+     "reason": null,
+     "valid": true,
+     "wrongOutcome": false,
+     "directive": {
+      "task": "remove",
+      "instruction": "Remove the bullet about rotating production API keys from the Security section. Keep the existing Security bullets (Rotate production API keys before 30 November, Complete the SSO audit with IT) unchanged.",
+      "frame_relevant": true
+     },
+     "history_appended": "assistant tool_call + tool result (executed remove)"
+    },
+    {
+     "turnId": "T18",
+     "text": "create a changelog template in this document",
+     "expect": "delegate",
+     "expectedTask": "create",
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 687,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "tool_calls",
+       "usage": {
+        "completion_tokens": 151,
+        "prompt_tokens": 3379,
+        "total_tokens": 3530,
+        "prompt_tokens_details": {
+         "cached_tokens": 2799
+        }
+       },
+       "content": "",
+       "toolCalls": [
+        {
+         "name": "delegate_edit",
+         "arguments": "{\"task\":\"create\",\"instruction\":\"Create a changelog template section in the document with the following content:\\n## Changelog\\n\\n| Version | Date | Description |\\n| --- | --- | --- |\\n| 1.0 | 14 November | Initial Q3 Operating Review – Revenue & Operating Efficiency template |\\n| 1.1 | 14 November | Added Q3 revenue $1.45M Final, Q4 revenue $1.5M, LTV/CAC = 3.4X, removed Redis cache migration bullet, added rotate API keys monthly bullet, added send deck to finance bullet |\",\"frame_relevant\":true}"
+        }
+       ],
+       "directive": {
+        "task": "create",
+        "instruction": "Create a changelog template section in the document with the following content:\n## Changelog\n\n| Version | Date | Description |\n| --- | --- | --- |\n| 1.0 | 14 November | Initial Q3 Operating Review – Revenue & Operating Efficiency template |\n| 1.1 | 14 November | Added Q3 revenue $1.45M Final, Q4 revenue $1.5M, LTV/CAC = 3.4X, removed Redis cache migration bullet, added rotate API keys monthly bullet, added send deck to finance bullet |",
+        "frame_relevant": true
+       },
+       "schemaErrors": [],
+       "semantic": {
+        "problems": [],
+        "missing": [],
+        "extrasMet": true,
+        "frameRelevant": true
+       }
+      }
+     ],
+     "finalClass": "valid_first_try",
+     "reason": null,
+     "valid": true,
+     "wrongOutcome": false,
+     "directive": {
+      "task": "create",
+      "instruction": "Create a changelog template section in the document with the following content:\n## Changelog\n\n| Version | Date | Description |\n| --- | --- | --- |\n| 1.0 | 14 November | Initial Q3 Operating Review – Revenue & Operating Efficiency template |\n| 1.1 | 14 November | Added Q3 revenue $1.45M Final, Q4 revenue $1.5M, LTV/CAC = 3.4X, removed Redis cache migration bullet, added rotate API keys monthly bullet, added send deck to finance bullet |",
+      "frame_relevant": true
+     },
+     "history_appended": "assistant tool_call + tool result (executed create)"
+    },
+    {
+     "turnId": "T19",
+     "text": "what happens if I remove the Q3 row?",
+     "expect": "answer",
+     "expectedTask": null,
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 601,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 127,
+        "prompt_tokens": 3568,
+        "total_tokens": 3695,
+        "prompt_tokens_details": {
+         "cached_tokens": 2863
+        }
+       },
+       "content": "If you remove the Q3 row, the Revenue table would lose its Q3 entry. The table would then show:\n\n| Quarter | Revenue | Status |\n| --- | --- | --- |\n| Q1 | $0.92M | Closed |\n| Q2 | $1.08M | Closed |\n| Q4 | $1.35M | Forecast |\n\nThe North Star metrics (LTV / CAC = 3.4X, TARGET >= 3.0X) and the Product notes would remain in place, but the Q3 revenue figure would no longer appear in the table.",
+       "isQuestion": false,
+       "actionLine": null,
+       "hygieneHits": []
+      }
+     ],
+     "finalClass": "valid_first_try",
+     "reason": null,
+     "valid": true,
+     "wrongOutcome": false,
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T20",
+     "text": "delete the Q1 row from the revenue table",
+     "expect": "delegate",
+     "expectedTask": "remove",
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 391,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "tool_calls",
+       "usage": {
+        "completion_tokens": 75,
+        "prompt_tokens": 3715,
+        "total_tokens": 3790,
+        "prompt_tokens_details": {
+         "cached_tokens": 3052
+        }
+       },
+       "content": "",
+       "toolCalls": [
+        {
+         "name": "delegate_edit",
+         "arguments": "{\"task\":\"edit\",\"instruction\":\"Remove the Q1 row from the Revenue table. Keep the existing Q2, Q3, and Q4 rows. Maintain the existing table structure with | Quarter | Revenue | Status | header row.\",\"frame_relevant\":true}"
+        }
+       ],
+       "directive": {
+        "task": "edit",
+        "instruction": "Remove the Q1 row from the Revenue table. Keep the existing Q2, Q3, and Q4 rows. Maintain the existing table structure with | Quarter | Revenue | Status | header row.",
+        "frame_relevant": true
+       },
+       "schemaErrors": [],
+       "semantic": {
+        "problems": [
+         "task mismatch: got \"edit\", expected \"remove\""
+        ],
+        "missing": [],
+        "extrasMet": true,
+        "frameRelevant": true
+       }
+      }
+     ],
+     "finalClass": "invalid",
+     "reason": "semantically inadequate (no repair for semantics): task mismatch: got \"edit\", expected \"remove\"",
+     "valid": false,
+     "wrongOutcome": false,
+     "directive": {
+      "task": "edit",
+      "instruction": "Remove the Q1 row from the Revenue table. Keep the existing Q2, Q3, and Q4 rows. Maintain the existing table structure with | Quarter | Revenue | Status | header row.",
+      "frame_relevant": true
+     },
+     "history_appended": "assistant tool_call + tool result (execution failed)"
+    }
+   ]
+  },
+  "delimited-block": {
+   "system_prompt": "You are Omni, the interface model of a note-editing app. The user talks to you; you can see the current note below and, when an image is attached to a user turn, the visual frame (what the user calls \"the slide\", \"the chart\" or \"the screen\").\n\nCurrent note (markdown):\n<note>\n# Q3 Business Review\n\nPrepared for the operating review on 14 November. Figures are provisional until finance sign-off. The narrative below focuses on revenue quality, product execution, and the decisions needed before the board meeting.\n\n## 1. Executive summary\n\nRevenue grew 18% quarter over quarter, led by self-serve expansion in the mid-market. Net revenue retention held at 112%, while gross margin improved 2.1 points.\n\n> Decision needed: approve the Q4 hiring plan before the next board meeting.\n\n## 2. Revenue\n\n| Quarter | Revenue | Status |\n| --- | --- | --- |\n| Q1 | $0.92M | Closed |\n| Q2 | $1.08M | Closed |\n| Q3 | $1.2M | Pending |\n| Q4 | $1.35M | Forecast |\n\nThe Q3 figure is waiting on the final enterprise invoice reconciliation. Finance expects to close the gap this week.\n\n## 3. Product notes\n\n- Shipped the new workspace permissions model.\n- Redis cache migration was postponed to Q4.\n- Mobile capture beta reached 1,200 weekly users.\n\n## 4. Risks\n\n1. Enterprise pipeline concentration remains high.\n2. Support volume is tracking 12% above plan.\n3. Hiring depends on the revised Q4 plan.\n\n## 5. Follow-ups\n\n- Finance to confirm Q3 revenue by Friday.\n- Dana to share the revised hiring model.\n\n## 6. Security\n\n- Rotate production API keys before 30 November.\n- Complete the SSO audit with IT.\n\n</note>\n\nOn every user turn, do exactly one of three things:\n\n1. ANSWER - reply in plain conversational text: greetings, questions, chat, statements about the user, hypotheticals — anything that does not require changing the note. You never author note content yourself, not even as a draft in chat: content in the note is written only by a worker model, and the only way to reach it is the delegation mechanism below.\n\n2. DELEGATE - when the user wants content added, changed, created, removed, or extracted in the note, emit ONE directive (mechanism below). Even when the user says \"write\" or \"create\", the mechanism is always delegation — you never produce the content yourself. The directive is a brief for a worker model that never sees this conversation:\n   - task: create | insert | edit | remove | extract\n   - instruction: pack in EVERYTHING the user specified about the content (sections named, values given, exact wording dictated, tone asked for) and resolve references like \"the same for Q4\" or \"that bullet\" from the conversation. A brief, not the content itself.\n   - target: optional object {\"description\": where the change belongs, \"heading\": section heading or null}\n   - verbatim: exact dictated text only when the user dictated exact words to appear in the note, otherwise null\n   - constraints: optional array of requirements, e.g. [\"markdown\", \"keep the existing content intact\"]\n   - frame_relevant: true only when the task depends on the attached visual frame\n\n3. ACTION - if the user asks to undo or redo the last change, reply with exactly \"ACTION undo\" or \"ACTION redo\" and nothing else. These are harness actions: never delegate them as a task, never claim you performed them yourself.\n\nIf the user's request would change the note but is too ambiguous to form a responsible directive, ANSWER with a single short clarifying question instead of delegating a guess.\n\nDELEGATE mechanism: emit exactly one directive block in your reply, delimited exactly like this, containing valid JSON only (no markdown fences, no comments):\n<<<DIRECTIVE\n{\"task\": \"edit\", \"instruction\": \"...\", \"target\": {\"description\": \"...\", \"heading\": null}, \"verbatim\": null, \"constraints\": [\"...\"], \"frame_relevant\": false}\n>>>\nApart from that block, add at most one short sentence and nothing else.",
+   "summary": {
+    "turns": 20,
+    "valid_first_try": 8,
+    "valid_after_repair": 0,
+    "valid_total": 8,
+    "invalid": 7,
+    "wrong_outcome": 5,
+    "error": 0,
+    "wrong_outcome_ids": [
+     "T10",
+     "T13",
+     "T14",
+     "T18",
+     "T19"
+    ],
+    "invalid_ids": [
+     "T08",
+     "T11",
+     "T12",
+     "T15",
+     "T16",
+     "T17",
+     "T20"
+    ],
+    "error_ids": [],
+    "destructive_wrong_outcome_count": 1,
+    "destructive_wrong_outcome_ids": [
+     "T14"
+    ],
+    "pass_bar": {
+     "rule": ">=18/20 valid after <=1 repair AND zero wrong-outcome on remove/edit turns",
+     "valid_ok": false,
+     "destructive_ok": false,
+     "met": false
+    },
+    "latency": {
+     "requests": 20,
+     "mean_ms": 694,
+     "median_ms": 619,
+     "p95_ms": 1766
+    },
+    "wall_ms": 18914
+   },
+   "turns": [
+    {
+     "turnId": "T01",
+     "text": "hey",
+     "expect": "answer",
+     "expectedTask": null,
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 96,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 11,
+        "prompt_tokens": 942,
+        "total_tokens": 953,
+        "prompt_tokens_details": {
+         "cached_tokens": 684
+        }
+       },
+       "content": "What would you like to do with the note?",
+       "isQuestion": true,
+       "actionLine": null,
+       "hygieneHits": []
+      }
+     ],
+     "finalClass": "valid_first_try",
+     "reason": null,
+     "valid": true,
+     "wrongOutcome": false,
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T02",
+     "text": "what can you see?",
+     "expect": "answer",
+     "expectedTask": null,
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 905,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 201,
+        "prompt_tokens": 1307,
+        "total_tokens": 1508,
+        "prompt_tokens_details": {
+         "cached_tokens": 684
+        }
+       },
+       "content": "I can see a screenshot of a finance operating review dashboard titled \"Q3 Operating Review – Revenue & Operating Efficiency\" (Confidential, dated 14 November). It includes:\n\n- **Revenue by Quarter** table: Q1 $0.92M (Closed), Q2 $1.08M (Closed), Q3 $1.20M (Pending), Q4 $1.35M (Forecast).\n- **North Star** box: LTV / CAC = 3.4X, Target >= 3.0X.\n- **Trajectory** bar chart: Q1 $0.92M, Q2 $1.08M, Q3 $1.20M, Q4 $1.35M.\n- A yellow \"FINANCE NOTE\" box: \"FINAL INVOICE – RECON STILL PENDING.\"\n- Footer: \"LFM – Operating Review\".\n\nThe Q3 figure is pending final invoice reconciliation.",
+       "isQuestion": false,
+       "actionLine": null,
+       "hygieneHits": []
+      }
+     ],
+     "finalClass": "valid_first_try",
+     "reason": null,
+     "valid": true,
+     "wrongOutcome": false,
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T03",
+     "text": "remember that my favorite color is teal",
+     "expect": "answer",
+     "expectedTask": null,
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 150,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 23,
+        "prompt_tokens": 1190,
+        "total_tokens": 1213,
+        "prompt_tokens_details": {
+         "cached_tokens": 684
+        }
+       },
+       "content": "Got it, teal is your favorite color. I'll keep that in mind for any future interactions.",
+       "isQuestion": false,
+       "actionLine": null,
+       "hygieneHits": []
+      }
+     ],
+     "finalClass": "valid_first_try",
+     "reason": null,
+     "valid": true,
+     "wrongOutcome": false,
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T04",
+     "text": "what is my favorite color?",
+     "expect": "answer",
+     "expectedTask": null,
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 99,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 8,
+        "prompt_tokens": 1230,
+        "total_tokens": 1238,
+        "prompt_tokens_details": {
+         "cached_tokens": 684
+        }
+       },
+       "content": "Your favorite color is teal.",
+       "isQuestion": false,
+       "actionLine": null,
+       "hygieneHits": []
+      }
+     ],
+     "finalClass": "valid_first_try",
+     "reason": null,
+     "valid": true,
+     "wrongOutcome": false,
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T05",
+     "text": "update the Q3 revenue row to $1.45M Final",
+     "expect": "delegate",
+     "expectedTask": "edit",
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 619,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 137,
+        "prompt_tokens": 1262,
+        "total_tokens": 1399,
+        "prompt_tokens_details": {
+         "cached_tokens": 714
+        }
+       },
+       "content": "<<<DIRECTIVE\n{\"task\": \"edit\", \"instruction\": \"Update the Q3 revenue row in the Revenue table to $1.45M Final. Keep the existing table structure and header. Do not modify any other rows.\", \"target\": {\"description\": \"Revenue table, Q3 row\", \"heading\": \"Q3\"}, \"verbatim\": null, \"constraints\": [\"Update Q3 revenue to $1.45M Final\", \"Keep existing table structure and header\", \"Do not modify other rows\"], \"frame_relevant\": true}\n>>>\nThe Q3 revenue row should now read $1.45M Final.",
+       "directive": {
+        "task": "edit",
+        "instruction": "Update the Q3 revenue row in the Revenue table to $1.45M Final. Keep the existing table structure and header. Do not modify any other rows.",
+        "target": {
+         "description": "Revenue table, Q3 row",
+         "heading": "Q3"
+        },
+        "verbatim": null,
+        "constraints": [
+         "Update Q3 revenue to $1.45M Final",
+         "Keep existing table structure and header",
+         "Do not modify other rows"
+        ],
+        "frame_relevant": true
+       },
+       "schemaErrors": [],
+       "semantic": {
+        "problems": [],
+        "missing": [],
+        "extrasMet": true,
+        "frameRelevant": true
+       }
+      }
+     ],
+     "finalClass": "valid_first_try",
+     "reason": null,
+     "valid": true,
+     "wrongOutcome": false,
+     "directive": {
+      "task": "edit",
+      "instruction": "Update the Q3 revenue row in the Revenue table to $1.45M Final. Keep the existing table structure and header. Do not modify any other rows.",
+      "target": {
+       "description": "Revenue table, Q3 row",
+       "heading": "Q3"
+      },
+      "verbatim": null,
+      "constraints": [
+       "Update Q3 revenue to $1.45M Final",
+       "Keep existing table structure and header",
+       "Do not modify other rows"
+      ],
+      "frame_relevant": true
+     },
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T06",
+     "text": "do the same for Q4 to $1.5M",
+     "expect": "delegate",
+     "expectedTask": "edit",
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 612,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 134,
+        "prompt_tokens": 1422,
+        "total_tokens": 1556,
+        "prompt_tokens_details": {
+         "cached_tokens": 746
+        }
+       },
+       "content": "<<<DIRECTIVE\n{\"task\": \"edit\", \"instruction\": \"Update the Q4 revenue row in the Revenue table to $1.5M. Keep the existing table structure and header. Do not modify any other rows.\", \"target\": {\"description\": \"Revenue table, Q4 row\", \"heading\": \"Q4\"}, \"verbatim\": null, \"constraints\": [\"Update Q4 revenue to $1.5M\", \"Keep existing table structure and header\", \"Do not modify other rows\"], \"frame_relevant\": true}\n>>>\nThe Q4 revenue row should now read $1.5M.",
+       "directive": {
+        "task": "edit",
+        "instruction": "Update the Q4 revenue row in the Revenue table to $1.5M. Keep the existing table structure and header. Do not modify any other rows.",
+        "target": {
+         "description": "Revenue table, Q4 row",
+         "heading": "Q4"
+        },
+        "verbatim": null,
+        "constraints": [
+         "Update Q4 revenue to $1.5M",
+         "Keep existing table structure and header",
+         "Do not modify other rows"
+        ],
+        "frame_relevant": true
+       },
+       "schemaErrors": [],
+       "semantic": {
+        "problems": [],
+        "missing": [],
+        "extrasMet": true,
+        "frameRelevant": true
+       }
+      }
+     ],
+     "finalClass": "valid_first_try",
+     "reason": null,
+     "valid": true,
+     "wrongOutcome": false,
+     "directive": {
+      "task": "edit",
+      "instruction": "Update the Q4 revenue row in the Revenue table to $1.5M. Keep the existing table structure and header. Do not modify any other rows.",
+      "target": {
+       "description": "Revenue table, Q4 row",
+       "heading": "Q4"
+      },
+      "verbatim": null,
+      "constraints": [
+       "Update Q4 revenue to $1.5M",
+       "Keep existing table structure and header",
+       "Do not modify other rows"
+      ],
+      "frame_relevant": true
+     },
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T07",
+     "text": "summarize the note so far in two sentences",
+     "expect": "answer",
+     "expectedTask": null,
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 327,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 62,
+        "prompt_tokens": 1575,
+        "total_tokens": 1637,
+        "prompt_tokens_details": {
+         "cached_tokens": 906
+        }
+       },
+       "content": "Revenue grew 18% quarter over quarter, led by self-serve expansion in the mid-market, with net revenue retention at 112% and gross margin improving 2.1 points. The Q3 revenue figure is pending final enterprise invoice reconciliation, with finance expecting to close the gap this week.",
+       "isQuestion": false,
+       "actionLine": null,
+       "hygieneHits": []
+      }
+     ],
+     "finalClass": "valid_first_try",
+     "reason": null,
+     "valid": true,
+     "wrongOutcome": false,
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T08",
+     "text": "remove the bullet about Redis",
+     "expect": "delegate",
+     "expectedTask": "remove",
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 542,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 117,
+        "prompt_tokens": 1653,
+        "total_tokens": 1770,
+        "prompt_tokens_details": {
+         "cached_tokens": 1059
+        }
+       },
+       "content": "<<<DIRECTIVE\n{\"task\": \"edit\", \"instruction\": \"Remove the bullet point about Redis cache migration postponed to Q4 from the Product notes section. Keep the rest of the note unchanged.\", \"target\": {\"description\": \"Product notes section, Redis cache migration bullet\", \"heading\": \"Product notes\"}, \"verbatim\": null, \"constraints\": [\"Remove Redis cache migration bullet\", \"Keep rest of note unchanged\"], \"frame_relevant\": true}\n>>>\nThe Redis cache migration bullet has been removed from the Product notes section.",
+       "directive": {
+        "task": "edit",
+        "instruction": "Remove the bullet point about Redis cache migration postponed to Q4 from the Product notes section. Keep the rest of the note unchanged.",
+        "target": {
+         "description": "Product notes section, Redis cache migration bullet",
+         "heading": "Product notes"
+        },
+        "verbatim": null,
+        "constraints": [
+         "Remove Redis cache migration bullet",
+         "Keep rest of note unchanged"
+        ],
+        "frame_relevant": true
+       },
+       "schemaErrors": [],
+       "semantic": {
+        "problems": [
+         "task mismatch: got \"edit\", expected \"remove\""
+        ],
+        "missing": [],
+        "extrasMet": true,
+        "frameRelevant": true
+       }
+      }
+     ],
+     "finalClass": "invalid",
+     "reason": "semantically inadequate (no repair for semantics): task mismatch: got \"edit\", expected \"remove\"",
+     "valid": false,
+     "wrongOutcome": false,
+     "directive": {
+      "task": "edit",
+      "instruction": "Remove the bullet point about Redis cache migration postponed to Q4 from the Product notes section. Keep the rest of the note unchanged.",
+      "target": {
+       "description": "Product notes section, Redis cache migration bullet",
+       "heading": "Product notes"
+      },
+      "verbatim": null,
+      "constraints": [
+       "Remove Redis cache migration bullet",
+       "Keep rest of note unchanged"
+      ],
+      "frame_relevant": true
+     },
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T09",
+     "text": "undo that",
+     "expect": "action",
+     "expectedTask": null,
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 94,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 4,
+        "prompt_tokens": 1783,
+        "total_tokens": 1787,
+        "prompt_tokens_details": {
+         "cached_tokens": 1137
+        }
+       },
+       "content": "ACTION undo",
+       "isQuestion": false,
+       "actionLine": "undo",
+       "hygieneHits": []
+      }
+     ],
+     "finalClass": "valid_first_try",
+     "reason": null,
+     "valid": true,
+     "wrongOutcome": false,
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T10",
+     "text": "change the number",
+     "expect": "clarify",
+     "expectedTask": null,
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 635,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 141,
+        "prompt_tokens": 1801,
+        "total_tokens": 1942,
+        "prompt_tokens_details": {
+         "cached_tokens": 1267
+        }
+       },
+       "content": "<<<DIRECTIVE\n{\"task\": \"edit\", \"instruction\": \"Change the number in the Redis cache migration bullet from 'postponed' to 'completed' in the Product notes section. Keep the rest of the note unchanged.\", \"target\": {\"description\": \"Product notes section, Redis cache migration bullet\", \"heading\": \"Product notes\"}, \"verbatim\": null, \"constraints\": [\"Change Redis cache migration bullet number from 'postponed' to 'completed'\", \"Keep rest of note unchanged\"], \"frame_relevant\": true}\n>>>\nThe Redis cache migration bullet has been updated to 'completed' in the Product notes section.",
+       "classification": "delegation-on-nondelegate-turn"
+      }
+     ],
+     "finalClass": "wrong_outcome",
+     "reason": "delegated a turn that expected \"clarify\"",
+     "valid": false,
+     "wrongOutcome": true,
+     "directive": {
+      "task": "edit",
+      "instruction": "Change the number in the Redis cache migration bullet from 'postponed' to 'completed' in the Product notes section. Keep the rest of the note unchanged.",
+      "target": {
+       "description": "Product notes section, Redis cache migration bullet",
+       "heading": "Product notes"
+      },
+      "verbatim": null,
+      "constraints": [
+       "Change Redis cache migration bullet number from 'postponed' to 'completed'",
+       "Keep rest of note unchanged"
+      ],
+      "frame_relevant": true
+     },
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T11",
+     "text": "add a line under Security: rotate keys monthly",
+     "expect": "delegate",
+     "expectedTask": "insert",
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 610,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 131,
+        "prompt_tokens": 1962,
+        "total_tokens": 2093,
+        "prompt_tokens_details": {
+         "cached_tokens": 1285
+        }
+       },
+       "content": "<<<DIRECTIVE\n{\"task\": \"edit\", \"instruction\": \"Add a new line under the Security section stating 'Rotate production API keys monthly' in plain text. Keep the existing Security bullet and header intact.\", \"target\": {\"description\": \"Security section, under Security heading\", \"heading\": \"Security\"}, \"verbatim\": null, \"constraints\": [\"Add line under Security: rotate keys monthly\", \"Keep existing Security bullet and header\", \"Keep plain text format\"], \"frame_relevant\": true}\n>>>\nA new line stating 'Rotate production API keys monthly' has been added under the Security section.",
+       "directive": {
+        "task": "edit",
+        "instruction": "Add a new line under the Security section stating 'Rotate production API keys monthly' in plain text. Keep the existing Security bullet and header intact.",
+        "target": {
+         "description": "Security section, under Security heading",
+         "heading": "Security"
+        },
+        "verbatim": null,
+        "constraints": [
+         "Add line under Security: rotate keys monthly",
+         "Keep existing Security bullet and header",
+         "Keep plain text format"
+        ],
+        "frame_relevant": true
+       },
+       "schemaErrors": [],
+       "semantic": {
+        "problems": [
+         "task mismatch: got \"edit\", expected \"insert\""
+        ],
+        "missing": [],
+        "extrasMet": true,
+        "frameRelevant": true
+       }
+      }
+     ],
+     "finalClass": "invalid",
+     "reason": "semantically inadequate (no repair for semantics): task mismatch: got \"edit\", expected \"insert\"",
+     "valid": false,
+     "wrongOutcome": false,
+     "directive": {
+      "task": "edit",
+      "instruction": "Add a new line under the Security section stating 'Rotate production API keys monthly' in plain text. Keep the existing Security bullet and header intact.",
+      "target": {
+       "description": "Security section, under Security heading",
+       "heading": "Security"
+      },
+      "verbatim": null,
+      "constraints": [
+       "Add line under Security: rotate keys monthly",
+       "Keep existing Security bullet and header",
+       "Keep plain text format"
+      ],
+      "frame_relevant": true
+     },
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T12",
+     "text": "pull the LTV/CAC formula from the slide into Revenue",
+     "expect": "delegate",
+     "expectedTask": "extract",
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 953,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 203,
+        "prompt_tokens": 2455,
+        "total_tokens": 2658,
+        "prompt_tokens_details": {
+         "cached_tokens": 1446
+        }
+       },
+       "content": "<<<DIRECTIVE\n{\"task\": \"edit\", \"instruction\": \"Add the LTV/CAC formula 'LTV / CAC = 3.4X' as a new row in the Revenue table under the 'Revenue by Quarter' section. Keep the existing table structure and header. Do not modify any other rows.\", \"target\": {\"description\": \"Revenue table, Revenue by Quarter section, add LTV/CAC formula row\", \"heading\": \"Revenue by Quarter\"}, \"verbatim\": null, \"constraints\": [\"Add LTV / CAC = 3.4X as new row\", \"Keep existing table structure and header\", \"Do not modify other rows\"], \"frame_relevant\": true}\n>>>\nA new row has been added to the Revenue table under 'Revenue by Quarter' showing 'LTV / CAC = 3.4X' with 'TARGET >== 3.0X' in green.",
+       "directive": {
+        "task": "edit",
+        "instruction": "Add the LTV/CAC formula 'LTV / CAC = 3.4X' as a new row in the Revenue table under the 'Revenue by Quarter' section. Keep the existing table structure and header. Do not modify any other rows.",
+        "target": {
+         "description": "Revenue table, Revenue by Quarter section, add LTV/CAC formula row",
+         "heading": "Revenue by Quarter"
+        },
+        "verbatim": null,
+        "constraints": [
+         "Add LTV / CAC = 3.4X as new row",
+         "Keep existing table structure and header",
+         "Do not modify other rows"
+        ],
+        "frame_relevant": true
+       },
+       "schemaErrors": [],
+       "semantic": {
+        "problems": [
+         "task mismatch: got \"edit\", expected \"extract\""
+        ],
+        "missing": [],
+        "extrasMet": true,
+        "frameRelevant": true
+       }
+      }
+     ],
+     "finalClass": "invalid",
+     "reason": "semantically inadequate (no repair for semantics): task mismatch: got \"edit\", expected \"extract\"",
+     "valid": false,
+     "wrongOutcome": false,
+     "directive": {
+      "task": "edit",
+      "instruction": "Add the LTV/CAC formula 'LTV / CAC = 3.4X' as a new row in the Revenue table under the 'Revenue by Quarter' section. Keep the existing table structure and header. Do not modify any other rows.",
+      "target": {
+       "description": "Revenue table, Revenue by Quarter section, add LTV/CAC formula row",
+       "heading": "Revenue by Quarter"
+      },
+      "verbatim": null,
+      "constraints": [
+       "Add LTV / CAC = 3.4X as new row",
+       "Keep existing table structure and header",
+       "Do not modify other rows"
+      ],
+      "frame_relevant": true
+     },
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T13",
+     "text": "write a README template document to begin",
+     "expect": "delegate",
+     "expectedTask": "create",
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 1747,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 411,
+        "prompt_tokens": 2339,
+        "total_tokens": 2750,
+        "prompt_tokens_details": {
+         "cached_tokens": 1446
+        }
+       },
+       "content": "<<<README TEMPLATE\n\n# [Project Name]\n\n## Table of Contents\n\n- [1. Introduction]\n- [2. Features]\n- [3. Usage]\n- [4. Configuration]\n- [5. Troubleshooting]\n- [6. License]\n\n## Project Overview\n\nThis document outlines the key aspects of the [Project Name]. It provides an overview of the project's purpose, core features, usage instructions, configuration details, and troubleshooting guidance.\n\n## Features\n\n- [Feature 1]\n- [Feature 2]\n- [Feature 3]\n\n## Usage\n\n### Installation\n\n1. [Installation steps]\n2. [Configuration steps]\n\n### Basic Usage\n\n- [Example command or operation]\n- [Expected output or result]\n\n### Advanced Usage\n\n- [Example command or operation]\n- [Expected output or result]\n\n## Configuration\n\n### Environment Variables\n\n- [Variable name]\n- [Default value]\n\n### API Endpoints\n\n- [Endpoint 1]\n- [Endpoint 2]\n\n### Database Settings\n\n- [Database name]\n- [Connection string]\n\n## Troubleshooting\n\n### Common Issues\n\n- [Issue 1]\n- [Issue 2]\n\n### Solutions\n\n- [Solution 1]\n- [Solution 2]\n\n## License\n\nThis project is licensed under [License Name] (see LICENSE file for details).\n\n## Contributing\n\nContributions are welcome! Please follow the [Contribution guidelines] section.\n\n## Contact\n\nFor questions or feedback, please contact [Contact Name] at [Contact Email].\n\n## Version History\n\n| Version | Date | Description |\n|---------|------|-------------|\n| 1.0.0   | 2025-01-15 | Initial release |\n\n## Backward Compatibility\n\nThis version maintains backward compatibility with previous versions. No breaking changes are introduced.\n\n## Support\n\nFor support, visit the [Support page] or reach out to the [Support email].\n\n---\n\n*Generated by the assistant on 2025-01-15.*\n",
+       "isQuestion": false,
+       "actionLine": null,
+       "hygieneHits": []
+      }
+     ],
+     "finalClass": "wrong_outcome",
+     "reason": "answered/chatted on an edit turn (no directive emitted): \"<<<README TEMPLATE\n\n# [Project Name]\n\n## Table of Contents\n\n- [1. Introduction]\n- [2. Features]\n- [3. Usage]\n- [4. Confi\"",
+     "valid": false,
+     "wrongOutcome": true,
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T14",
+     "text": "rename the title to Q3 Review Final",
+     "expect": "delegate",
+     "expectedTask": "edit",
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 1721,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 412,
+        "prompt_tokens": 2770,
+        "total_tokens": 3182,
+        "prompt_tokens_details": {
+         "cached_tokens": 2335
+        }
+       },
+       "content": "<<<README TEMPLATE\n\n# Q3 Review Final\n\n## Table of Contents\n\n- [1. Introduction]\n- [2. Features]\n- [3. Usage]\n- [4. Configuration]\n- [5. Troubleshooting]\n- [6. License]\n\n## Project Overview\n\nThis document outlines the key aspects of the [Project Name]. It provides an overview of the project's purpose, core features, usage instructions, configuration details, and troubleshooting guidance.\n\n## Features\n\n- [Feature 1]\n- [Feature 2]\n- [Feature 3]\n\n## Usage\n\n### Installation\n\n1. [Installation steps]\n2. [Configuration steps]\n\n### Basic Usage\n\n- [Example command or operation]\n- [Expected output or result]\n\n### Advanced Usage\n\n- [Example command or operation]\n- [Expected output or result]\n\n## Configuration\n\n### Environment Variables\n\n- [Variable name]\n- [Default value]\n\n### API Endpoints\n\n- [Endpoint 1]\n- [Endpoint 2]\n\n### Database Settings\n\n- [Database name]\n- [Connection string]\n\n## Troubleshooting\n\n### Common Issues\n\n- [Issue 1]\n- [Issue 2]\n\n### Solutions\n\n- [Solution 1]\n- [Solution 2]\n\n## License\n\nThis project is licensed under [License Name] (see LICENSE file for details).\n\n## Contributing\n\nContributions are welcome! Please follow the [Contribution guidelines] section.\n\n## Contact\n\nFor questions or feedback, please contact [Contact Name] at [Contact Email].\n\n## Version History\n\n| Version | Date | Description |\n|---------|------|-------------|\n| 1.0.0   | 2025-01-15 | Initial release |\n\n## Backward Compatibility\n\nThis version maintains backward compatibility with previous versions. No breaking changes are introduced.\n\n## Support\n\nFor support, visit the [Support page] or reach out to the [Support email].\n\n---\n\n*Generated by the assistant on 2025-01-15.*\n",
+       "isQuestion": false,
+       "actionLine": null,
+       "hygieneHits": []
+      }
+     ],
+     "finalClass": "wrong_outcome",
+     "reason": "answered/chatted on an edit turn (no directive emitted): \"<<<README TEMPLATE\n\n# Q3 Review Final\n\n## Table of Contents\n\n- [1. Introduction]\n- [2. Features]\n- [3. Usage]\n- [4. Conf\"",
+     "valid": false,
+     "wrongOutcome": true,
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T15",
+     "text": "make it better",
+     "expect": "clarify",
+     "expectedTask": null,
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 1766,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 422,
+        "prompt_tokens": 3196,
+        "total_tokens": 3618,
+        "prompt_tokens_details": {
+         "cached_tokens": 2766
+        }
+       },
+       "content": "<<<README TEMPLATE\n\n# Q3 Review Final\n\n## Table of Contents\n\n- [1. Introduction]\n- [2. Features]\n- [3. Usage]\n- [4. Configuration]\n- [5. Troubleshooting]\n- [6. License]\n\n## Project Overview\n\nThis document provides an overview of the [Project Name]. It covers the project's purpose, core features, usage instructions, configuration details, and troubleshooting guidance.\n\n## Features\n\n- [Feature 1]\n- [Feature 2]\n- [Feature 3]\n\n## Usage\n\n### Installation\n\n1. [Installation steps]\n2. [Configuration steps]\n\n### Basic Usage\n\n- [Example command or operation]\n- [Expected output or result]\n\n### Advanced Usage\n\n- [Example command or operation]\n- [Expected output or result]\n\n## Configuration\n\n### Environment Variables\n\n- [Variable name]\n- [Default value]\n\n### API Endpoints\n\n- [Endpoint 1]\n- [Endpoint 2]\n\n### Database Settings\n\n- [Database name]\n- [Connection string]\n\n## Troubleshooting\n\n### Common Issues\n\n- [Issue 1]\n- [Issue 2]\n\n### Solutions\n\n- [Solution 1]\n- [Solution 2]\n\n## License\n\nThis project is licensed under [License Name] (see LICENSE file for details).\n\n## Contributing\n\nContributions are welcome! Please follow the [Contribution guidelines] section.\n\n## Contact\n\nFor questions or feedback, please contact [Contact Name] at [Contact Email].\n\n## Version History\n\n| Version | Date | Description |\n|---------|------|-------------|\n| 1.0.0   | 2025-01-15 | Initial release |\n\n## Backward Compatibility\n\nThis version maintains backward compatibility with previous versions. No breaking changes are introduced.\n\n## Support\n\nFor support, visit the [Support page] or reach out to the [Support email].\n\n---\n\n*Generated by the assistant on 2025-01-15.*\n*Note: Replace bracketed placeholders with actual content before finalizing.*",
+       "isQuestion": false,
+       "actionLine": null,
+       "hygieneHits": []
+      }
+     ],
+     "finalClass": "invalid",
+     "reason": "clarify turn answered without a question: \"<<<README TEMPLATE\n\n# Q3 Review Final\n\n## Table of Contents\n\n- [1. Introduction]\n- [2. Features]\n- [3. Usage]\n- [4. Conf\"",
+     "valid": false,
+     "wrongOutcome": false,
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T16",
+     "text": "hey, could you add a bullet under Follow-ups saying send the deck to finance",
+     "expect": "delegate",
+     "expectedTask": "insert",
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 640,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 143,
+        "prompt_tokens": 3645,
+        "total_tokens": 3788,
+        "prompt_tokens_details": {
+         "cached_tokens": 3192
+        }
+       },
+       "content": "<<<DIRECTIVE\n{\"task\": \"edit\", \"instruction\": \"Add a new bullet point under the Follow-ups section stating 'Send the deck to finance' in plain text. Keep the existing Follow-ups bullets and header intact.\", \"target\": {\"description\": \"Follow-ups section, under Follow-ups heading\", \"heading\": \"Follow-ups\"}, \"verbatim\": null, \"constraints\": [\"Add bullet under Follow-ups: Send the deck to finance\", \"Keep existing Follow-ups bullets and header\", \"Keep plain text format\"], \"frame_relevant\": true}\n>>>\nA new bullet point stating 'Send the deck to finance' has been added under the Follow-ups section.",
+       "directive": {
+        "task": "edit",
+        "instruction": "Add a new bullet point under the Follow-ups section stating 'Send the deck to finance' in plain text. Keep the existing Follow-ups bullets and header intact.",
+        "target": {
+         "description": "Follow-ups section, under Follow-ups heading",
+         "heading": "Follow-ups"
+        },
+        "verbatim": null,
+        "constraints": [
+         "Add bullet under Follow-ups: Send the deck to finance",
+         "Keep existing Follow-ups bullets and header",
+         "Keep plain text format"
+        ],
+        "frame_relevant": true
+       },
+       "schemaErrors": [],
+       "semantic": {
+        "problems": [
+         "task mismatch: got \"edit\", expected \"insert\""
+        ],
+        "missing": [],
+        "extrasMet": true,
+        "frameRelevant": true
+       }
+      }
+     ],
+     "finalClass": "invalid",
+     "reason": "semantically inadequate (no repair for semantics): task mismatch: got \"edit\", expected \"insert\"",
+     "valid": false,
+     "wrongOutcome": false,
+     "directive": {
+      "task": "edit",
+      "instruction": "Add a new bullet point under the Follow-ups section stating 'Send the deck to finance' in plain text. Keep the existing Follow-ups bullets and header intact.",
+      "target": {
+       "description": "Follow-ups section, under Follow-ups heading",
+       "heading": "Follow-ups"
+      },
+      "verbatim": null,
+      "constraints": [
+       "Add bullet under Follow-ups: Send the deck to finance",
+       "Keep existing Follow-ups bullets and header",
+       "Keep plain text format"
+      ],
+      "frame_relevant": true
+     },
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T17",
+     "text": "um, please delete the bullet about API keys",
+     "expect": "delegate",
+     "expectedTask": "remove",
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 546,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 114,
+        "prompt_tokens": 3808,
+        "total_tokens": 3922,
+        "prompt_tokens_details": {
+         "cached_tokens": 3192
+        }
+       },
+       "content": "<<<DIRECTIVE\n{\"task\": \"edit\", \"instruction\": \"Remove the bullet point about rotating production API keys from the Security section. Keep the existing Security bullet and header intact.\", \"target\": {\"description\": \"Security section, under Security heading\", \"heading\": \"Security\"}, \"verbatim\": null, \"constraints\": [\"Remove API keys bullet\", \"Keep existing Security bullet and header\", \"Keep plain text format\"], \"frame_relevant\": true}\n>>>\nThe API keys bullet has been removed from the Security section.",
+       "directive": {
+        "task": "edit",
+        "instruction": "Remove the bullet point about rotating production API keys from the Security section. Keep the existing Security bullet and header intact.",
+        "target": {
+         "description": "Security section, under Security heading",
+         "heading": "Security"
+        },
+        "verbatim": null,
+        "constraints": [
+         "Remove API keys bullet",
+         "Keep existing Security bullet and header",
+         "Keep plain text format"
+        ],
+        "frame_relevant": true
+       },
+       "schemaErrors": [],
+       "semantic": {
+        "problems": [
+         "task mismatch: got \"edit\", expected \"remove\""
+        ],
+        "missing": [],
+        "extrasMet": true,
+        "frameRelevant": true
+       }
+      }
+     ],
+     "finalClass": "invalid",
+     "reason": "semantically inadequate (no repair for semantics): task mismatch: got \"edit\", expected \"remove\"",
+     "valid": false,
+     "wrongOutcome": false,
+     "directive": {
+      "task": "edit",
+      "instruction": "Remove the bullet point about rotating production API keys from the Security section. Keep the existing Security bullet and header intact.",
+      "target": {
+       "description": "Security section, under Security heading",
+       "heading": "Security"
+      },
+      "verbatim": null,
+      "constraints": [
+       "Remove API keys bullet",
+       "Keep existing Security bullet and header",
+       "Keep plain text format"
+      ],
+      "frame_relevant": true
+     },
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T18",
+     "text": "create a changelog template in this document",
+     "expect": "delegate",
+     "expectedTask": "create",
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 486,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 99,
+        "prompt_tokens": 3942,
+        "total_tokens": 4041,
+        "prompt_tokens_details": {
+         "cached_tokens": 3292
+        }
+       },
+       "content": "<<<CHANGELOG TEMPLATE\n\n## Changelog\n\n| Version | Date | Description |\n|---------|------|-------------|\n| 1.0.0   | 2025-01-15 | Initial release |\n\n## Changelog Notes\n\n- [Add changelog entries here]\n- [Add changelog entries here]\n\n---\n\n*Generated by the assistant on 2025-01-15.*\n*Note: Replace bracketed placeholders with actual content before finalizing.*",
+       "isQuestion": false,
+       "actionLine": null,
+       "hygieneHits": []
+      }
+     ],
+     "finalClass": "wrong_outcome",
+     "reason": "answered/chatted on an edit turn (no directive emitted): \"<<<CHANGELOG TEMPLATE\n\n## Changelog\n\n| Version | Date | Description |\n|---------|------|-------------|\n| 1.0.0   | 2025-\"",
+     "valid": false,
+     "wrongOutcome": true,
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T19",
+     "text": "what happens if I remove the Q3 row?",
+     "expect": "answer",
+     "expectedTask": null,
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 667,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 143,
+        "prompt_tokens": 4062,
+        "total_tokens": 4205,
+        "prompt_tokens_details": {
+         "cached_tokens": 3426
+        }
+       },
+       "content": "<<<DIRECTIVE\n{\"task\": \"edit\", \"instruction\": \"Remove the Q3 revenue row from the Revenue table in the document. Keep the existing table structure and header. Do not modify any other rows.\", \"target\": {\"description\": \"Revenue table, Q3 row\", \"heading\": \"Q3\"}, \"verbatim\": null, \"constraints\": [\"Remove Q3 revenue row\", \"Keep existing table structure and header\", \"Do not modify other rows\"], \"frame_relevant\": true}\n>>>\nThe Q3 revenue row has been removed from the Revenue table. The table now shows Q1, Q2, and Q4 with their respective values.",
+       "classification": "delegation-on-nondelegate-turn"
+      }
+     ],
+     "finalClass": "wrong_outcome",
+     "reason": "delegated a turn that expected \"answer\"",
+     "valid": false,
+     "wrongOutcome": true,
+     "directive": {
+      "task": "edit",
+      "instruction": "Remove the Q3 revenue row from the Revenue table in the document. Keep the existing table structure and header. Do not modify any other rows.",
+      "target": {
+       "description": "Revenue table, Q3 row",
+       "heading": "Q3"
+      },
+      "verbatim": null,
+      "constraints": [
+       "Remove Q3 revenue row",
+       "Keep existing table structure and header",
+       "Do not modify other rows"
+      ],
+      "frame_relevant": true
+     },
+     "history_appended": "assistant: model output verbatim"
+    },
+    {
+     "turnId": "T20",
+     "text": "delete the Q1 row from the revenue table",
+     "expect": "delegate",
+     "expectedTask": "remove",
+     "attempts": [
+      {
+       "attempt": 1,
+       "ms": 673,
+       "ok": true,
+       "httpStatus": 200,
+       "finishReason": "stop",
+       "usage": {
+        "completion_tokens": 143,
+        "prompt_tokens": 4225,
+        "total_tokens": 4368,
+        "prompt_tokens_details": {
+         "cached_tokens": 3546
+        }
+       },
+       "content": "<<<DIRECTIVE\n{\"task\": \"edit\", \"instruction\": \"Remove the Q1 revenue row from the Revenue table in the document. Keep the existing table structure and header. Do not modify any other rows.\", \"target\": {\"description\": \"Revenue table, Q1 row\", \"heading\": \"Q1\"}, \"verbatim\": null, \"constraints\": [\"Remove Q1 revenue row\", \"Keep existing table structure and header\", \"Do not modify other rows\"], \"frame_relevant\": true}\n>>>\nThe Q1 revenue row has been removed from the Revenue table. The table now shows Q2, Q3, and Q4 with their respective values.",
+       "directive": {
+        "task": "edit",
+        "instruction": "Remove the Q1 revenue row from the Revenue table in the document. Keep the existing table structure and header. Do not modify any other rows.",
+        "target": {
+         "description": "Revenue table, Q1 row",
+         "heading": "Q1"
+        },
+        "verbatim": null,
+        "constraints": [
+         "Remove Q1 revenue row",
+         "Keep existing table structure and header",
+         "Do not modify other rows"
+        ],
+        "frame_relevant": true
+       },
+       "schemaErrors": [],
+       "semantic": {
+        "problems": [
+         "task mismatch: got \"edit\", expected \"remove\""
+        ],
+        "missing": [],
+        "extrasMet": true,
+        "frameRelevant": true
+       }
+      }
+     ],
+     "finalClass": "invalid",
+     "reason": "semantically inadequate (no repair for semantics): task mismatch: got \"edit\", expected \"remove\"",
+     "valid": false,
+     "wrongOutcome": false,
+     "directive": {
+      "task": "edit",
+      "instruction": "Remove the Q1 revenue row from the Revenue table in the document. Keep the existing table structure and header. Do not modify any other rows.",
+      "target": {
+       "description": "Revenue table, Q1 row",
+       "heading": "Q1"
+      },
+      "verbatim": null,
+      "constraints": [
+       "Remove Q1 revenue row",
+       "Keep existing table structure and header",
+       "Do not modify other rows"
+      ],
+      "frame_relevant": true
+     },
+     "history_appended": "assistant: model output verbatim"
+    }
+   ]
+  }
+ },
+ "pass_bar_any_met": false
+}
