@@ -393,6 +393,11 @@ design.md §7 specifies.
    `unavailable` as a first-class result (bridge error, malformed answer,
    or sub-threshold distribution all map there or to disapproved per E3's
    findings — never to silent approval).
+   *Landed early (backwards order, 2026-11-09, PR on `feat/p4-d1check-module`):
+   the module itself — verbatim E3 questions, spike-format packet,
+   `D1_CHECK_POLICY` (noul ≥ 0.50 ∧ safe), injectable decide fn + unit
+   tests. What remains for P4 proper is the pipeline swap (item 2's
+   deletions + routing disapproved/unavailable into `lib/pending.ts`).*
 2. **Deletions:** `ROUTE_QUESTIONS`, `routeFromAnswers`,
    `resolveGroundingSpan` + the whole typed-grounding apparatus,
    `critique()` and `CRITIC_QUESTIONS`. `TraceRuntime.route` is removed;
