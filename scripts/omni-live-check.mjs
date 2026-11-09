@@ -217,7 +217,10 @@ function scoreTurn(turn, outcome) {
       problems.push(`expected answer, got ${outcome.result ? outcome.result.outcome : outcome.error}`)
       return { pass: false, problems }
     }
-    for (const hit of outcome.result.text.match(DIRECTIVE_SPEAK) ?? []) {
+    const speakHits = [...outcome.result.text.matchAll(new RegExp(DIRECTIVE_SPEAK.source, 'gi'))].map(
+      (match) => match[0],
+    )
+    for (const hit of speakHits) {
       problems.push(`directive-speak "${hit}"`)
     }
     if (turn.id === 'T01' && /revenue|pending|slide|note\b/i.test(outcome.result.text)) {
