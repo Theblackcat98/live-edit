@@ -79,7 +79,7 @@ start_member text 8080 "$MODEL_DIR/LFM3-1.7B-Q4_K_M.gguf" \
 start_member omni 8083 "$MODEL_DIR/LFM3-Omni-2B-Q4_K_M.gguf" \
   --mmproj "$MODEL_DIR/mmproj-LFM3-Omni-2B-Q8_0.gguf" \
   --alias lfm3-omni-2b -c 128000 "${COMMON_FLAGS[@]}" \
-  --reasoning off --temp 0
+  --temp 0
 
 start_member d1-omni 8085 "$MODEL_DIR/d1-Omni-2B-Q8_0.gguf" \
   --mmproj "$MODEL_DIR/mmproj-d1-Omni-2B-Q8_0.gguf" \

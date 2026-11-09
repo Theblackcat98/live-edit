@@ -146,9 +146,44 @@ export type ChatContent =
       | { type: 'image_url'; image_url: { url: string } }
     >
 
+// --- tool calling (OpenAI-style; needs llama.cpp --jinja) ----------------------
+// Additive (P2, omni.ts): the chat calls can carry function definitions and
+// return the function calls a completion made. Existing callers that never pass
+// `tools` are unaffected — the body fields are only added when present.
+
+/** An OpenAI-style function definition (`tools` array entry). */
+export interface ToolDef {
+  type: 'function'
+  function: {
+    name: string
+    description: string
+    /** JSON Schema describing the function's arguments object. */
+    parameters: Record<string, unknown>
+  }
+}
+
+/** A function call parsed out of a completion (assistant side). */
+export interface ToolCallRequest {
+  id: string
+  type: 'function'
+  function: {
+    name: string
+    /** Raw arguments — the caller parses/validates this JSON itself. */
+    arguments: string
+  }
+}
+
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant'
+  /**
+   * `tool` is the tool-result role: its `content` answers the assistant
+   * `tool_calls` entry whose id matches `tool_call_id`.
+   */
+  role: 'system' | 'user' | 'assistant' | 'tool'
   content: ChatContent
+  /** Assistant message only: the function calls made in that completion. */
+  tool_calls?: ToolCallRequest[]
+  /** Tool-role message only: id of the call this result answers. */
+  tool_call_id?: string
 }
 
 export interface ChatResult {
@@ -156,12 +191,18 @@ export interface ChatResult {
   reasoning: string
   ms: number
   usage: TokenUsage
+  /** Function calls the completion made; empty when none (never undefined). */
+  toolCalls: ToolCallRequest[]
+  /** Last non-null finish_reason the server reported ("stop", "length", …). */
+  finishReason: string | null
 }
 
 export interface ChatOptions {
   temperature?: number
   maxTokens?: number
   stop?: string[]
+  /** Function definitions offered to the model for this call. */
+  tools?: ToolDef[]
 }
 
 export interface ChatStreamOptions extends ChatOptions {
@@ -169,13 +210,34 @@ export interface ChatStreamOptions extends ChatOptions {
   onToken?: (delta: string) => void
 }
 
-function readCompletionChoice(payload: unknown): { text: string; reasoning: string } {
+function readCompletionChoice(payload: unknown): {
+  text: string
+  reasoning: string
+  toolCalls: ToolCallRequest[]
+  finishReason: string | null
+} {
   const choices = isRecord(payload) && Array.isArray(payload.choices) ? payload.choices : []
   const first = isRecord(choices[0]) ? choices[0] : {}
   const message = isRecord(first.message) ? first.message : {}
+  const toolCalls: ToolCallRequest[] = []
+  if (Array.isArray(message.tool_calls)) {
+    for (const entry of message.tool_calls) {
+      if (!isRecord(entry)) continue
+      const fn = isRecord(entry.function) ? entry.function : {}
+      const name = readString(fn, 'name')
+      if (!name) continue
+      toolCalls.push({
+        id: readString(entry, 'id') ?? `call-${toolCalls.length + 1}`,
+        type: 'function',
+        function: { name, arguments: readString(fn, 'arguments') ?? '' },
+      })
+    }
+  }
   return {
     text: (readString(message, 'content') ?? '').trim(),
     reasoning: (readString(message, 'reasoning_content') ?? '').trim(),
+    toolCalls,
+    finishReason: readString(first, 'finish_reason') ?? null,
   }
 }
 
@@ -205,16 +267,21 @@ export async function chatComplete(
       temperature: options.temperature ?? 0.1,
       max_tokens: options.maxTokens ?? 700,
       ...(options.stop?.length ? { stop: options.stop } : {}),
+      ...(options.tools?.length ? { tools: options.tools, tool_choice: 'auto' } : {}),
       stream: false,
     }),
   })
-  const { text, reasoning } = readCompletionChoice(payload)
-  if (!text && !reasoning) throw new BridgeError('Model returned an empty completion')
+  const { text, reasoning, toolCalls, finishReason } = readCompletionChoice(payload)
+  if (!text && !reasoning && !toolCalls.length) {
+    throw new BridgeError('Model returned an empty completion')
+  }
   return {
     text,
     reasoning,
     ms: Number((performance.now() - started).toFixed(1)),
     usage: usageOf(payload),
+    toolCalls,
+    finishReason,
   }
 }
 
@@ -248,6 +315,7 @@ export async function chatCompleteStream(
         temperature: options.temperature ?? 0.1,
         max_tokens: options.maxTokens ?? 700,
         ...(options.stop?.length ? { stop: options.stop } : {}),
+        ...(options.tools?.length ? { tools: options.tools, tool_choice: 'auto' } : {}),
         stream: true,
       }),
       signal,
@@ -263,14 +331,18 @@ export async function chatCompleteStream(
     if (!response.body || !contentType.includes('text/event-stream')) {
       // Server ignored `stream`; accept the single JSON body instead.
       const payload: unknown = await response.json().catch(() => null)
-      const { text, reasoning } = readCompletionChoice(payload)
-      if (!text && !reasoning) throw new BridgeError('Model returned an empty completion')
+      const { text, reasoning, toolCalls, finishReason } = readCompletionChoice(payload)
+      if (!text && !reasoning && !toolCalls.length) {
+        throw new BridgeError('Model returned an empty completion')
+      }
       if (text) options.onToken?.(text)
       return {
         text,
         reasoning,
         ms: Number((performance.now() - started).toFixed(1)),
         usage: usageOf(payload),
+        toolCalls,
+        finishReason,
       }
     }
 
@@ -281,6 +353,10 @@ export async function chatCompleteStream(
     let reasoning = ''
     let usage: TokenUsage = { promptTokens: 0, outputTokens: 0 }
     let finished = false
+    let finishReason: string | null = null
+    // Tool-call deltas arrive fragmented, keyed by `index` — accumulate the
+    // fragments per slot and assemble the complete calls at stream end.
+    const toolCallSlots = new Map<number, { id: string; name: string; arguments: string }>()
 
     while (!finished) {
       const { value, done } = await reader.read()
@@ -309,6 +385,8 @@ export async function chatCompleteStream(
         if (isRecord(chunk) && isRecord(chunk.usage)) usage = usageOf(chunk)
         const choices = isRecord(chunk) && Array.isArray(chunk.choices) ? chunk.choices : []
         const first = isRecord(choices[0]) ? choices[0] : {}
+        const reason = readString(first, 'finish_reason')
+        if (reason) finishReason = reason
         const delta = isRecord(first.delta) ? first.delta : {}
         const content = readString(delta, 'content')
         if (content) {
@@ -317,18 +395,46 @@ export async function chatCompleteStream(
         }
         const reasoningDelta = readString(delta, 'reasoning_content')
         if (reasoningDelta) reasoning += reasoningDelta
+        if (Array.isArray(delta.tool_calls)) {
+          for (const entry of delta.tool_calls) {
+            if (!isRecord(entry)) continue
+            const index = typeof entry.index === 'number' ? entry.index : 0
+            const fn = isRecord(entry.function) ? entry.function : {}
+            const slot = toolCallSlots.get(index) ?? { id: '', name: '', arguments: '' }
+            const id = readString(entry, 'id')
+            if (id) slot.id = id
+            const name = readString(fn, 'name')
+            if (name) slot.name += name
+            const args = readString(fn, 'arguments')
+            if (args) slot.arguments += args
+            toolCallSlots.set(index, slot)
+          }
+        }
       }
     }
     await reader.cancel().catch(() => {})
 
+    const toolCalls: ToolCallRequest[] = [...toolCallSlots.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([, slot], position) => ({
+        id: slot.id || `call-${position + 1}`,
+        type: 'function' as const,
+        function: { name: slot.name, arguments: slot.arguments },
+      }))
+      .filter((call) => call.function.name)
+
     const trimmed = text.trim()
     const trimmedReasoning = reasoning.trim()
-    if (!trimmed && !trimmedReasoning) throw new BridgeError('Model returned an empty completion')
+    if (!trimmed && !trimmedReasoning && !toolCalls.length) {
+      throw new BridgeError('Model returned an empty completion')
+    }
     return {
       text: trimmed,
       reasoning: trimmedReasoning,
       ms: Number((performance.now() - started).toFixed(1)),
       usage,
+      toolCalls,
+      finishReason,
     }
   } catch (error) {
     if (error instanceof BridgeError) throw error
