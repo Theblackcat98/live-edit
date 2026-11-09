@@ -2,6 +2,7 @@ import type {
   BBoxTarget,
   CriticCheck,
   CriticResult,
+  GroundingSource,
   RouteDecision,
   SceneRegionId,
   SpanTarget,
@@ -16,6 +17,7 @@ import {
   getHeadings,
   getListItems,
   getParagraphs,
+  isTableSeparator,
   lineRangeExcerpt,
   normalizeWhitespace,
   parseTableRow,
@@ -44,6 +46,8 @@ export interface SupervisorPlan {
   candidates?: { label: string; command: string }[]
   /** Distinct alternative spans the deterministic search tied on (top span first). */
   spanCandidates?: SpanTarget[]
+  /** The span came from a literal reference the user spelled out. */
+  spanLiteral?: boolean
 }
 
 /**
@@ -352,6 +356,8 @@ export function routeCommand(command: string): RouteDecision {
 interface SpanSearchResult {
   span: SpanTarget
   candidates: SpanTarget[]
+  /** The user named the target literally (quote, line numbers, ordinal). */
+  literal?: boolean
 }
 
 const GENERIC_WORDS = new Set([
@@ -488,6 +494,105 @@ function makeSpan(
     phrase,
   }
 }
+
+/**
+ * Structural units a spoken reference can name. The bracket label shown to d1
+ * and the noun filter that narrows the candidate view both use this
+ * vocabulary, so "that section about API keys" and "the second paragraph" are
+ * grounded against the kind of block the speaker actually said.
+ *
+ * Sentences are deliberately absent: the execution contract edits whole lines
+ * (`start_line`/`end_line` + an exact anchor), so a sub-line candidate could
+ * never be applied. A sentence reference resolves to its paragraph.
+ */
+type SpanKind = 'section' | 'heading' | 'paragraph' | 'bullet' | 'row' | 'table' | 'quote'
+
+interface StructuralSpan extends SpanTarget {
+  kind: SpanKind
+}
+
+const SPAN_KIND_LABELS: Record<SpanKind, string> = {
+  section: 'section',
+  heading: 'heading',
+  paragraph: 'paragraph',
+  bullet: 'list item',
+  row: 'table row',
+  table: 'table',
+  quote: 'blockquote',
+}
+
+/** Every structural block in the note, in document order. */
+function structuralSpans(note: string): StructuralSpan[] {
+  const lines = splitLines(note)
+  const spans: StructuralSpan[] = []
+  const push = (startLine: number, endLine: number, kind: SpanKind, detail: string) => {
+    if (startLine < 1 || endLine < startLine || endLine > lines.length) return
+    const excerpt = lineRangeExcerpt(note, startLine, endLine)
+    if (!excerpt) return
+    const range = endLine === startLine ? `line ${startLine}` : `lines ${startLine}–${endLine}`
+    spans.push({
+      startLine,
+      endLine,
+      excerpt,
+      confidence: 0.6,
+      kind,
+      reason: `The ${SPAN_KIND_LABELS[kind]}${detail ? ` ${detail}` : ''} at ${range}.`,
+    })
+  }
+
+  const headings = getHeadings(note)
+  const hasSubheadings = headings.some((heading) => heading.level > 1)
+  for (const heading of headings) {
+    push(heading.line, heading.line, 'heading', `“${heading.title}”`)
+    const end = Math.min(lines.length, findSectionEnd(note, heading) - 1)
+    // An H1 section in a document with deeper headings covers the whole file;
+    // offering "the entire note" as one candidate only invites a misfire.
+    if (end > heading.line && !(heading.level === 1 && hasSubheadings)) {
+      push(heading.line, end, 'section', `“${heading.title}”`)
+    }
+  }
+  for (const paragraph of getParagraphs(note)) {
+    push(paragraph.line, paragraph.endLine, 'paragraph', '')
+  }
+  for (const item of getListItems(note)) {
+    push(item.line, item.line, 'bullet', '')
+  }
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!/^\s*>\s?/.test(lines[index])) continue
+    let end = index + 1
+    while (end < lines.length && /^\s*>\s?/.test(lines[end])) end += 1
+    push(index + 1, end, 'quote', '')
+    index = end - 1
+  }
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!/^\s*\|/.test(lines[index])) continue
+    let end = index + 1
+    while (end < lines.length && /^\s*\|/.test(lines[end])) end += 1
+    for (let line = index + 1; line <= end; line += 1) {
+      if (!isTableSeparator(lines[line - 1])) push(line, line, 'row', '')
+    }
+    if (end - index > 2) push(index + 1, end, 'table', '')
+    index = end - 1
+  }
+
+  const seen = new Set<string>()
+  return spans.filter((span) => {
+    const key = `${span.startLine}:${span.endLine}:${span.kind}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+const SPAN_KIND_PATTERNS: Array<[SpanKind, RegExp]> = [
+  ['section', /\bsections?\b/i],
+  ['paragraph', /\bparagraphs?\b/i],
+  ['bullet', /\b(?:bullets?|list items?|items?|points?|steps?)\b/i],
+  ['row', /\brows?\b/i],
+  ['table', /\btables?\b/i],
+  ['quote', /\b(?:quotes?|block ?quotes?|callouts?)\b/i],
+  ['heading', /\b(?:headings?|titles?|headlines?)\b/i],
+]
 
 function keywordSpan(note: string, command: string): SpanSearchResult | null {
   const words = tokenize(command)
@@ -671,39 +776,6 @@ function explicitHeadingReference(note: string, command: string) {
     }
   }
   return best?.heading ?? null
-}
-
-function headingSpan(note: string, heading: ReturnType<typeof explicitHeadingReference>): SpanTarget | null {
-  if (!heading) return null
-  const sectionEnd = findSectionEnd(note, heading) - 1
-  const end = Math.max(heading.line, sectionEnd)
-  return makeSpan(
-    note,
-    heading.line,
-    end,
-    0.91,
-    `Section reference resolved to “${heading.title}” (lines ${heading.line}–${end}).`,
-  )
-}
-
-function sectionTargetHeading(
-  note: string,
-  command: string,
-): { heading: NonNullable<ReturnType<typeof explicitHeadingReference>>; scope: 'section' | 'heading' } | null {
-  const numbered = command.match(/\bsection\s+(\d+)\b/i)
-  if (numbered) {
-    const heading = findHeading(note, numbered[1])
-    if (heading) return { heading, scope: 'section' }
-  }
-  const match = command.match(
-    /\b(?:remove|removing|delete|deleting|drop|dropping|erase|erasing|clear|clearing|update|updating|change|changing|edit|editing|replace|replacing|amend|amending|modify|modifying)\s+(?:the\s+)?(.+?)\s+(section|heading)\b/i,
-  )
-  if (!match) return null
-  const phrase = match[1].trim()
-  if (/\b(?:in|from|under|inside|of|about|with|across)\b/i.test(phrase)) return null
-  const heading = findHeading(note, phrase)
-  if (!heading) return null
-  return { heading, scope: match[2].toLowerCase() === 'heading' ? 'heading' : 'section' }
 }
 
 function extractReplacement(command: string): string | null {
@@ -1122,6 +1194,17 @@ function buildCandidates(
   return candidates
 }
 
+/**
+ * Deterministic span search: the fallback when d1-Omni's typed span question
+ * is unavailable, plus the literal pre-empts a model should never re-decide —
+ * an exact quote, explicit line numbers, or an ordinal position ("the second
+ * bullet"), all of which are exact by construction and where a miscounting
+ * model can only introduce drift.
+ *
+ * Vague references are d1's job now — structural grounding enumerates the
+ * note's sections, paragraphs, list items, rows, tables and blockquotes and
+ * asks d1 which one the command names (see resolveGroundingSpan).
+ */
 function findSpanForMutation(note: string, command: string): SpanSearchResult | null {
   const quoted = allQuotes(command)
   const firstQuoteIsTarget =
@@ -1137,55 +1220,16 @@ function findSpanForMutation(note: string, command: string): SpanSearchResult | 
       return {
         span: makeSpan(note, range.start, range.end, 0.95, 'Exact quoted target found in the note.', targetPhrase),
         candidates: [],
+        literal: true,
       }
     }
   }
 
   const lineSpan = explicitLineSpan(note, command)
-  if (lineSpan) return { span: lineSpan, candidates: [] }
+  if (lineSpan) return { span: lineSpan, candidates: [], literal: true }
 
   const ordinal = ordinalSpan(note, command)
-  if (ordinal) return { span: ordinal, candidates: [] }
-
-  const sectionTarget = sectionTargetHeading(note, command)
-  if (sectionTarget) {
-    if (sectionTarget.scope === 'heading') {
-      return {
-        span: makeSpan(
-          note,
-          sectionTarget.heading.line,
-          sectionTarget.heading.line,
-          0.92,
-          `Heading reference resolved to “${sectionTarget.heading.title}”.`,
-        ),
-        candidates: [],
-      }
-    }
-    const span = headingSpan(note, sectionTarget.heading)
-    if (span) return { span, candidates: [] }
-  }
-
-  // "Rename the title to X" targets the document H1, not whichever body line
-  // shares tokens with the new title. Pin the span so the keyword search cannot
-  // ground the rename onto a table row that happens to contain those words.
-  const titleRename = command.match(
-    /\b(?:rename|renaming|change|changing|edit|editing|set|setting)\s+(?:the\s+)?(?:doc(?:ument)?\s+)?title\s+(?:to|as)\s+(.+)$/i,
-  )
-  if (titleRename && titleRename[1]?.trim()) {
-    const headingIndex = splitLines(note).findIndex((line) => /^#\s+/.test(line))
-    if (headingIndex >= 0) {
-      return {
-        span: makeSpan(
-          note,
-          headingIndex + 1,
-          headingIndex + 1,
-          0.96,
-          'Title rename pinned to the document H1.',
-        ),
-        candidates: [],
-      }
-    }
-  }
+  if (ordinal) return { span: ordinal, candidates: [], literal: true }
 
   return keywordSpan(note, command)
 }
@@ -1290,6 +1334,7 @@ export function buildPlan(
         : 'No span in the note matches the spoken target.',
       span: found?.span,
       spanCandidates,
+      spanLiteral: found?.literal,
       candidates: buildCandidates(note, tool, extractReplacement(command)),
     }
   }
@@ -1298,6 +1343,7 @@ export function buildPlan(
     return {
       span: found.span,
       spanCandidates,
+      spanLiteral: found.literal,
       bbox: /q3|revenue|formula|slide|table/i.test(command)
         ? makeBBox(visualRegionForCommand(command), 0.88)
         : undefined,
@@ -1314,6 +1360,7 @@ export function buildPlan(
     return {
       span: found.span,
       spanCandidates,
+      spanLiteral: found.literal,
       problem: 'missing_content',
       problemDetail: 'Target grounded, but no replacement text was spoken.',
       candidates: buildCandidates(note, 'edit_text', null),
@@ -1324,6 +1371,7 @@ export function buildPlan(
   return {
     span: found.span,
     spanCandidates,
+    spanLiteral: found.literal,
     newText,
     bbox: /q3|revenue|formula|slide|table/i.test(command)
       ? makeBBox(visualRegionForCommand(command), 0.88)
@@ -1345,89 +1393,260 @@ function distinctSpans(spans: SpanTarget[]): SpanTarget[] {
 
 export interface GroundingResolution {
   span?: SpanTarget
-  /** 'live' = d1 chose among competing spans; 'fallback' = deterministic pick. */
-  source: 'live' | 'fallback'
+  /** Plan fields the live grounding refined (problem, newText). */
+  planPatch?: { problem?: PlanProblem; problemDetail?: string; newText?: string }
+  source: GroundingSource
+  /** d1-Omni probability for the chosen candidate (live path only). */
+  p?: number
+  /** Typed-question latency in ms (live path only). */
+  ms?: number
+  promptTokens?: number
+  /** Why the fallback ran (the deterministic path's caption). */
+  detail?: string
+  /** True when d1 grounded a target the deterministic search could not. */
+  resolvedMiss: boolean
+  /** Structural candidates the grounding question considered. */
+  offered: number
   candidates: SpanTarget[]
 }
 
 const SPAN_CHOICE_QUESTION = 'span_choice'
+const SPAN_REGION_QUESTION = 'span_region'
 const D1_GROUNDING_CAPTION = 'd1-Omni · /v1/systemone'
 const LOCAL_GROUNDING_CAPTION = 'local heuristics'
+/** Unified pruning gate from plan.md §10: below this a choice is not a decision. */
+const GROUNDING_MIN_P = 0.25
+/** d1 only overturns a deterministic miss when its choice is decisive. */
+const GROUNDING_DECISIVE_P = 0.5
+/** d1's server may omit the distribution; its argmax is still the decision. */
+const DEFAULT_CHOICE_P = 0.6
+const GROUNDING_TIMEOUT_MS = 12_000
+/** The note text is the authoritative context the candidate excerpts index into. */
+const GROUNDING_NOTE_LIMIT = 6000
+/** d1's typed choice head is asked about one page of candidates at a time. */
+const MAX_SPAN_CHOICES = 40
+
+interface D1ChoiceAnswer {
+  choice: string
+  p: number
+  ms: number
+  promptTokens: number
+}
+
+async function askD1Choice(
+  command: string,
+  note: string,
+  question: { id: string; instructions: string; criteria: Record<string, string> },
+): Promise<D1ChoiceAnswer | null> {
+  const decision = await d1Decide({
+    state: `User command: ${command}\nNote under edit (line numbers are 1-based):\n${truncate(note, GROUNDING_NOTE_LIMIT)}`,
+    timeoutMs: GROUNDING_TIMEOUT_MS,
+    questions: {
+      [question.id]: {
+        type: 'choice',
+        instructions: question.instructions,
+        criteria: question.criteria,
+      },
+    },
+  })
+  const answer = decision.answers[question.id]
+  if (!answer || answer.type !== 'choice' || !/^option_\d+$/.test(answer.choice)) return null
+  const probability = answer.probabilities?.[answer.choice]
+  return {
+    choice: answer.choice,
+    p: typeof probability === 'number' ? probability : DEFAULT_CHOICE_P,
+    ms: decision.ms,
+    promptTokens: decision.usage.promptTokens,
+  }
+}
+
+function spanCriteria(spans: StructuralSpan[]): Record<string, string> {
+  const criteria: Record<string, string> = {}
+  spans.forEach((span, index) => {
+    const range =
+      span.endLine === span.startLine ? `L${span.startLine}` : `L${span.startLine}–${span.endLine}`
+    criteria[`option_${index + 1}`] = `${range} [${span.kind}]: ${truncate(
+      span.excerpt.replace(/\s*\n\s*/g, ' / '),
+      120,
+    )}`
+  })
+  return criteria
+}
+
+function regionCriteria(chunks: StructuralSpan[][]): Record<string, string> {
+  const criteria: Record<string, string> = {}
+  chunks.forEach((chunk, index) => {
+    const first = chunk[0]
+    const last = chunk[chunk.length - 1]
+    criteria[`option_${index + 1}`] = `L${first.startLine}–${last.endLine}: ${truncate(
+      chunk
+        .slice(0, 3)
+        .map((span) => span.excerpt.replace(/\s*\n\s*/g, ' / '))
+        .join(' … '),
+      160,
+    )}`
+  })
+  return criteria
+}
 
 /**
- * When the deterministic span search surfaces more than one distinct candidate
- * span, ask d1-Omni to pick via one typed choice question over /v1/systemone.
- * Single-candidate groundings stay fully local (no model call), and a d1 outage
- * or malformed answer falls back to the deterministic top pick.
+ * d1-Omni typed span grounding (plan.md §4 Stage B).
+ *
+ * The note is enumerated deterministically into structural blocks — heading
+ * sections, headings, paragraphs, list items, table rows and tables,
+ * blockquotes — narrowed to the kinds the spoken reference actually names
+ * ("the bullet about Redis" offers list items only), and d1 answers one typed
+ * choice question whose options are those blocks. Its top choice is adopted
+ * when the calibrated probability clears the unified p ≥ 0.25 gate; a
+ * deterministic miss (no keyword/quote/line candidate at all) is only
+ * overturned when d1 is decisive (p ≥ 0.5), so vague turns like "change the
+ * number" still clarify instead of inventing a target.
+ *
+ * Notes with more than 40 candidate blocks are grounded in two typed passes
+ * (region, then block inside the region). A d1 outage, malformed answer or
+ * sub-threshold choice keeps the deterministic search — the trace records
+ * which path ran.
  */
 export async function resolveGroundingSpan(
   command: string,
   note: string,
   plan: SupervisorPlan,
+  tool: ToolName,
+  options: { live?: boolean } = {},
 ): Promise<GroundingResolution> {
-  const candidates = distinctSpans(
+  const localCandidates = distinctSpans(
     plan.span ? [plan.span, ...(plan.spanCandidates ?? [])] : (plan.spanCandidates ?? []),
   )
-  const localSpan = plan.span
-  if (!localSpan || candidates.length < 2) {
-    return { span: localSpan, source: 'fallback', candidates }
-  }
-
-  const criteria: Record<string, string> = {}
-  candidates.forEach((candidate, index) => {
-    const range =
-      candidate.endLine !== candidate.startLine
-        ? `L${candidate.startLine}–${candidate.endLine}`
-        : `L${candidate.startLine}`
-    criteria[`option_${index + 1}`] = `${range}: ${truncate(
-      candidate.excerpt.replace(/\n/g, ' / '),
-      140,
-    )}`
+  const fallback = (detail: string): GroundingResolution => ({
+    span: plan.span
+      ? { ...plan.span, reason: `${plan.span.reason} · ${LOCAL_GROUNDING_CAPTION} (${detail}).` }
+      : undefined,
+    source: 'fallback-keyword',
+    detail,
+    resolvedMiss: false,
+    offered: localCandidates.length,
+    candidates: localCandidates,
   })
 
+  // Insertion anchors (add_text, visual extraction) are structural pins, not
+  // spans a spoken reference chooses.
+  if (tool !== 'edit_text' && tool !== 'remove_text') {
+    return fallback(
+      plan.span ? 'insertion anchors are pinned deterministically' : 'no mutation target to ground',
+    )
+  }
+  // A quote or explicit line range is literal; re-deciding it invites drift.
+  if (plan.spanLiteral) return fallback('literal reference, no d1 call')
+  if (options.live === false) return fallback(`${D1_GROUNDING_CAPTION} is not probed`)
+
+  const enumerated = structuralSpans(note)
+  const namedKinds = SPAN_KIND_PATTERNS.filter(([, pattern]) => pattern.test(command)).map(
+    ([kind]) => kind,
+  )
+  const filtered = namedKinds.length
+    ? enumerated.filter((span) => namedKinds.includes(span.kind))
+    : enumerated
+  const offered = filtered.length ? filtered : enumerated
+  if (!offered.length) return fallback('the note has no structural blocks')
+  const miss = !plan.span || plan.problem === 'missing_target'
+
   try {
-    const decision = await d1Decide({
-      state: `User command: ${command}\nNote under edit (first lines):\n${truncate(note, 900)}`,
-      questions: {
-        [SPAN_CHOICE_QUESTION]: {
-          type: 'choice',
-          instructions:
-            'The user wants to target one part of the note. Choose which candidate span the command refers to.',
-          criteria,
-        },
-      },
+    let pool = offered
+    let regionMs = 0
+    if (pool.length > MAX_SPAN_CHOICES) {
+      const chunks: StructuralSpan[][] = []
+      for (let index = 0; index < pool.length; index += MAX_SPAN_CHOICES) {
+        chunks.push(pool.slice(index, index + MAX_SPAN_CHOICES))
+      }
+      if (chunks.length > MAX_SPAN_CHOICES) return fallback('too many blocks to ground in one pass')
+      const region = await askD1Choice(command, note, {
+        id: SPAN_REGION_QUESTION,
+        instructions:
+          'The note is split into contiguous regions. Choose the region that contains the part of the note the user command refers to.',
+        criteria: regionCriteria(chunks),
+      })
+      if (!region) return fallback('d1-Omni returned no region')
+      if (region.p < GROUNDING_MIN_P) {
+        return fallback(`d1-Omni chose ${region.choice} at p ${region.p.toFixed(2)}, below the region gate`)
+      }
+      const regionIndex = Number(region.choice.replace(/^option_/, '')) - 1
+      const chunk = chunks[regionIndex]
+      if (!chunk) return fallback('d1-Omni chose an unknown region')
+      pool = chunk
+      regionMs = region.ms
+    }
+
+    const answer = await askD1Choice(command, note, {
+      id: SPAN_CHOICE_QUESTION,
+      instructions:
+        'The user command names one target inside the note. Choose the single candidate span the command refers to. The bracketed word is the span granularity: section = a heading with its body, heading = the heading line only, paragraph = one prose block, bullet = one list item, row = one table row, table = the whole table, quote = one blockquote.',
+      criteria: spanCriteria(pool),
     })
-    const answer = decision.answers[SPAN_CHOICE_QUESTION]
-    const chosenIndex =
-      answer && answer.type === 'choice'
-        ? candidates.findIndex(
-            (_candidate, index) => answer.choice.trim() === `option_${index + 1}`,
-          )
-        : -1
-    if (chosenIndex >= 0) {
-      const chosen = candidates[chosenIndex]
-      return {
-        span: {
-          ...chosen,
-          confidence: clamp(Math.max(chosen.confidence, localSpan.confidence), 0, 0.99),
-          reason: `${chosen.reason} · disambiguated by ${D1_GROUNDING_CAPTION}: chose ${
-            chosenIndex + 1
-          } of ${candidates.length} (${criteria[`option_${chosenIndex + 1}`]}).`,
-        },
-        source: 'live',
-        candidates,
+    if (!answer) return fallback('d1-Omni returned no span choice')
+    const chosen = pool[Number(answer.choice.replace(/^option_/, '')) - 1]
+    if (!chosen) return fallback('d1-Omni chose an unknown span')
+    const gate = miss ? GROUNDING_DECISIVE_P : GROUNDING_MIN_P
+    if (answer.p < gate) {
+      return fallback(
+        `d1-Omni chose ${answer.choice} at p ${answer.p.toFixed(2)}, below the p≥${gate} gate`,
+      )
+    }
+    // "the finance follow-up" already grounded to the one bullet; a low-confidence
+    // pick of the enclosing Follow-ups section is drift, not a decision. When the
+    // command names no block kind, the narrower local span wins unless d1 is
+    // decisive.
+    if (
+      !miss &&
+      !namedKinds.length &&
+      plan.span &&
+      answer.p < GROUNDING_DECISIVE_P &&
+      chosen.startLine <= plan.span.startLine &&
+      chosen.endLine >= plan.span.endLine &&
+      (chosen.startLine !== plan.span.startLine || chosen.endLine !== plan.span.endLine)
+    ) {
+      return fallback('d1-Omni picked the enclosing block; kept the tighter local span')
+    }
+
+    const span: SpanTarget = {
+      startLine: chosen.startLine,
+      endLine: chosen.endLine,
+      excerpt: chosen.excerpt,
+      confidence: clamp(0.6 + answer.p * 0.35, 0, 0.97),
+      reason: `${D1_GROUNDING_CAPTION} chose ${answer.choice} of ${pool.length} structural candidates (${chosen.kind}, p ${answer.p.toFixed(2)}).`,
+    }
+
+    const planPatch: GroundingResolution['planPatch'] = {}
+    if (tool === 'edit_text') {
+      const replacement = extractReplacement(command)
+      const quoted = allQuotes(command)
+      // One quote inside an edit is the target, not the replacement.
+      const targetOnlyQuote =
+        replacement !== null && quoted.length === 1 && replacement === quoted[0]
+      if (replacement && !targetOnlyQuote) {
+        planPatch.newText = applyReplacementToSpan(note, span, replacement)
+      } else if (miss) {
+        planPatch.problem = 'missing_content'
+        planPatch.problemDetail = 'Target grounded, but no replacement text was spoken.'
       }
     }
+    if (miss && !planPatch.problem) {
+      planPatch.problem = undefined
+      planPatch.problemDetail = undefined
+    }
+
+    return {
+      span,
+      planPatch: Object.keys(planPatch).length ? planPatch : undefined,
+      source: 'd1-span',
+      p: answer.p,
+      ms: Number((regionMs + answer.ms).toFixed(1)),
+      promptTokens: answer.promptTokens,
+      resolvedMiss: miss,
+      offered: pool.length,
+      candidates: [span, ...pool.filter((candidate) => candidate !== chosen).slice(0, 7)],
+    }
   } catch {
-    // d1 unreachable or malformed answer — keep the deterministic pick.
-  }
-  return {
-    span: {
-      ...localSpan,
-      reason: `${localSpan.reason} · ${LOCAL_GROUNDING_CAPTION} (${D1_GROUNDING_CAPTION} unavailable for disambiguation).`,
-    },
-    source: 'fallback',
-    candidates,
+    return fallback(`${D1_GROUNDING_CAPTION} unavailable`)
   }
 }
 

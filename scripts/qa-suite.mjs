@@ -269,7 +269,8 @@ async function main() {
       const runs = (ws && Array.isArray(ws.runs)) ? ws.runs : []
       const last = runs[0] ?? null // runs are stored newest-first
       return { count: runs.length, status: last ? last.status : null, command: last ? last.command : null,
-               critic: last ? last.critic ?? null : null, runtime: last ? last.runtime ?? null : null }
+               critic: last ? last.critic ?? null : null, runtime: last ? last.runtime ?? null : null,
+               span: last ? last.span ?? null : null, grounding: last ? last.grounding ?? null : null }
     })()`)
   }
 
@@ -772,6 +773,40 @@ async function main() {
     record('22', 'hypothetical "what happens if I remove…" → conversational, note unchanged',
       info.status === 'conversational' && unchanged,
       `status=${info.status}, noteUnchanged=${unchanged}, reply="${(await lastReply()).slice(0, 80)}"`)
+  }
+
+  // Structural span grounding (plan.md §4 Stage B): a vague reference is
+  // resolved by d1's typed span question over structural candidates, not the
+  // local keyword search. Both cases start from the pristine demo note.
+  await seedWorkspace(null)
+  await waitStorageFlushed()
+
+  await submitCommand('remove that section about API keys')
+  {
+    const run = await waitForRun()
+    const info = await runsInfo()
+    const n = await note()
+    const sectionGone = !/API keys/.test(n) && !/SSO audit/.test(n)
+    const neighboursKept = /## 3\. Product notes/.test(n) && /Redis cache migration/.test(n)
+    record('23', 'vague "remove that section about API keys" → d1 grounds the Security section',
+      info.status === 'verified' && sectionGone && neighboursKept && info.grounding?.source === 'd1-span',
+      `status=${info.status}, sectionGone=${sectionGone}, neighboursKept=${neighboursKept}, span=${info.span ? `${info.span.startLine}-${info.span.endLine}` : '-'}, grounding=${JSON.stringify(info.grounding)}${run.timedOut ? ', TIMEOUT' : ''}`)
+  }
+
+  await seedWorkspace(null)
+  await waitStorageFlushed()
+
+  await submitCommand('delete the bullet about the audit')
+  {
+    const run = await waitForRun()
+    const info = await runsInfo()
+    const n = await note()
+    const bulletGone = !/SSO audit/.test(n)
+    const neighboursKept =
+      /Rotate production API keys/.test(n) && /Mobile capture beta reached/.test(n)
+    record('24', 'vague "delete the bullet about the audit" → d1 grounds the SSO list item',
+      info.status === 'verified' && bulletGone && neighboursKept && info.grounding?.source === 'd1-span',
+      `status=${info.status}, bulletGone=${bulletGone}, neighboursKept=${neighboursKept}, span=${info.span ? `${info.span.startLine}-${info.span.endLine}` : '-'}, grounding=${JSON.stringify(info.grounding)}${run.timedOut ? ', TIMEOUT' : ''}`)
   }
 
   // ------------------------------------------------------------- report ---

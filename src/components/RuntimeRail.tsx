@@ -163,7 +163,7 @@ const WIRING_SURFACES: WiringSurface[] = [
   { id: 'asr', label: 'Voice ASR', target: 'Omni /v1/audio/transcriptions', endpoint: 'omni', fallback: 'unavailable — type instead' },
   { id: 'chat', label: 'Chat replies', target: 'Omni /v1/chat/completions', endpoint: 'omni', fallback: 'canned templates' },
   { id: 'route', label: 'Routing', target: 'd1-Omni /v1/systemone', endpoint: 'd1omni', fallback: 'local heuristics' },
-  { id: 'ground', label: 'Span grounding', target: 'deterministic span search', endpoint: null, fallback: '' },
+  { id: 'ground', label: 'Span grounding', target: 'd1-Omni /v1/systemone', endpoint: 'd1omni', fallback: 'keyword/quote fallback' },
   { id: 'worker', label: 'Worker call', target: 'LFM3-1.7B /v1/chat/completions', endpoint: 'text', fallback: 'deterministic template' },
   { id: 'critic', label: 'Critic', target: 'd1-Omni + local gates', endpoint: 'd1omni', fallback: 'local gates only' },
   { id: 'execute', label: 'Execution', target: 'in-tab diff engine', endpoint: null, fallback: '' },

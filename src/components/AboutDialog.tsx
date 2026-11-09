@@ -68,9 +68,10 @@ export function AboutDialog({ open, onClose }: AboutDialogProps) {
                 Voice ASR (Omni-2B), chat replies (Omni-2B), routing and critic decisions
                 (d1-Omni-2B over /v1/systemone) and worker XML calls (LFM3-1.7B) run against local
                 llama.cpp servers on 127.0.0.1. The Runtime truth card in the rail shows live
-                probes. Span grounding is a deterministic local span search; the diff engine,
-                snapshots and trace format run entirely in this tab. If a model server is down,
-                the stage falls back to a local deterministic layer and the trace labels it.
+                probes. Span grounding asks d1-Omni a typed span question over structural
+                candidates; the diff engine, snapshots and trace format run entirely in this
+                tab. If a model server is down, the stage falls back to a local deterministic
+                layer and the trace labels it.
               </p>
             </div>
           </div>

@@ -378,7 +378,17 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, on
               )}
             </TraceSection>
 
-            <TraceSection index="B" title="Zero-token grounding" caption="deterministic span search">
+            <TraceSection
+              index="B"
+              title="Zero-token grounding"
+              caption={
+                trace.grounding?.source === 'd1-span'
+                  ? 'd1-Omni · /v1/systemone'
+                  : trace.grounding
+                    ? 'local heuristics'
+                    : 'pending'
+              }
+            >
               {trace.span || trace.bbox ? (
                 <div className="trace-grounding">
                   {trace.span && (

@@ -70,6 +70,27 @@ export interface SpanTarget {
   phrase?: string
 }
 
+/**
+ * Which path resolved the target span: d1-Omni's typed span question over
+ * /v1/systemone (`d1-span`), or the deterministic supervisor search
+ * (`fallback-keyword` — keyword/quote/ordinal/line reference, or the literal
+ * pre-empts that never need a model call). The trace records it so a run's
+ * provenance is auditable.
+ */
+export type GroundingSource = 'd1-span' | 'fallback-keyword'
+
+export interface GroundingRecord {
+  source: GroundingSource
+  /** d1-Omni probability for the chosen candidate (live path only). */
+  p?: number
+  /** 1-based first line of the resolved span. */
+  chosenLine?: number
+  /** Structural candidates the grounding question offered. */
+  candidateCount?: number
+  /** Why the deterministic fallback ran, when it did. */
+  detail?: string
+}
+
 export type SceneRegionId =
   | 'full'
   | 'header'
@@ -134,7 +155,7 @@ export interface RejectedTraceRecord {
   command: string
   route: { tool?: ToolName; provenance: string }
   spanCandidates: Array<{ startLine: number; endLine: number; excerpt: string }>
-  grounding: { source: 'live' | 'fallback'; chosenLine?: number }
+  grounding: { source: GroundingSource; chosenLine?: number; p?: number }
   workerXml: string
   critic: { verdict: 'rejected'; reason?: string; pCorrect: number }
 }
@@ -176,6 +197,8 @@ export interface Trace {
   source: 'voice' | 'text' | 'demo'
   route?: RouteDecision
   span?: SpanTarget
+  /** How the span was resolved (d1 typed question vs deterministic search). */
+  grounding?: GroundingRecord
   bbox?: BBoxTarget
   call?: WorkerCall
   critic?: CriticResult

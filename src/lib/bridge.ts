@@ -438,6 +438,8 @@ export async function d1Decide(payload: {
   state?: string
   imageDataUrl?: string
   questions: Record<string, D1Question>
+  /** Per-call deadline; span grounding uses a tighter budget than routing. */
+  timeoutMs?: number
 }): Promise<D1DecideResult> {
   const spec = ENDPOINTS.find((candidate) => candidate.id === 'd1omni')
   if (!spec) throw new BridgeError('d1 endpoint missing')
@@ -449,7 +451,7 @@ export async function d1Decide(payload: {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    timeoutMs: 30_000,
+    timeoutMs: payload.timeoutMs ?? 30_000,
   })
   const answers: Record<string, D1Answer> = {}
   if (isRecord(result) && isRecord(result.answers)) {

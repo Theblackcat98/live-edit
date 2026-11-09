@@ -1338,8 +1338,9 @@ export function useWorkspace(): WorkspaceApi {
       setStage('grounding')
       setStageStates({ A: 'done', B: 'running', C: 'idle' })
       setFlowModel('d1')
-      // Deterministic local span search over the note (exact quotes, line
-      // numbers, headings, keywords). Not a model call — this is real code.
+      // Deterministic pre-pass: literal pre-empts (exact quote, line numbers,
+      // ordinals) plus the fallback candidate search. A vague reference then
+      // goes to d1-Omni's typed span question in resolveGroundingSpan below.
       const groundStarted = performance.now()
       let plan = buildPlan(command, effectiveRoute, noteAtStart)
       // d1's tool pick can fail to ground (e.g. add_text chosen for an update
@@ -1383,11 +1384,32 @@ export function useWorkspace(): WorkspaceApi {
       if (!effectiveRoute.primaryTool) {
         throw new Error('Supervisor returned no tool for a mutation turn.')
       }
-      // Multiple plausible spans → d1-Omni picks among candidates (typed choice
-      // over /v1/systemone); ties fall back to the deterministic top pick.
-      const grounding = await resolveGroundingSpan(command, noteAtStart, plan)
+      // d1-Omni typed span grounding: structural candidates are enumerated
+      // from the note and d1 answers one choice question over them. A d1
+      // outage or sub-threshold choice keeps the deterministic search; the
+      // trace records which path ran.
+      const grounding = await resolveGroundingSpan(
+        command,
+        noteAtStart,
+        plan,
+        effectiveRoute.primaryTool,
+        { live: endpointUp(healthRef.current, 'd1omni') },
+      )
       if (grounding.span) {
         plan = { ...plan, span: grounding.span }
+      }
+      if (grounding.planPatch) {
+        plan = { ...plan, ...grounding.planPatch }
+      }
+      if (grounding.promptTokens) {
+        liveUsage.d1 = grounding.promptTokens
+      }
+      traceLocal.grounding = {
+        source: grounding.source,
+        p: grounding.p,
+        chosenLine: grounding.span?.startLine,
+        candidateCount: grounding.offered,
+        detail: grounding.detail,
       }
       traceLocal.route = effectiveRoute
       traceLocal.timings.ground = Number((performance.now() - groundStarted).toFixed(1))
@@ -1549,6 +1571,32 @@ export function useWorkspace(): WorkspaceApi {
         traceLocal.timings.generate = 0.2
         if (traceLocal.timings.generate < 240) await sleep(240)
       }
+      // The supervisor owns the target. A live worker can narrow a multi-line
+      // grounded span to the one line it finds salient ("that section about API
+      // keys" → the API-key bullet), which the critic would reject even though
+      // d1 already settled the span. Emit the supervisor's exact call instead;
+      // the critic still gates its blast radius and anchors.
+      if (
+        templateCall &&
+        call !== templateCall &&
+        call.name === templateCall.name &&
+        call.name !== 'add_text' &&
+        call.name !== 'extract_visual_to_note' &&
+        `${call.params.start_line}:${call.params.end_line}` !==
+          `${templateCall.params.start_line}:${templateCall.params.end_line}`
+      ) {
+        patchMessage(delegationId, {
+          delegation: {
+            ...delegation,
+            modelLabel: 'supervisor',
+            thought: `The worker proposed lines ${call.params.start_line}–${call.params.end_line}; the grounded span was ${templateCall.params.start_line}–${templateCall.params.end_line}, so the supervisor's exact call replaced it.`,
+          },
+        })
+        call = templateCall
+        runtime.worker = 'fallback'
+        traceLocal.timings.generate = 0.2
+        traceLocal.outputTokens = call.rawTokens
+      }
       traceLocal.call = call
       traceLocal.workerNoteView = call.noteView
       if (!traceLocal.promptTokens || traceLocal.promptTokens < estimateTokens(noteAtStart)) {
@@ -1631,7 +1679,11 @@ export function useWorkspace(): WorkspaceApi {
               endLine: candidate.endLine,
               excerpt: candidate.excerpt,
             })),
-            grounding: { source: grounding.source, chosenLine: grounding.span?.startLine },
+            grounding: {
+              source: grounding.source,
+              chosenLine: grounding.span?.startLine,
+              p: grounding.p,
+            },
             workerXml: call.xml,
             critic: { verdict: 'rejected', reason: critic.feedback, pCorrect: critic.pCorrect },
           },
