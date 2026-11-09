@@ -791,6 +791,148 @@ function semanticAddContent(command: string): string | null {
   return null
 }
 
+/**
+ * Template/boilerplate creation is an initial-body request, not an insertion
+ * of the spoken words. An erased document has no text to extend, so the
+ * generic extractAddContent path would write the instruction itself
+ * ("Readme template in this document, rename the title appropriately.") into
+ * the note — a payload the critic must then reject as unsound. The template's
+ * H1 is also the document title, which is what "rename the title" asks for.
+ */
+const TEMPLATE_NOUNS = /^(?:template|boilerplate|skeleton|scaffold|starter|outline)$/i
+
+const CREATION_HEAD =
+  /^(?:please\s+)?(?:could you\s+|can you\s+|would you\s+|will you\s+)?(?:create|write|add|make|generate|draft|insert|start|set up|prepare)\b/i
+
+/** Words that end the created artifact's name ("a readme template for …"). */
+const TEMPLATE_SCOPE_STOPWORDS: Record<string, true> = {
+  about: true,
+  for: true,
+  with: true,
+  to: true,
+  in: true,
+  into: true,
+  on: true,
+  under: true,
+  of: true,
+  from: true,
+  at: true,
+  regarding: true,
+  that: true,
+  which: true,
+  called: true,
+  titled: true,
+  named: true,
+  saying: true,
+  containing: true,
+  using: true,
+  inside: true,
+}
+
+const TEMPLATE_ARTIFACT_STOPWORDS: Record<string, true> = {
+  a: true,
+  an: true,
+  the: true,
+  new: true,
+  blank: true,
+  empty: true,
+  fresh: true,
+  simple: true,
+  basic: true,
+  default: true,
+  full: true,
+  complete: true,
+  whole: true,
+}
+
+/** Conventional uppercase for document names that are acronyms by usage. */
+const DOCUMENT_TITLE_FORMS: Record<string, string> = {
+  readme: 'README',
+  faq: 'FAQ',
+  todo: 'TODO',
+  api: 'API',
+  cli: 'CLI',
+}
+
+function templateTitle(command: string): string {
+  const withoutVerb = command.replace(
+    /^(?:please\s+)?(?:could you\s+|can you\s+|would you\s+|will you\s+)?(?:create|write|add|make|generate|draft|insert|start|set up|prepare)\s+(?:a\s+|an\s+|the\s+)?/i,
+    '',
+  )
+  const phrase = withoutVerb.match(
+    /^([a-z][\w-]*(?:\s+[a-z][\w-]*){0,2})\s+(?:template|boilerplate|skeleton|scaffold|starter|outline)\b/i,
+  )
+  let name = (phrase?.[1] ?? withoutVerb.match(/^(?:readme|read me)\b/i)?.[1] ?? '')
+    .toLowerCase()
+    .replace(/^read me$/, 'readme')
+  if (!name) {
+    // No artifact name ("create an outline") — title the template by its kind.
+    name = (withoutVerb.toLowerCase().match(/\b(template|boilerplate|skeleton|scaffold|starter|outline)\b/)?.[1] ?? '')
+  }
+  const words = name
+    .split(/\s+/)
+    .filter((word) => word && !TEMPLATE_ARTIFACT_STOPWORDS[word])
+  if (!words.length) return 'Document'
+  return words
+    .map((word) => DOCUMENT_TITLE_FORMS[word] ?? `${word.charAt(0).toUpperCase()}${word.slice(1)}`)
+    .join(' ')
+}
+
+function wantsDocumentTemplate(command: string): boolean {
+  const head = command.match(CREATION_HEAD)
+  if (!head) return false
+  const words = command
+    .slice(head[0].length)
+    .toLowerCase()
+    .split(/[^a-z-]+/)
+    .filter(Boolean)
+  let contentWords = 0
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index]
+    if (TEMPLATE_SCOPE_STOPWORDS[word]) return false
+    if (
+      /^(?:new|blank|empty)$/.test(word) &&
+      /^(?:document|file|page)$/.test(words[index + 1] ?? '')
+    ) {
+      return true
+    }
+    if (TEMPLATE_ARTIFACT_STOPWORDS[word]) continue
+    contentWords += 1
+    if (contentWords > 3) return false
+    if (TEMPLATE_NOUNS.test(word)) return true
+  }
+  return false
+}
+
+function buildDocumentTemplate(command: string): string | null {
+  if (!wantsDocumentTemplate(command)) return null
+
+  return [
+    `# ${templateTitle(command)}`,
+    '',
+    '## Overview',
+    '',
+    'Describe what this project does, who it is for, and why it matters.',
+    '',
+    '## Getting started',
+    '',
+    '- Prerequisites',
+    '- Installation',
+    '',
+    '## Usage',
+    '',
+    'Explain the main workflow with a short example.',
+    '',
+    '## Contributing',
+    '',
+    'Describe how others can report issues or propose changes.',
+    '',
+    '## License',
+    '',
+    'State the license for this work.',
+  ].join('\n')
+}
+
 function extractAddContent(command: string): string | null {
   const quoted = allQuotes(command)
   if (quoted.length) return quoted[quoted.length - 1].trim()
@@ -806,8 +948,14 @@ function extractAddContent(command: string): string | null {
   )
   if (!afterVerb) return null
   let content = afterVerb[1].trim()
+  // A trailing clause that is itself an instruction ("…, rename the title
+  // appropriately") describes what to do with the document, not text to write.
   content = content.replace(
-    /\s+(?:under|into|inside|to|in|after|before)\s+(?:the\s+)?(?:section\s+\d+|[a-z][\w\s-]*section|note|document|file)[.!]?$/i,
+    /,\s*(?:and\s+)?(?:rename|re-?title|retitle|title|name|label|call|format|restyle|style)\b[\s\S]*$/i,
+    '',
+  )
+  content = content.replace(
+    /\s+(?:under|into|inside|to|in|after|before)\s+(?:the\s+|this\s+|that\s+|my\s+)?(?:section\s+\d+|[a-z][\w\s-]*section|note|document|file)[.!]?$/i,
     '',
   )
   content = content.replace(/\s+(?:at the (?:top|end|beginning)|please)[.!]?$/i, '')
@@ -974,7 +1122,12 @@ export function buildPlan(
   if (tool === 'add_text') {
     const heading = findSectionHeadingForInsertion(note, command)
     const afterLineMatch = command.match(/\bafter\s+line\s+(\d+)\b/i)
-    let position: SupervisorPlan['addPosition'] = heading ? 'under_heading' : 'append'
+    const blankNote = note.trim().length === 0
+    let position: SupervisorPlan['addPosition'] = heading
+      ? 'under_heading'
+      : blankNote
+        ? 'prepend'
+        : 'append'
     let anchor: string | undefined = heading?.title
     if (afterLineMatch) {
       position = 'after_line'
@@ -984,7 +1137,9 @@ export function buildPlan(
       anchor = undefined
     }
 
-    let content = extractAddContent(command)
+    // An erased document cannot be extended by "inserting" the spoken words:
+    // a template/boilerplate request defines the document body itself.
+    let content = (blankNote ? buildDocumentTemplate(command) : null) ?? extractAddContent(command)
     if (!content) return { problem: 'missing_content', problemDetail: 'No insertion content detected.' }
 
     if (heading && !/^#{1,6}\s/.test(content) && !/^\s*([-*+]|\d+\.)\s+/.test(content)) {
@@ -1012,9 +1167,11 @@ export function buildPlan(
         0.9,
         heading
           ? `Supervisor pinned insertion to “${heading.title}”.`
-          : position === 'prepend'
-            ? 'Insertion point at the top of the note.'
-            : 'Insertion point at the document tail.',
+          : blankNote
+            ? 'The document is empty — the new content becomes the document body.'
+            : position === 'prepend'
+              ? 'Insertion point at the top of the note.'
+              : 'Insertion point at the document tail.',
       ),
     }
   }

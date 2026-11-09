@@ -369,7 +369,13 @@ function buildCriticState(
   lines.push(
     'Proposed tool call:',
     JSON.stringify({ name: call.name, arguments: call.params }, null, 2),
-    `Note around the span:\n${truncate(note, 1800)}`,
+  )
+  // An erased document has no text to quote; say so rather than leaving an
+  // empty "Note around the span:" block that reads as a missing-anchor fault.
+  lines.push(
+    note.trim()
+      ? `Note around the span:\n${truncate(note, 1800)}`
+      : 'The note is currently empty; the proposed call adds new content without replacing or deleting anything.\nNote around the span: (empty document — 0 lines)',
   )
   return lines.join('\n')
 }

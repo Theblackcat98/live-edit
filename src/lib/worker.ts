@@ -73,6 +73,9 @@ export function buildWorkerMessages(
   if (plan.newText) {
     hints.push(`Supervisor-proposed replacement: "${plan.newText}"`)
   }
+  if (plan.addContent) {
+    hints.push(`Supervisor-proposed content (insert verbatim):\n${plan.addContent}`)
+  }
   if (plan.extractedMarkdown) {
     hints.push('Read the attached ROI crop and extract its content as Markdown.')
   }
