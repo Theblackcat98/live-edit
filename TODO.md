@@ -53,7 +53,9 @@ machine-verified here.
 
 ## Next implementation work
 
-- [ ] **Omni-first refactor** (docs/design.md). Replace the supervisor-first
+- [ ] **Omni-first refactor** (docs/design.md; phased plan:
+      docs/architecture-refactor.md — spikes E1–E4 first, then P1–P6).
+      Replace the supervisor-first
       pipeline with the corrected design: Omni-first turn loop, typed
       delegation directives, worker packet (directive + last-3-edit-turns
       context packet + full line-numbered note), d1 reduced to the §7 safety

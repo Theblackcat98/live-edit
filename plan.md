@@ -574,7 +574,8 @@ contract, degradation rules, the file-by-file refactor delta (§12 there), and
 acceptance criteria including the README case on a non-empty note — lives in
 [`docs/design.md`](./docs/design.md) and is authoritative. The §10 workstreams
 are closed; the next implementation work is the design.md refactor (tracked in
-TODO.md).
+TODO.md), planned phase-by-phase in
+[`docs/architecture-refactor.md`](./docs/architecture-refactor.md).
 
 
 

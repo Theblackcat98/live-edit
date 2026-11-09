@@ -12,6 +12,12 @@
   historical records of the shipped build.
 - **Implementation status:** NOT yet implemented. §12 is the delta between this
   spec and the code on `main`.
+- **Implementation plan:** [`architecture-refactor.md`](./architecture-refactor.md)
+  — the phased refactor plan (spikes first, then one stage swap per phase)
+  that executes §12. Two of its recorded decisions refine this spec: D2 adds a
+  `frame_extract` field to the §5 directive schema for `extract` tasks (to be
+  mirrored into §5 when Phase 3 lands), and D3 answers Q5 — pending edits
+  persist across reloads.
 
 ---
 
