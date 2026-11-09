@@ -373,6 +373,9 @@ async function main() {
       authoritativeChars: outcome.result?.text?.length ?? 0,
       ms: outcome.result?.ms ?? null,
       brief,
+      // Repair diagnostics (validation error + raw emitted arguments) —
+      // the evidence for the repair-failure clarify class.
+      repair: outcome.result?.repair ?? null,
     })
     console.log(
       `  ${scored.pass ? 'PASS' : 'FAIL'}  ${turn.id.padEnd(6)} expect=${(turn.streamOnly ? 'answer(stream)' : turn.expect + (turn.task ? '/' + turn.task : '')).padEnd(15)} got=${got.padEnd(16)} onText=${String(deltas.length).padStart(3)}x  ${scored.problems.join('; ') || brief.slice(0, 100)}`,
@@ -396,6 +399,11 @@ async function main() {
   console.log(`battery bar (hey T01, Redis T08, Security T11, LTV T12, API keys T17): ${barRows.filter((r) => r?.pass).length}/5`)
   for (const row of barRows.filter((r) => r && !r.pass)) {
     console.log(`  bar miss ${row.id}: ${row.problems.join('; ')}`)
+  }
+  for (const row of e1Rows.filter((r) => r.repair)) {
+    console.log(
+      `  repair ${row.id}: ${row.repair.error} · raw=${JSON.stringify(row.repair.rawArguments.slice(0, 220))}`,
+    )
   }
   console.log(
     `streaming: answer onText fired ${streamRow.onTextCalls}x (${streamRow.provisionalChars} provisional chars, ${streamRow.authoritativeChars} authoritative) — ${streamRow.pass ? 'live' : 'NOT live'}`,

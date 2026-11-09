@@ -130,8 +130,9 @@ export const DELEGATE_EDIT_TOOL: ToolDef = {
   function: {
     name: 'delegate_edit',
     description:
-      'Delegate one note change to the edit worker as a typed directive. Call this exactly once, ' +
-      'only when the user wants the note changed AND the request is fully resolved. Never for chat, ' +
+      'Delegate one note change to the edit worker as a typed directive. A request to change the ' +
+      'note in any way — add, remove, rename, update, fix, rewrite, create — is a call to this tool, ' +
+      'never a chat reply: call it exactly once, when the request is fully resolved. Never for chat, ' +
       'hypotheticals, or undo/redo.',
     parameters: {
       type: 'object',
@@ -149,7 +150,8 @@ export const DELEGATE_EDIT_TOOL: ToolDef = {
           description:
             'Brief for the worker: EVERYTHING the user specified about the content (sections named, ' +
             'values given, exact dictated wording, tone asked for), references like "the same for Q4" ' +
-            'resolved from the conversation. A brief, not the content itself.',
+            'resolved from the conversation. For renames and value updates, quote the exact new text. ' +
+            'A brief, not the content itself.',
         },
         target: {
           type: 'object',
@@ -184,7 +186,8 @@ export const HARNESS_ACTION_TOOL: ToolDef = {
     name: 'harness_action',
     description:
       'Run a harness action on the note history. Only for undo/redo of the last change — never a ' +
-      'worker task, never a delegation.',
+      'worker task, never a delegation. Any undo/redo request ("undo that", "take that back", ' +
+      '"redo it") is this call immediately — never a clarifying question about wording.',
     parameters: {
       type: 'object',
       properties: {
@@ -205,30 +208,23 @@ export const OMNI_TOOLS: ToolDef[] = [DELEGATE_EDIT_TOOL, HARNESS_ACTION_TOOL]
 
 /**
  * The answer / clarify / delegate contract, replacing the shipped "you have
- * no tools, hand edits to the pipeline" prompt. Targets E1's three measured
- * failure classes directly: (a) task-tag selection — per-task one-line
- * definitions; (b) ambiguity → delegate-a-guess — the ASK move; (c)
- * brief-not-content drift on create — the instruction rule.
+ * no tools, hand edits to the pipeline" prompt.
+ *
+ * Battery gate run 1 (15/35) rewrote this prompt's shape: with the full
+ * task taxonomy spelled out in the system prompt, the 2B parroted the
+ * taxonomy into chat ("I'll delegate the edit to…", a literal "**Task:**"
+ * fragment) and treated change requests as conversation topics. So:
+ * conversation is framed as the default, change requests as actions, and
+ * the per-task definitions live ONLY in the delegate_edit parameter
+ * descriptions — never in prose the model can echo back at the user.
  */
 export const OMNI_SYSTEM_PROMPT = [
-  'You are Omni — the conversational interface of a local multimodal note workspace. The user talks to you; each turn shows you the current note state and, when an image is attached, the live visual frame (what the user calls "the slide", "the chart" or "the screen").',
-  'On every user turn, do exactly one of three things:',
-  '1. ANSWER — reply in plain conversational text: greetings, questions, chat, memory, hypotheticals ("what happens if …"), anything that does not require changing the note. You never author note content yourself, not even as a draft in chat: note content is written only by the edit worker, and the only way to reach it is the delegate_edit call.',
-  '2. ASK — if the user wants the note changed but their request is too ambiguous to act on responsibly (an unresolved "this", "it", "that number", or an unspecified outcome like "make it better"), reply with ONE short clarifying question. Never delegate a guess: a wrong edit is worse than a question.',
-  '3. DELEGATE — when the user wants the note changed and you can fully resolve what they mean, call delegate_edit exactly once with the directive as its arguments. The directive is a brief for a worker that never sees this conversation:',
-  '   - task — the operation class, picked by what happens to the note, not by the user\'s verb:',
-  '       edit    — change existing content in place. Updating a value, a table row, a heading, or rewording a passage is edit, not insert.',
-  '       insert  — add new content without replacing or removing anything that already exists.',
-  '       remove  — delete existing content. Removing a row or a bullet is remove, not edit.',
-  '       create  — author a new document or section skeleton from scratch.',
-  '       extract — pull content from the attached frame into the note.',
-  '   - instruction — a brief, not the content: pack in EVERYTHING the user specified about the content (sections named, values given, exact dictated wording, tone asked for) and resolve references like "the same for Q4" or "that bullet" from the conversation yourself. Describe the README\'s sections; never write the README. The only content that travels in the directive is verbatim.',
-  '   - target — optional object {"description": where the change belongs, "heading": section heading or null}.',
-  '   - verbatim — exact dictated text only when the user dictated exact words to appear in the note; otherwise null.',
-  '   - constraints — optional array of requirements, e.g. ["markdown", "keep the existing content intact"].',
-  '   - frame_relevant — true only when the task depends on the attached visual frame.',
-  'Undo and redo are not tasks: when the user asks to undo or redo the last change, call harness_action with {"action": "undo"} or {"action": "redo"} and nothing else.',
-  'Never narrate the machinery: no mention of pipelines, workers, tools, calls, stages or schemas in what you say or show — the user asks, you answer or ask, and when they ask for a change their note simply changes.',
+  'You are Omni, the voice of a local note workspace. The user is talking with you — conversation is the default. Each turn may show you the current note and, when an image is attached, the live visual frame (what the user calls "the slide", "the chart" or "the screen").',
+  'Most turns are just conversation: greetings, questions, opinions, hypotheticals, "what does the note say", "what can you see". Answer those in your own words, naturally. Never write note content in chat, not even as a draft.',
+  'A request to change the note is not a conversation topic — it is an action. If the user wants the note changed in any way (add, remove, rename, update, fix, rewrite, create), do not discuss it, do not describe doing it, and do not ask for confirmation: call delegate_edit once with a brief for the worker that never sees this conversation. The brief carries EVERYTHING the user specified — sections named, exact new values quoted, tone asked for — with references like "the same for Q4" or "that bullet" resolved by you. Describe what the content should be; never author the content itself. The one exception: when the user dictates or quotes exact words to appear in the note, put those words in verbatim, character for character.',
+  'Ask ONE short clarifying question only when a change request is genuinely ambiguous — an unresolved "this", "that number", or an outcome you cannot pin down. A wrong edit is worse than a question; a question about a clear request is worse than acting.',
+  'Undo and redo are instant, never a discussion: "undo that", "take that back", "redo it" — call harness_action with that action and nothing else.',
+  'Never mention this process or its machinery — no talk of tasks, tools, calls, briefs, or who does the writing. From the user\'s side: they ask, you answer or ask, and when they ask for a change their note simply changes.',
   'Style: brief and natural, one or two sentences unless more is genuinely needed. Reference the note or the attached frame only when the turn is actually about them; when asked what you can see, describe the attached frame itself.',
 ].join('\n')
 
@@ -290,10 +286,11 @@ export interface OmniTurnInput {
   /** Barge-in signal: checked before every stage and during streaming. */
   signal?: AbortSignal
   /**
-   * Visible-text callback. answer: one completion-time delivery of the full
-   * sanitized text. clarify: live raw deltas from the (tool-less) follow-up
-   * stream. delegate/action: never called. Streamed deltas are provisional;
-   * result.text is authoritative.
+   * Visible-text callback: live provisional deltas from whichever stream is
+   * running (the primary call and the tool-less clarify follow-up). A turn
+   * that ends as delegate/action may have streamed prose first — callers
+   * must retract the provisional text for non-answer outcomes. result.text
+   * is always the authoritative final text.
    */
   onText?: (delta: string) => void
   /** Injectable bridge chat call (tests); defaults to the live Omni endpoint. */
@@ -501,19 +498,39 @@ export function sanitizeOmniText(text: string): string {
 type ToolEvaluation =
   | { kind: 'delegate'; directive: Directive }
   | { kind: 'action'; action: 'undo' | 'redo' }
-  | { kind: 'invalid'; error: string }
+  | { kind: 'invalid'; error: string; raw: string }
   | { kind: 'none' }
+
+/**
+ * Parse a tool call's arguments. llama.cpp occasionally delivers the
+ * arguments double-encoded (a JSON string containing the JSON object);
+ * unwrap exactly one such layer — anything deeper is genuinely malformed
+ * and goes to the repair retry with the parse error.
+ */
+function parseToolArguments(call: ChatResult['toolCalls'][number]): unknown {
+  let parsed: unknown = JSON.parse(call.function.arguments)
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed)
+    } catch {
+      // Keep the string; the validator reports it as not-an-object.
+    }
+  }
+  return parsed
+}
 
 /** The first tool call of a completion decides; extra calls are ignored (E1 never observed multiples). */
 function evaluateToolCall(call: ChatResult['toolCalls'][number] | null): ToolEvaluation {
   if (!call) return { kind: 'none' }
+  const raw = (call.function.arguments ?? '').slice(0, 600)
   if (call.function.name === 'delegate_edit') {
     let parsed: unknown
     try {
-      parsed = JSON.parse(call.function.arguments)
+      parsed = parseToolArguments(call)
     } catch (error) {
       return {
         kind: 'invalid',
+        raw,
         error: `delegate_edit arguments are not valid JSON (${
           error instanceof Error ? error.message : 'parse error'
         })`,
@@ -521,15 +538,16 @@ function evaluateToolCall(call: ChatResult['toolCalls'][number] | null): ToolEva
     }
     const validation = validateDirective(parsed)
     if (validation.valid) return { kind: 'delegate', directive: validation.directive }
-    return { kind: 'invalid', error: validation.error }
+    return { kind: 'invalid', error: validation.error, raw }
   }
   if (call.function.name === 'harness_action') {
     let parsed: unknown
     try {
-      parsed = JSON.parse(call.function.arguments)
+      parsed = parseToolArguments(call)
     } catch (error) {
       return {
         kind: 'invalid',
+        raw,
         error: `harness_action arguments are not valid JSON (${
           error instanceof Error ? error.message : 'parse error'
         })`,
@@ -543,10 +561,11 @@ function evaluateToolCall(call: ChatResult['toolCalls'][number] | null): ToolEva
     ) {
       return { kind: 'action', action: (parsed as { action: 'undo' | 'redo' }).action }
     }
-    return { kind: 'invalid', error: 'harness_action arguments must be JSON like {"action": "undo"} or {"action": "redo"}' }
+    return { kind: 'invalid', raw, error: 'harness_action arguments must be JSON like {"action": "undo"} or {"action": "redo"}' }
   }
   return {
     kind: 'invalid',
+    raw,
     error: `unknown tool "${call.function.name}" — the available tools are delegate_edit and harness_action`,
   }
 }
@@ -598,8 +617,10 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
 
   /**
    * onToken wrapper attached to every request: the abort check that runs
-   * DURING streaming (§barge-in). Deltas are forwarded to onText only on the
-   * tool-less clarify stream (streamDeltas) — the tools call never forwards.
+   * DURING streaming (§barge-in), plus provisional-delta forwarding when the
+   * request streams visibly (streamDeltas). The primary call forwards too
+   * (battery case 18: answers must stream live, not land in one shot); the
+   * caller retracts the provisional text if the turn ends as a delegation.
    */
   const streamingOnToken = (forward: boolean) => (delta: string) => {
     if (aborted()) throw new TurnAborted()
@@ -672,14 +693,14 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
 
   // -- stage 1: the primary tools call --------------------------------------------
   const messages = buildOmniMessages(input)
-  const primary = await request(messages, { tools: OMNI_TOOLS })
+  const primary = await request(messages, { tools: OMNI_TOOLS, streamDeltas: true })
   if (aborted()) throw new TurnAborted()
 
   const firstCall = primary.toolCalls[0] ?? null
   const firstEvaluation = evaluateToolCall(firstCall)
   if (firstEvaluation.kind === 'none') {
-    // No tool call → answer. Nothing was forwarded during the call (a mixed
-    // text+tool completion's text is never shown); deliver it now, sanitized.
+    // No tool call → answer. Deltas already streamed provisionally; the
+    // sanitized result.text is authoritative and replaces them.
     const text = sanitizeOmniText(primary.text)
     if (!text) {
       throw new OmniTurnError(
@@ -688,7 +709,6 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
         OMNI_ENDPOINT,
       )
     }
-    input.onText?.(text)
     return result('answer', { text })
   }
   if (firstEvaluation.kind === 'delegate') return result('delegate', { directive: firstEvaluation.directive })
@@ -718,11 +738,15 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
 
   const secondCall = repaired.toolCalls[0] ?? null
   const secondEvaluation = evaluateToolCall(secondCall)
+  const firstInvalid =
+    firstEvaluation.kind === 'invalid'
+      ? { error: firstEvaluation.error, rawArguments: firstEvaluation.raw }
+      : undefined
   if (secondEvaluation.kind === 'delegate') {
-    return result('delegate', { directive: secondEvaluation.directive })
+    return result('delegate', { directive: secondEvaluation.directive, repair: firstInvalid })
   }
   if (secondEvaluation.kind === 'action') {
-    return result('action', { action: secondEvaluation.action })
+    return result('action', { action: secondEvaluation.action, repair: firstInvalid })
   }
   // Still invalid, no corrected call, or a text-only repair response: not an
   // outcome — the clarify follow-up re-asks cleanly (repair failure is a
@@ -760,5 +784,12 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
       OMNI_ENDPOINT,
     )
   }
-  return result('clarify', { text: question })
+  // Repair-failure clarify: carry the diagnostics (validation error + the
+  // raw emitted arguments) so the failure is diagnosable from the trace and
+  // the live-check output instead of vanishing into a generic question.
+  const lastInvalid =
+    secondEvaluation.kind === 'invalid'
+      ? { error: secondEvaluation.error, rawArguments: secondEvaluation.raw }
+      : firstInvalid
+  return result('clarify', { text: question, repair: lastInvalid })
 }

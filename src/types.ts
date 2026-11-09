@@ -243,6 +243,8 @@ export interface Trace {
   critic?: CriticResult
   /** The d1 safety-check result (P4+; Omni-first traces only — legacy traces carry `critic`). */
   d1Check?: D1CheckResult
+  /** Omni tool-call repair diagnostics (Omni-first traces only; mirrors OmniTurnResult.repair). */
+  omniRepair?: { error: string; rawArguments: string }
   execution?: ExecutionResult
   timings: TraceTimings
   status: RunStatus
@@ -334,8 +336,8 @@ export interface TraceRuntime {
   asr?: RuntimeSource
   /** Route decision: d1-Omni /v1/systemone, or local heuristics. */
   route: RuntimeSource
-  /** Worker XML: LFM3-1.7B /v1/chat/completions, or the template emitter. */
-  worker: RuntimeSource
+  /** Worker XML: LFM3-1.7B /v1/chat/completions, the template emitter, or the dictation exception (harness-built call, design.md §11). */
+  worker: RuntimeSource | 'dictation'
   /** Critic verdict: d1-Omni semantic pass + local checks, or local checks only. */
   critic: RuntimeSource
   /** Conversational reply: Omni /v1/chat/completions, or canned templates. */
@@ -475,6 +477,13 @@ export interface OmniTurnResult {
   directive?: Directive
   /** The harness action, present iff outcome = action. */
   action?: 'undo' | 'redo'
+  /**
+   * Diagnostics when a tool call failed validation and the repair retry ran:
+   * the validation error and the raw emitted arguments (truncated). Present
+   * on clarify-after-repair-failure and on delegate/action outcomes the
+   * repair rescued — the evidence the next diagnosis works from, never UI copy.
+   */
+  repair?: { error: string; rawArguments: string }
   ms: number
   promptTokens?: number
   outputTokens?: number

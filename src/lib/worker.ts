@@ -324,16 +324,23 @@ const TOOL_USE_WHEN: Record<ToolName, string> = {
  * weld the function name to its parameter vocabulary without imitating a
  * call. Values are consistent with the seed note.
  */
+/**
+ * Filled examples use a DIFFERENT domain (a cooking note) on purpose:
+ * battery gate run 1 caught the worker copying the old seed-note examples
+ * into real edits — case 20 wrote the example's old anchor as the new
+ * title, and 12e bled seed content into an empty document. Examples teach
+ * format; they must never offer copyable content for the actual note.
+ */
 function packetToolExample(tool: ToolName, notePath: string): string {
   switch (tool) {
     case 'add_text':
-      return `file_path="${notePath}" · position="under_heading" · anchor="4. Risks" · content="4. Review contract renewal dates before Q4."`
+      return `file_path="${notePath}" · position="under_heading" · anchor="3. Method" · content="3. Rest the dough for 20 minutes."`
     case 'edit_text':
-      return `file_path="${notePath}" · start_line=1 · end_line=1 · old_text_anchor="# Q3 Business Review" · new_text="# Q3 Review Final"`
+      return `file_path="${notePath}" · start_line=1 · end_line=1 · old_text_anchor="# Weekly Meal Plan" · new_text="# Weekly Meal Plan — Final"`
     case 'remove_text':
-      return `file_path="${notePath}" · start_line=41 · end_line=41 · target_excerpt="- Rotate production API keys before 30 November."`
+      return `file_path="${notePath}" · start_line=41 · end_line=41 · target_excerpt="- Buy oat milk before Friday."`
     case 'extract_visual_to_note':
-      return `file_path="${notePath}" · visual_format="latex_block" · anchor_heading="2. Revenue" · extracted_markdown="$$ … $$" (the directive's frame_extract)`
+      return `file_path="${notePath}" · visual_format="latex_block" · anchor_heading="1. Ingredients" · extracted_markdown="$$ … $$" (the directive's frame_extract)`
   }
 }
 

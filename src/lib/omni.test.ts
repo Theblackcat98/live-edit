@@ -3,6 +3,7 @@ import type { ChatMessage, ChatResult, ChatStreamOptions, ToolCallRequest } from
 import {
   buildOmniMessages,
   CLARIFY_FOLLOWUP_INSTRUCTION,
+  DELEGATE_EDIT_TOOL,
   NOTE_CONTEXT_CAP_CHARS,
   OMNI_SYSTEM_PROMPT,
   OMNI_TEMPERATURE,
@@ -252,17 +253,21 @@ describe('buildOmniMessages', () => {
 // --- outcome parsing -------------------------------------------------------------------
 
 describe('runOmniTurn — answer', () => {
-  it('returns a sanitized answer and delivers text to onText once, at completion time', async () => {
+  it('streams provisional deltas live and returns the sanitized authoritative text (battery case 18)', async () => {
     const deltas: string[] = []
     const { chat, calls } = fakeChat([
-      completion({ text: '  Your favorite color is teal.  ' }),
+      (call) => {
+        call.options.onToken?.('Your favorite ')
+        call.options.onToken?.('color is teal.')
+        return completion({ text: '  Your favorite color is teal.  ' })
+      },
     ])
     const result = await runOmniTurn(
       baseInput({ command: 'what is my favorite color?', onText: (d) => deltas.push(d), chat }),
     )
     expect(result?.outcome).toBe('answer')
     expect(result?.text).toBe('Your favorite color is teal.')
-    expect(deltas).toEqual(['Your favorite color is teal.'])
+    expect(deltas).toEqual(['Your favorite ', 'color is teal.'])
     expect(calls).toHaveLength(1)
     expect(calls[0].options.temperature).toBe(OMNI_TEMPERATURE)
     expect(calls[0].options.maxTokens).toBe(OMNI_MAX_TOKENS)
@@ -349,6 +354,33 @@ describe('runOmniTurn — delegate', () => {
     const tool = calls[2].messages[calls[2].messages.length - 3]
     expect(tool.role).toBe('assistant')
     expect(tool.tool_calls?.[0].id).toBe('call-2')
+  })
+
+  it('carries repair diagnostics (error + raw arguments) on a repair-failure clarify', async () => {
+    const { chat } = fakeChat([
+      completion({ toolCalls: [delegateCall({ task: 'update', instruction: 'Change the number.' })] }),
+      completion({ toolCalls: [delegateCall({ task: 'edit', instruction: '' }, 'call-2')] }),
+      completion({ text: 'Which number did you mean?' }),
+    ])
+    const result = await runOmniTurn(baseInput({ command: 'change the number', chat }))
+    expect(result?.outcome).toBe('clarify')
+    expect(result?.repair?.error).toMatch(/instruction must be a non-empty string/)
+    expect(result?.repair?.rawArguments).toContain('"instruction":""')
+  })
+
+  it('unwraps double-encoded tool arguments (llama.cpp delivers a JSON string)', async () => {
+    const doubleEncoded: ToolCallRequest = {
+      id: 'call-double',
+      type: 'function',
+      function: {
+        name: 'delegate_edit',
+        arguments: JSON.stringify(JSON.stringify(VALID_DIRECTIVE_ARGS)),
+      },
+    }
+    const { chat } = fakeChat([completion({ toolCalls: [doubleEncoded] })])
+    const result = await runOmniTurn(baseInput({ chat }))
+    expect(result?.outcome).toBe('delegate')
+    expect(result?.directive?.task).toBe('edit')
   })
 
   it('treats unknown tool names as repairable, then clarify', async () => {
@@ -527,27 +559,32 @@ describe('runOmniTurn — abort', () => {
 
 // --- prompt contract vs E1 failure classes ------------------------------------------------------
 
-describe('OMNI_SYSTEM_PROMPT — the E1 failure classes are addressed head-on', () => {
-  it('(a) task-tag definitions with one-line edit/insert/remove distinctions', () => {
-    expect(OMNI_SYSTEM_PROMPT).toMatch(/edit\s+—\s+change existing content in place/)
-    expect(OMNI_SYSTEM_PROMPT).toMatch(/Updating a value, a table row, a heading.*is edit, not insert/)
-    expect(OMNI_SYSTEM_PROMPT).toMatch(/insert\s+—\s+add new content without replacing/)
-    expect(OMNI_SYSTEM_PROMPT).toMatch(/remove\s+—\s+delete existing content/)
-    expect(OMNI_SYSTEM_PROMPT).toMatch(/Removing a row or a bullet is remove, not edit/)
-    expect(OMNI_SYSTEM_PROMPT).toMatch(/create\s+—\s+author a new document or section skeleton/)
-    expect(OMNI_SYSTEM_PROMPT).toMatch(/extract\s+—\s+pull content from the attached frame/)
+describe('OMNI_SYSTEM_PROMPT — the battery gate run 1 contract', () => {
+  it('(a) the task taxonomy is NOT in the prompt prose (the 2B parroted it into chat); it lives in the tool schema', () => {
+    expect(OMNI_SYSTEM_PROMPT).not.toMatch(/edit\s+—\s+change existing content in place/)
+    expect(OMNI_SYSTEM_PROMPT).not.toMatch(/\*\*Task:\*\*/)
+    const taskDescription = (
+      DELEGATE_EDIT_TOOL.function.parameters.properties as { task: { description: string } }
+    ).task.description
+    expect(taskDescription).toMatch(/edit = change existing content in place/)
   })
 
-  it('(b) the ambiguity rule: ASK, never delegate a guess', () => {
-    expect(OMNI_SYSTEM_PROMPT).toMatch(/Never delegate a guess/)
-    expect(OMNI_SYSTEM_PROMPT).toMatch(/ONE short clarifying question/)
+  it('(b) conversation is the default; a change request is an action, never a chat topic', () => {
+    expect(OMNI_SYSTEM_PROMPT).toMatch(/conversation is the default/)
+    expect(OMNI_SYSTEM_PROMPT).toMatch(/not a conversation topic — it is an action/)
+    expect(OMNI_SYSTEM_PROMPT).toMatch(/do not ask for confirmation/)
   })
 
-  it('(c) brief-not-content, reference resolution, silent machinery, harness_action', () => {
-    expect(OMNI_SYSTEM_PROMPT).toMatch(/a brief, not the content/)
-    expect(OMNI_SYSTEM_PROMPT).toMatch(/Describe the README's sections; never write the README/)
-    expect(OMNI_SYSTEM_PROMPT).toMatch(/resolve references like "the same for Q4"/)
-    expect(OMNI_SYSTEM_PROMPT).toMatch(/Never narrate the machinery/)
-    expect(OMNI_SYSTEM_PROMPT).toMatch(/harness_action with \{"action": "undo"\}/)
+  it('(c) the ambiguity rule: ONE question, only for genuinely ambiguous changes', () => {
+    expect(OMNI_SYSTEM_PROMPT).toMatch(/ONE short clarifying question only when a change request is genuinely ambiguous/)
+    expect(OMNI_SYSTEM_PROMPT).toMatch(/A wrong edit is worse than a question/)
+  })
+
+  it('(d) brief-not-content, verbatim dictation, silent machinery, instant undo', () => {
+    expect(OMNI_SYSTEM_PROMPT).toMatch(/never author the content itself/)
+    expect(OMNI_SYSTEM_PROMPT).toMatch(/put those words in verbatim, character for character/)
+    expect(OMNI_SYSTEM_PROMPT).toMatch(/Never mention this process or its machinery/)
+    expect(OMNI_SYSTEM_PROMPT).toMatch(/Undo and redo are instant, never a discussion/)
+    expect(OMNI_SYSTEM_PROMPT).toMatch(/harness_action/)
   })
 })
