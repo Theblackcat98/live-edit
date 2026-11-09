@@ -2,8 +2,8 @@
  * Synthetic review frame as model-visible pixels.
  *
  * The on-screen slide (SceneSlide) is DOM. The bridge needs real image bytes
- * for LFM3-VL-2B / d1-Omni-2B, so this module renders the same content as
- * SVG and rasterizes it through a canvas.
+ * for the Omni chat turn and the d1-Omni-2B route probe, so this module renders
+ * the same content as SVG and rasterizes it through a canvas.
  *
  * The visual panel registers real camera/screen snapshots here while capture
  * is active; `resolveSceneFrame` prefers them and reports exactly which pixels

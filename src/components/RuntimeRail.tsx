@@ -155,7 +155,7 @@ interface WiringSurface {
   id: string
   label: string
   target: string
-  endpoint: 'omni' | 'vl' | 'd1omni' | null
+  endpoint: 'omni' | 'd1omni' | 'text' | null
   fallback: string
 }
 
@@ -164,7 +164,7 @@ const WIRING_SURFACES: WiringSurface[] = [
   { id: 'chat', label: 'Chat replies', target: 'Omni /v1/chat/completions', endpoint: 'omni', fallback: 'canned templates' },
   { id: 'route', label: 'Routing', target: 'd1-Omni /v1/systemone', endpoint: 'd1omni', fallback: 'local heuristics' },
   { id: 'ground', label: 'Span grounding', target: 'deterministic span search', endpoint: null, fallback: '' },
-  { id: 'worker', label: 'Worker call', target: 'VL /v1/chat/completions', endpoint: 'vl', fallback: 'XML template' },
+  { id: 'worker', label: 'Worker call', target: 'LFM3-1.7B /v1/chat/completions', endpoint: 'text', fallback: 'deterministic template' },
   { id: 'critic', label: 'Critic', target: 'd1-Omni + local gates', endpoint: 'd1omni', fallback: 'local gates only' },
   { id: 'execute', label: 'Execution', target: 'in-tab diff engine', endpoint: null, fallback: '' },
 ]
@@ -179,7 +179,7 @@ function RuntimeWiringCard({
   frameSource?: FrameSource
 }) {
   const [refreshing, setRefreshing] = useState(false)
-  const up = (id: 'omni' | 'vl' | 'd1omni'): boolean =>
+  const up = (id: 'omni' | 'd1omni' | 'text'): boolean =>
     runtimeHealth?.endpoints.some((endpoint) => endpoint.id === id && endpoint.up) ?? false
 
   const handleRefresh = () => {
@@ -261,7 +261,7 @@ function RuntimeWiringCard({
             </span>
           </div>
         ))}
-        {!runtimeHealth && <div className="wiring-muted mono">Probing 127.0.0.1 :8081 · :8083 · :8085…</div>}
+        {!runtimeHealth && <div className="wiring-muted mono">Probing 127.0.0.1 :8080 · :8083 · :8085…</div>}
       </div>
     </section>
   )
@@ -465,7 +465,7 @@ function ContextCard({ usage, trace }: { usage: ContextUsage; trace: Trace | nul
   }> = [
     { id: 'omni', label: 'Omni · rolling', limit: 32000, value: usage.omni, color: 'green' },
     { id: 'd1', label: 'd1 · stateless', limit: 128000, value: usage.d1, color: 'accent' },
-    { id: 'worker', label: 'VL · task', limit: 128000, value: usage.worker, color: 'orange' },
+    { id: 'worker', label: '1.7B · task', limit: 128000, value: usage.worker, color: 'orange' },
   ]
 
   return (

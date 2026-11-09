@@ -8,7 +8,7 @@ Instead of relying on a single monolithic cloud LLM or a brittle pipeline of sep
 
 1. **The Interface (`LiquidAI/LFM3-Omni-2B`):** Listens (16kHz audio), watches (2fps video / native-res images), converses with the user in real-time (24kHz speech + text), and delegates actionable file tasks.
 2. **The Supervisor (`LiquidAI/d1-Omni-2B`):** A zero-output-token multimodal decision model that runs single-forward-pass (~6–12ms) checks over the live audio, visual frame, conversation context, and note state. It constantly guides the worker model by routing tools, extracting exact target text spans/bounding boxes, and validating proposed tool calls before execution.
-3. **The Agentic Worker (`LiquidAI/LFM3-VL-2B` / `LiquidAI/LFM3-1.7B`):** The dedicated tool-caller with `<think>` reasoning and XML `<tool_call>` generation that adds, edits, formats, and removes text in the user's files/notes.
+3. **The Agentic Worker (`LiquidAI/LFM3-1.7B`):** The dedicated tool-caller with `<think>` reasoning and XML `<tool_call>` generation that adds, edits, formats, and removes text in the user's files/notes.
 
 ---
 
@@ -20,13 +20,17 @@ Instead of relying on a single monolithic cloud LLM or a brittle pipeline of sep
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Perceptual Front-End** | `LiquidAI/LFM3-Omni-2B` | 2.17B | 32K | Q4_K_M / MLX 4-bit / FP8 | ~1.5 GB |
 | **Decision Supervisor** | `LiquidAI/d1-Omni-2B` | 2.17B | 128K | BF16 / Q8_0 (for calibration accuracy) | ~2.3 GB |
-| **Visual/Text Worker** | `LiquidAI/LFM3-1.7B` *(Primary)*<br>`LiquidAI/LFM3-VL-2B` *(Visual ROI + fallback)* | 1.73B<br>1.92B | 256K<br>128K | Q4_K_M / JANG_6M / MLX 4-bit | ~1.3 GB |
+| **Text Worker** | `LiquidAI/LFM3-1.7B` | 1.73B | 256K | Q4_K_M / JANG_6M / MLX 4-bit | ~1.3 GB |
 
-* **Total Concurrent Memory Footprint:** ~5.1 GB to 6.5 GB (runs fully locally on Apple Silicon Macs with 16GB+ Unified Memory, consumer GPUs with 8GB+ VRAM, or Intel/AMD AI PCs).
+* **Total Concurrent Memory Footprint:** ~5.1 GB for the three-model trinity (runs fully locally on Apple Silicon Macs with 16GB+ Unified Memory, consumer GPUs with 8GB+ VRAM, or Intel/AMD AI PCs).
 * **Why `d1-Omni-2B` is kept at higher precision (Q8/BF16):** Decision models output calibrated probabilities in a single forward pass; preserving precision ensures probability calibration (`P(intent)`, span boundaries) remains sharp.
-* **Worker Selection Policy:** *(updated by the 1.7B-default swap, commit 345a042)*
-  * **Default Mode (`LFM3-1.7B`, :8080):** Decodes every text mutation (`add_text`, `edit_text`, `remove_text`) over its 256K context — its Agentic RL post-training closes the XML tool-call contract reliably. Decodes ~7–14 s at a 3000-token budget; two malformed attempts fall back further.
-  * **Visual Mode (`LFM3-VL-2B`, :8081, optional):** `extract_visual_to_note` (ROI crops need image input) and the worker fallback when the 1.7B is down. Must decode with `chat_template_kwargs: {"enable_thinking": false}` — under the servers' `--reasoning on` default the 2B never closes its `<think>` block at any budget.
+* **Worker Selection Policy:** *(VL-2B removed 2026-11-08 — Omni + 1.7B + d1 are sufficient)*
+  * **`LFM3-1.7B`, :8080** decodes every text mutation (`add_text`, `edit_text`, `remove_text`)
+    over its 256K context — its Agentic RL post-training closes the XML tool-call contract
+    reliably. Decodes ~7–14 s at a 3000-token budget; two malformed attempts, or a down server,
+    fall back to the deterministic template emitter.
+  * `extract_visual_to_note` needs no live worker: the deterministic emitter produces the
+    structured Markdown (QA case 9 verifies green with :8081 absent).
 
 ---
 
@@ -59,7 +63,7 @@ Instead of relying on a single monolithic cloud LLM or a brittle pipeline of sep
        |     (Spoken confirmation)             |     Target Spans + BBoxes     |     <tool_call>
        |                                       v                               |
        |                          +--------------------------------------------+----+
-       |                          |      WORKER: LFM3-VL-2B / LFM3-1.7B             |
+|      WORKER: LFM3-1.7B                           |
        |                          |  • Reasons step-by-step inside <think>...</think>|
        |                          |  • Generates XML <tool_call><function=...>      |
        |                          +--------------------+----------------------------+
@@ -75,7 +79,7 @@ Instead of relying on a single monolithic cloud LLM or a brittle pipeline of sep
 
 ---
 
-## 4. Deep Dive: How `d1-Omni-2B` Constantly Helps the Worker (`LFM3-1.7B` / `LFM3-VL-2B`)
+## 4. Deep Dive: How `d1-Omni-2B` Constantly Helps the Worker (`LFM3-1.7B`)
 
 Small 1.7B–2B models can occasionally hallucinate tool parameters, pick the wrong edit operation (`add` vs `replace`), or misidentify which paragraph the user wants to change. **`d1-Omni-2B`** eliminates these failure modes via three millisecond-level interventions:
 
@@ -95,11 +99,11 @@ Before the worker model generates a single token, `d1-Omni-2B` uses its typed ou
 
 1. **Text Span Extraction:** Given the active note text and the user's spoken instruction (e.g., *"Change the deadline in the second paragraph to Friday"* or *"Remove the bullet point about Redis"*), `d1-Omni-2B` extracts the **exact character/line span** (`start_char`, `end_char`, `matched_substring`) from the file.
 2. **Visual Bounding Box Extraction:** If the user references the camera/screen (e.g., *"Grab the formula in the top right of this slide and add it under section 2"*), `d1-Omni-2B` returns the open-vocabulary bounding box `[x1, y1, x2, y2]` with calibrated confidence.
-3. **Prompt Injection:** The orchestrator crops the high-res image region (if visual) and highlights the exact target line numbers/span in the prompt sent to `LFM3-VL-2B` / `LFM3-1.7B`. The worker no longer has to guess *where* to edit.
+3. **Prompt Injection:** The orchestrator crops the high-res image region (if visual) and highlights the exact target line numbers/span in the prompt sent to `LFM3-1.7B`. The worker no longer has to guess *where* to edit.
 
 ### Stage C: Post-Generation Critic & Parameter Verification (~6ms)
 
-Once `LFM3-1.7B` / `LFM3-VL-2B` outputs its `<think>` block and `<tool_call>`, the orchestrator intercepts the call **before** mutating the file and runs a single forward pass on `d1-Omni-2B`:
+Once `LFM3-1.7B` outputs its `<think>` block and `<tool_call>`, the orchestrator intercepts the call **before** mutating the file and runs a single forward pass on `d1-Omni-2B`:
 
 * **State Input:** `[User Audio Clip] + [Target Span] + [Proposed XML Tool Call]`
 * **Typed Questions:**
@@ -145,7 +149,7 @@ All file tools operate on line-indexed or span-verified views of the target Mark
      * `end_line` *(integer, required)*
      * `target_excerpt` *(string, required)*: Confirmation snippet of the text to be removed.
 
-4. **`extract_visual_to_note`** *(Specific to `LFM3-VL-2B`)*
+4. **`extract_visual_to_note`** *(deterministic emitter; VL-2B removed 2026-11-08)*
    * **Description:** Transcribes, summarizes, or converts a visual element (chart, table, whiteboard, handwritten note) into structured Markdown (e.g., Mermaid diagram, Markdown table, LaTeX math) and inserts it into the note.
    * **Parameters:**
      * `file_path` *(string, required)*
@@ -199,7 +203,7 @@ Because each LFM3 model has a different context window and modality contract, th
    * Constructed fresh on each decision pass: `[Last 15s Audio Clip] + [Current Keyframe] + [Last 3 Conversation Turns] + [Full Active Note Text (up to 64K tokens for optimal calibration)]`.
    * Because `d1-Omni-2B` generates **zero output tokens**, prefix caching on the active note text allows subsequent decision passes to execute in single-digit milliseconds.
 
-3. **`LFM3-VL-2B` / `LFM3-1.7B` Context (128K / 256K Limit — Worker Task Window):**
+3. **`LFM3-1.7B` Context (256K Limit — Worker Task Window):**
    * Receives: `[System Prompt + Pruned Tool Schemas] + [Supervisor Grounding Hints (Target Span, BBox Crop, Intent Probability)] + [Line-Numbered Note Content] + [Task Instruction]`.
    * Generation parameters: `temperature=0.1, top_k=50, repetition_penalty=1.1` (Liquid AI's official recommended settings for deterministic tool calling).
 
@@ -247,7 +251,7 @@ Because each LFM3 model has a different context window and modality contract, th
 | **User is just thinking out loud / coughing / talking to someone else** | `d1-Omni-2B` evaluates raw audio + visual state in one pass and classifies `action_required = "conversational_only"` (or `"ignore"`), preventing false-positive file edits. |
 | **User gives an ambiguous command (*"Delete that part"*)** | `d1-Omni-2B`'s span extraction returns low confidence / multiple competing spans. The orchestrator blocks the worker and prompts `LFM3-Omni-2B` to ask: *"Did you mean the first bullet point or the whole section?"* |
 | **The worker hallucinates line numbers or overwrites adjacent text** | `d1-Omni-2B` Stage B provides exact `old_text_anchor` spans beforehand, and Stage C Critic compares the proposed edit span against the extracted span, rejecting mismatches in ~6ms before the file is touched. |
-| **Note grows too large (>32K tokens) for `LFM3-Omni-2B`** | `LFM3-Omni-2B` never holds the full file—only a ~1K-token ToC/summary. `d1-Omni-2B` (128K context) and `LFM3-VL-2B` (128K) / `LFM3-1.7B` (256K) handle the full document state. |
+| **Note grows too large (>32K tokens) for `LFM3-Omni-2B`** | `LFM3-Omni-2B` never holds the full file—only a ~1K-token ToC/summary. `d1-Omni-2B` (128K context) and `LFM3-1.7B` (256K) handle the full document state. |
 | **License Compliance** | All models run under the **LFM Open License v1.0** (free commercial use under $10M annual revenue; verify organizational revenue thresholds prior to commercial redistribution). |
 
 ---
@@ -283,7 +287,9 @@ trinity — started with `scripts/start-models.sh` (idempotent; `scripts/stop-mo
 - **LFM3-Omni-2B :8083** — chat (streamed), ASR, TTS.
 - **d1-Omni-2B :8085** — typed routing + critic decisions over `/v1/systemone`.
 - **LFM3-1.7B :8080** — worker XML tool calls (primary worker).
-- **LFM3-VL-2B :8081 (optional)** — visual ROI crops; worker fallback when the 1.7B is down.
+- *(2026-11-08)* `LFM3-VL-2B` (:8081) removed from the runtime: no probe, no worker path —
+  deterministic extraction covers `extract_visual_to_note`, and probing an absent optional
+  server failed the QA console gate (case 1b).
 
 Every caller is live-first with a local deterministic fallback (regex router, keyword grounding,
 template worker emitter, canned conversational replies); the trace records which path ran, and the
@@ -310,8 +316,7 @@ npm install
 npm run dev       # http://localhost:5173
 npm run build
 npm run typecheck
-npm run qa        # 31-case CDP battery — needs the dev server + trinity up
-                  # (scripts/start-models.sh; VL :8081 via lfm3.sh vl, or 1b logs probe noise)
+npm run qa        # 31-case CDP battery — needs the dev server + trinity up (scripts/start-models.sh)
 ```
 
 ## 9.5 Known scope limits
@@ -351,6 +356,8 @@ npm run qa        # 31-case CDP battery — needs the dev server + trinity up
 - [x] §10 MVP hardening (2026-11-08): d1 tool choice honored + thresholds unified (WS1), Omni
       chat contract + output sanitizer (WS2), natural-phrasing document creation (WS3), QA
       cases 12d/12e + chat hygiene (WS4) — battery green 31/31.
+- [x] VL-2B removed from the runtime (2026-11-08): no :8081 probe or worker path; extraction is
+      deterministic — battery green 31/31 with :8081 absent.
 - [ ] Domain LoRA fine-tuning on rejected traces (§7 Phase 5; the data export already lands).
 
 ## 9.7 Live test pass (2026-11-08)

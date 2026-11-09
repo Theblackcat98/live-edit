@@ -451,10 +451,9 @@ function liveWorkerCall(
   usageOutputTokens: number,
   plan: SupervisorPlan,
   note: string,
-  modelLabel: string,
 ): WorkerCall {
   const promptHints: string[] = [
-    `Decoded by ${modelLabel} · ${(ms / 1000).toFixed(1)}s · ${usagePromptTokens} prompt tokens`,
+    `Decoded by LFM3-1.7B · ${(ms / 1000).toFixed(1)}s · ${usagePromptTokens} prompt tokens`,
   ]
   if (plan.span) {
     promptHints.push(
@@ -1444,20 +1443,18 @@ export function useWorkspace(): WorkspaceApi {
       }
 
       const templateCall = buildWorkerCall(command, effectiveRoute, plan, noteAtStart)
-      // Worker selection: LFM3-1.7B (256K ctx) is the tool-call worker for
-      // every text mutation. Visual ROI extraction stays on VL-2B (image
-      // input); a down 1.7B falls back to VL, then to the deterministic
-      // template — a run never fails on worker availability alone.
+      // Worker selection: LFM3-1.7B (256K ctx) decodes every text mutation; a
+      // down 1.7B falls back to the deterministic template, so a run never
+      // fails on worker availability alone. Visual extraction never calls a
+      // model: the supervisor's deterministic extractor already carries the
+      // Markdown, so there the template call IS the call.
       const wantsText = effectiveRoute.primaryTool !== 'extract_visual_to_note'
-      const workerEndpoint: 'vl' | 'text' =
-        wantsText && endpointUp(healthRef.current, 'text')
-          ? 'text'
-          : 'vl'
+      const textWorkerUp = wantsText && endpointUp(healthRef.current, 'text')
       const delegation = {
         runId: traceLocal.id,
         tool: effectiveRoute.primaryTool,
         status: 'generating' as const,
-        modelLabel: workerEndpoint === 'text' ? '1.7B' : undefined,
+        modelLabel: wantsText ? '1.7B' : 'local',
         thought:
           templateCall?.thought ??
           'The worker is decoding the grounded hints into one XML tool call.',
@@ -1472,43 +1469,22 @@ export function useWorkspace(): WorkspaceApi {
       setStageStates({ A: 'done', B: 'done', C: 'idle' })
       setFlowModel('worker')
 
-      // Live path: the selected worker emits the XML tool call over
-      // /v1/chat/completions (1.7B for text, VL-2B for visual ROI), with the
-      // ROI crop attached for visual extraction. Fallback: template.
+      // Live path: the 1.7B emits the XML tool call over /v1/chat/completions.
+      // Fallback: the deterministic template.
       let call: WorkerCall | null = null
-      if (endpointUp(healthRef.current, workerEndpoint)) {
+      if (textWorkerUp) {
         try {
-          const frame =
-            effectiveRoute.primaryTool === 'extract_visual_to_note'
-              ? await resolveSceneFrame(plan.bbox?.region ?? 'full').catch(() => null)
-              : null
-          if (frame) traceLocal.frameSource = frame.source
-          const messages = buildWorkerMessages(
-            command,
-            effectiveRoute,
-            plan,
-            noteAtStart,
-            frame?.dataUrl ?? null,
-          )
-          // The 1.7B worker reasons at length before closing its <think>
-          // block (~2K tokens on the windowed prompt); a 900-token budget
-          // truncated it mid-think, so give it room and one spare attempt
-          // before falling back to VL / template.
-          //
-          // VL decodes with thinking off: the server runs --reasoning on, and
-          // the template default made the 2B spend the whole budget inside an
-          // unclosed  thinking block (finish_reason "length", empty content at
-          // 700 and at 3000 tokens). Thinking off emits the XML contract in
-          // ~78 tokens at the same 0.1 / 700.
-          const attempts: ChatOptions[] =
-            workerEndpoint === 'text'
-              ? [
-                  { temperature: 0.3, maxTokens: 3000 },
-                  { temperature: 0.4, maxTokens: 3000 },
-                ]
-              : [{ temperature: 0.1, maxTokens: 700, enableThinking: false }]
+          const messages = buildWorkerMessages(command, effectiveRoute, plan, noteAtStart)
+          // The 1.7B reasons at length before closing its  thinking block
+          // (~2K tokens on the windowed prompt); a 900-token budget truncated
+          // it mid-think, so give it room and one spare attempt before falling
+          // back to the deterministic template.
+          const attempts: ChatOptions[] = [
+            { temperature: 0.3, maxTokens: 3000 },
+            { temperature: 0.4, maxTokens: 3000 },
+          ]
           for (const options of attempts) {
-            const completion = await chatComplete(workerEndpoint, messages, options)
+            const completion = await chatComplete('text', messages, options)
             const rawText = completion.text
             const xmlInput = /<think>/.test(rawText)
               ? rawText
@@ -1545,10 +1521,8 @@ export function useWorkspace(): WorkspaceApi {
                 completion.usage.outputTokens,
                 plan,
                 noteAtStart,
-                workerEndpoint === 'text' ? 'LFM3-1.7B' : 'LFM3-VL-2B',
               )
               runtime.worker = 'live'
-              traceLocal.workerModel = workerEndpoint
               traceLocal.timings.generate = completion.ms
               traceLocal.outputTokens = call.rawTokens
               if (completion.usage.promptTokens) {
@@ -1559,7 +1533,7 @@ export function useWorkspace(): WorkspaceApi {
                 delegation: {
                   ...delegation,
                   thought: call.thought,
-                  modelLabel: workerEndpoint === 'text' ? '1.7B' : undefined,
+                  modelLabel: '1.7B',
                 },
               })
               break

@@ -430,7 +430,7 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, on
               title="Worker generation"
               caption={
                 trace.runtime?.worker === 'live'
-                  ? `${trace.workerModel === 'text' ? 'LFM3-1.7B' : 'LFM3-VL-2B'} · live decode`
+                  ? 'LFM3-1.7B · live decode'
                   : 'template fallback'
               }
             >

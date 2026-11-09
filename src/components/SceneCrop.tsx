@@ -85,7 +85,7 @@ export function SceneCropCard({ label, region, confidence }: SceneCropCardProps)
         <div className="roi-crop-footer">
           <span className="mono">{label}</span>
           <span className="roi-crop-arrow">
-            <Sparkles size={9} /> VL
+            <Sparkles size={9} /> local
           </span>
         </div>
       </div>

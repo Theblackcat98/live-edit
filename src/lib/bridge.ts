@@ -8,8 +8,9 @@
  *   LFM3-1.7B      :8080  worker XML tool calls (text mutations, 256K ctx)
  *   d1-Omni-2B     :8085  routing / critic decisions (/v1/systemone)
  *
- * LFM3-VL-2B :8081 stays optional: visual ROI crops, and the worker
- * fallback when the 1.7B is down.
+ * LFM3-VL-2B (:8081) was removed from the runtime in 2026-11-08: the 1.7B plus
+ * the deterministic emitter cover every tool, and probing an optional fourth
+ * server left a permanent connection-refused error in the console.
  *
  * Every caller is live-first: on failure it falls back to the local
  * deterministic layer and the trace records which path ran.
@@ -28,7 +29,6 @@ export interface EndpointSpec {
 
 export const ENDPOINTS: EndpointSpec[] = [
   { id: 'omni', name: 'LFM3-Omni-2B', role: 'Interface · chat + ASR + TTS', port: 8083, alias: 'lfm3-omni-2b' },
-  { id: 'vl', name: 'LFM3-VL-2B', role: 'Worker · fallback · visual ROI', port: 8081, alias: 'lfm3-vl-2b' },
   { id: 'd1omni', name: 'd1-Omni-2B', role: 'Supervisor · route/critic', port: 8085, alias: 'd1-omni-2b' },
   { id: 'text', name: 'LFM3-1.7B', role: 'Worker · tool calls', port: 8080, alias: 'lfm3-1.7b' },
 ]
@@ -137,7 +137,7 @@ function usageOf(payload: unknown): TokenUsage {
   }
 }
 
-// --- chat completions (Omni + VL) --------------------------------------------
+// --- chat completions (Omni) --------------------------------------------------
 
 export type ChatContent =
   | string
@@ -162,24 +162,11 @@ export interface ChatOptions {
   temperature?: number
   maxTokens?: number
   stop?: string[]
-  /**
-   * Passed to the model's chat template as `chat_template_kwargs.enable_thinking`.
-   * The LFM3 servers run with `--reasoning on`, so the template thinks by default;
-   * tool-call turns must ask for it off or the whole budget goes to reasoning.
-   * Omitted entirely when undefined — the server default applies.
-   */
-  enableThinking?: boolean
 }
 
 export interface ChatStreamOptions extends ChatOptions {
   signal?: AbortSignal
   onToken?: (delta: string) => void
-}
-
-function thinkingPayload(options: ChatOptions): Record<string, unknown> {
-  return options.enableThinking === undefined
-    ? {}
-    : { chat_template_kwargs: { enable_thinking: options.enableThinking } }
 }
 
 function readCompletionChoice(payload: unknown): { text: string; reasoning: string } {
@@ -218,7 +205,6 @@ export async function chatComplete(
       temperature: options.temperature ?? 0.1,
       max_tokens: options.maxTokens ?? 700,
       ...(options.stop?.length ? { stop: options.stop } : {}),
-      ...thinkingPayload(options),
       stream: false,
     }),
   })
@@ -262,7 +248,6 @@ export async function chatCompleteStream(
         temperature: options.temperature ?? 0.1,
         max_tokens: options.maxTokens ?? 700,
         ...(options.stop?.length ? { stop: options.stop } : {}),
-        ...thinkingPayload(options),
         stream: true,
       }),
       signal,

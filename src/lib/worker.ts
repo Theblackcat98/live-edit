@@ -44,7 +44,6 @@ export function buildWorkerMessages(
   route: RouteDecision,
   plan: SupervisorPlan,
   note: string,
-  imageDataUrl?: string | null,
 ): ChatMessage[] {
   const schemas = TOOL_DEFS.filter((tool) => tool.name === route.primaryTool)
     .map((tool) => {
@@ -67,17 +66,11 @@ export function buildWorkerMessages(
   if (plan.addPosition) {
     hints.push(`Insertion: position=${plan.addPosition}${plan.addAnchor ? ` anchor=${plan.addAnchor}` : ''}`)
   }
-  if (plan.bbox) {
-    hints.push(`ROI crop attached: ${plan.bbox.label} · confidence ${plan.bbox.confidence.toFixed(2)}`)
-  }
   if (plan.newText) {
     hints.push(`Supervisor-proposed replacement: "${plan.newText}"`)
   }
   if (plan.addContent) {
     hints.push(`Supervisor-proposed content (insert verbatim):\n${plan.addContent}`)
-  }
-  if (plan.extractedMarkdown) {
-    hints.push('Read the attached ROI crop and extract its content as Markdown.')
   }
 
   const userText = [
@@ -92,12 +85,7 @@ export function buildWorkerMessages(
     .filter(Boolean)
     .join('\n')
 
-  const content: ChatMessage['content'] = imageDataUrl
-    ? [
-        { type: 'text', text: userText },
-        { type: 'image_url', image_url: { url: imageDataUrl } },
-      ]
-    : userText
+  const content = userText
   return [
     { role: 'system', content: WORKER_SYSTEM_PROMPT },
     { role: 'user', content },

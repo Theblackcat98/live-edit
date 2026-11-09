@@ -186,8 +186,6 @@ export interface Trace {
   promptTokens: number
   noteTokensAtStart: number
   workerNoteView: string
-  /** Which model decoded the worker XML when live: 1.7B default, VL-2B for visual ROI / fallback. */
-  workerModel?: 'vl' | 'text'
   runtime?: TraceRuntime
   frameSource?: FrameSource
 }
@@ -267,7 +265,7 @@ export interface TraceRuntime {
   asr?: RuntimeSource
   /** Route decision: d1-Omni /v1/systemone, or local heuristics. */
   route: RuntimeSource
-  /** Worker XML: LFM3-1.7B / LFM3-VL-2B /v1/chat/completions, or the template emitter. */
+  /** Worker XML: LFM3-1.7B /v1/chat/completions, or the template emitter. */
   worker: RuntimeSource
   /** Critic verdict: d1-Omni semantic pass + local checks, or local checks only. */
   critic: RuntimeSource
@@ -276,7 +274,7 @@ export interface TraceRuntime {
 }
 
 export interface EndpointHealth {
-  id: 'omni' | 'vl' | 'd1omni' | 'text'
+  id: 'omni' | 'd1omni' | 'text'
   name: string
   role: string
   port: number

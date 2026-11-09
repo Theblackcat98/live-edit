@@ -14,7 +14,7 @@ const STAGE_LABEL: Record<PipelineStage, string> = {
   idle: 'Ready',
   routing: 'd1 · routing intent',
   grounding: 'd1 · grounding span',
-  generating: 'VL · generating call',
+  generating: '1.7B · generating call',
   verifying: 'd1 · critic pass',
   executing: 'Engine · applying diff',
   complete: 'Committed',

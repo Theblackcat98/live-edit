@@ -2,7 +2,7 @@
 
 A local-first multimodal note workspace built around the LFM3 model trinity — **Omni 2B** for the live
 conversation, **d1-Omni-2B** as a zero-output-token supervisor, and **LFM3-1.7B** as the tool-calling
-worker (with optional **LFM3-VL-2B** for visual extraction).
+worker.
 
 Talk, show a slide, and watch the note change. Every edit is routed, grounded to an exact line span,
 generated as XML, verified by the critic, and then applied atomically to a snapshot stack.
@@ -46,8 +46,8 @@ The app talks to **real local LFM3 servers** (llama.cpp, started by this repo's
 - **Routing** — `d1-Omni-2B` classifies every command (action + tool) over
   `/v1/systemone` in one zero-output-token forward pass, watching the slide.
 - **Worker** — `LFM3-1.7B` decodes every text-mutation XML tool call live; the
-  parser round-trips its output. `LFM3-VL-2B` (optional) handles visual ROI
-  crops for `extract_visual_to_note` and is the fallback when the 1.7B is down.
+  parser round-trips its output. `extract_visual_to_note` is deterministic —
+  no vision worker needed (VL-2B was removed from the runtime).
 - **Critic** — deterministic local gates (anchor exactness, blast radius, range
   bounds) are hard checks; when they pass, `d1-Omni-2B` adds a semantic
   zero-token verdict.
@@ -55,8 +55,8 @@ The app talks to **real local LFM3 servers** (llama.cpp, started by this repo's
   numbers, headings, keywords); **execution** is the real in-tab diff engine
   with anchor checks and undo/redo.
 
-The **Runtime truth** card in the supervisor rail continuously probes every
-endpoint (10 s cadence, refresh button) and labels each surface LIVE,
+The **Runtime truth** card in the supervisor rail continuously probes the three
+endpoints (10 s cadence, refresh button) and labels each surface LIVE,
 FALLBACK or ENGINE. The decision trace records which path each stage took per
 run. If a model server is down, the affected stage falls back to a local
 deterministic layer and the UI says so — nothing silently fakes a model call.
@@ -122,8 +122,7 @@ their own snapshots.
   reloads (localStorage).
 - The synthetic visual scene is a fixed prop: revenue table, north-star formula, quarterly bars and a
   finance sticky note.
-- The runtime rail shows the active worker: `LFM3-1.7B` primary, with `LFM3-VL-2B` as the optional
-  visual fallback.
+- The runtime rail shows the active worker (`LFM3-1.7B`) and each endpoint's live/fallback state.
 - Below 820px the layout collapses to the note workspace. The Markdown editor remains usable, but
   the live session, command bar and runtime rail are desktop/tablet affordances in this build.
 
@@ -145,11 +144,11 @@ headless Chrome (CDP-driven) against the running trinity servers:
   deterministic path.
 
 On 2026-11-08 the QA battery (`npm run qa`, 31 cases after the §10 hardening pass) ran fully
-green — 31/31 PASS, zero console errors, zero page exceptions — against the live trinity
-including the optional VL-2B (`:8081`). It covers natural-phrasing template creation ("The
-document is empty now, begin by writing a readme template .md doc"), chat-hygiene (no
-`<tool_call>`/`<function=` leakage in replies), blast-radius rejection, undo/redo, persistence
-and spoken-style phrasing.
+green — 31/31 PASS, zero console errors, zero page exceptions — over the three-server trinity
+(Omni :8083, d1-Omni :8085, LFM3-1.7B :8080), re-validated after VL-2B's removal from the
+runtime. It covers natural-phrasing template creation ("The document is empty now, begin by
+writing a readme template .md doc"), chat-hygiene (no `<tool_call>`/`<function=` leakage in
+replies), blast-radius rejection, undo/redo, persistence and spoken-style phrasing.
 
 See [`plan.md`](./plan.md) for the full product and architecture plan.
 

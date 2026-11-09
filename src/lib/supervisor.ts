@@ -307,7 +307,7 @@ export function routeCommand(command: string): RouteDecision {
         { name: 'add_text', p: 0.11 },
       ],
       primaryTool: 'extract_visual_to_note',
-      reason: 'Visual reference plus extraction verb. The VL worker is the right target.',
+      reason: 'Visual reference plus extraction verb. The deterministic visual extractor builds the call.',
     }
   }
 
