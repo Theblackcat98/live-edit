@@ -196,6 +196,51 @@ the decision log (§11). **No pipeline code changes until E1–E3 report.**
   (catalog stays small: 4 tools), not context-side (do not re-shrink the
   note window; that was a shipped defect).
 
+### Spike results (2026-11-09) — recorded; P0 complete
+
+Raw data, scripts, and full method notes: [`docs/spikes/`](./spikes/).
+Headlines:
+
+- **E1 (stop-gate): FIRED.** Native tool calls: 13/20 valid vs the ≥18/20 bar
+  — but emission itself was 11/11 schema-valid with zero repairs and zero
+  destructive wrong-outcomes; the entire gap is directive *semantics*
+  (task-tag selection on 4 turns, ambiguity→delegate-a-guess on 2,
+  brief-vs-content drift on create). Delimited block: 8/20, with invented
+  delimiters and 1 destructive wrong-outcome — the mechanism loses outright.
+  Per §4's rule, both mechanisms below bar means **stop and re-open the
+  design**; the localized evidence narrows what the re-open must weigh (the
+  task taxonomy's fit for a 2B, the ambiguity disposition, §5's
+  brief-not-content bar). Cross-cutting discovery: the 2B few-shot-copies any
+  harness-authored string in the assistant channel — a constraint on every
+  prompt fix and on the app's canned-text habits alike.
+- **E2: config chosen** — native tools, temperature 0.3, max_tokens 700 (one
+  measured truncation at 500, on a create-directive), keep the 3,600-char note
+  cap (honest no-op: the seed note is 1,312 chars, so cap/full were
+  byte-identical — the dimension is untested for longer notes), **remove
+  `--reasoning off`** (verified no-op via /props + 113 completions with zero
+  reasoning content), keep `--jinja`. The failure set is temperature-invariant
+  (all five healthy configs fail the same five turns); temperature 0 uniquely
+  collapsed (8 consecutive HTTP 500s after one truncation). Mechanism finding:
+  a server-side tool-parse 500 never returns the raw call to the client, so
+  §5's append-the-error repair cannot apply there — omni.ts must treat it as
+  its own error class.
+- **E3: PASS.** A separating threshold exists: **approve iff noul ≥ 0.50 AND
+  `destructive_safety` = safe** — §7's starting value survives calibration.
+  Feasible interval [0.40, 0.59]; 10/10 good fixtures approved on every run,
+  4/4 destructive never approved; this d1 build is deterministic (48/48 runs
+  bit-identical, zero output tokens). Exact question wording is recorded in
+  the spike doc; bake verbatim into `d1check.ts` in P4.
+- **E4 (no stop-gate defined; informational): below bar** — 41.7% (5/12)
+  first-try fully valid vs ≥85%; 50% after the one-retry policy. The failure
+  taxonomy is mechanical, not conceptual: output-budget truncation inside
+  thinking (4 attempts hit the 3,000-token cap), an `edit_text` shell carrying
+  `add_text`'s parameter vocabulary (tool-schema confusion), remove-as-empty-
+  edit, and anchor near-miss (the one class the retry fixes). Grounding and
+  the §13.2 context-packet bet held (follow-up F10 fully valid first-try;
+  README content authored with real sections, quality samples recorded).
+  Latency median 9.5 s — inside today's 7–14 s envelope. These are P3
+  prompt/budget levers, recorded for that phase's `buildWorkerMessages`.
+
 ## 5. Phase 1 — Contracts and extraction (no behaviour change)
 
 **Goal:** the type layer and module boundaries of §3 exist, the old pipeline
@@ -515,10 +560,10 @@ gone. (Pre-merge soak on the branch is the mitigation.)
 
 | # | Decision | Status |
 | :-- | :-- | :-- |
-| D1 | Unit-test route for pure modules: `vitest` devDependency (planned) vs. `scripts/logic-check.mjs` harness | Open — P1 (§5.5) |
+| D1 | Unit-test route for pure modules: `vitest` devDependency (planned) vs. `scripts/logic-check.mjs` harness | Decided 2026-11-09 — vitest is already on `main` with a green harness (commit 7c1ea3d); use it |
 | D2 | `frame_extract` field added to the directive schema for `extract` tasks (worker is text-only; Omni reads the frame) | Decided in this plan (§7.5); mirror into design.md §5 at P3 |
 | D3 | Pending edits persist across reloads; storage schema v2 with v1 migration | Decided in this plan (§9.2); answers design.md Q5 |
-| D4 | E1 mechanism (native tool call vs. structured block), E2 Omni config, E3 thresholds | Open — P0 spikes fill these in |
+| D4 | E1 mechanism (native tool call vs. structured block), E2 Omni config, E3 thresholds | Filled by the P0 spikes (§4 results): **E1 stop-gate FIRED** — native wins emission (11/11 schema-valid, 0 repairs) but both mechanisms sit below the 18/20 bar (13/20, 8/20); design re-open pending. E2: native tools, temp 0.3, max_tokens 700, note cap 3,600 kept, `--reasoning off` removed (verified no-op). E3: noul ≥ 0.50 AND `safe` (interval [0.40, 0.59]). E4: 41.7% vs ≥85% — mechanical taxonomy recorded as P3 levers |
 | D5 | The flag is removed in P6, not kept as a permanent dual pipeline | Decided — a permanent dual pipeline is how the shipped build's inconsistencies happened |
 
 ## 15. Definition of done
