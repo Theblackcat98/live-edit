@@ -279,3 +279,235 @@
     color: inherit;
   }
 }
+
+/* ── Phone command surface ────────────────────────────────────────────────
+   ≤780px is where the workspace already collapses to the note column. The
+   phone surface promotes the live session, note and runtime rail into tabs
+   and pins one command bar (mic + input + send) to the bottom of the frame,
+   so a phone can speak or type a command from any tab. */
+
+.phone-tabs {
+  display: none;
+}
+
+@media (max-width: 780px) {
+  .shell[data-phone-view] {
+    height: 100dvh;
+    min-height: 100dvh;
+    overflow: hidden;
+    grid-template-rows: var(--topbar-height) minmax(0, 1fr);
+  }
+
+  .workspace-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 8px;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .phone-tabs {
+    grid-row: 1;
+    display: flex;
+    gap: 2px;
+    padding: 3px;
+    border-radius: var(--radius-card);
+    background: var(--inset);
+    box-shadow: 0 0 0 1px var(--line);
+  }
+
+  .phone-tab {
+    flex: 1;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border-radius: var(--radius-control);
+    color: var(--ink-3);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    transition:
+      background-color 140ms var(--ease-out-strong),
+      color 140ms var(--ease-out-strong),
+      box-shadow 140ms var(--ease-out-strong);
+  }
+
+  .phone-tab svg {
+    color: var(--ink-3);
+  }
+
+  .phone-tab.is-active {
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: 0 0 0 1px var(--line), var(--shadow-xs);
+  }
+
+  .phone-tab.is-active svg {
+    color: var(--ink);
+  }
+
+  .phone-tab-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 9999px;
+    background: var(--accent);
+    flex-shrink: 0;
+  }
+
+  .workspace-grid > .column {
+    display: none;
+  }
+
+  .shell[data-phone-view='session'] .workspace-grid > .left-column,
+  .shell[data-phone-view='note'] .workspace-grid > .center-column,
+  .shell[data-phone-view='runtime'] .workspace-grid > .right-column {
+    display: flex;
+    grid-row: 2;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .left-column .visual-card {
+    display: none;
+  }
+
+  .session-card,
+  .note-card {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .phone-composer {
+    grid-row: 3;
+    min-width: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  /* Touch-sized chrome */
+  .topbar .icon-button {
+    width: 44px;
+    height: 44px;
+  }
+
+  .topbar .brand-tag {
+    display: none;
+  }
+
+  .session-header {
+    gap: 6px;
+    padding: 5px 8px;
+  }
+
+  .session-header .card-title {
+    font-size: 12px;
+  }
+
+  .session-demo {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    gap: 0;
+    font-size: 0;
+  }
+
+  .session-demo svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .session-transcript {
+    padding: 2px 10px 8px;
+  }
+
+  .session-compose {
+    padding: 8px 10px;
+  }
+
+  .session-compose .composer-hint {
+    display: none;
+  }
+
+  .suggestion-row {
+    padding-bottom: 0;
+  }
+
+  .suggestion-chip {
+    height: 44px;
+    padding: 0 10px;
+    font-size: 11px;
+  }
+
+  .phone-composer .composer {
+    height: 56px;
+    padding: 6px;
+    gap: 6px;
+  }
+
+  .composer-mic,
+  .composer-send {
+    width: 44px;
+    height: 44px;
+  }
+
+  .composer-input {
+    height: 44px;
+    font-size: 16px;
+  }
+
+  /* The note header folds into two rows so every control stays thumb-sized. */
+  .note-header {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 10px;
+    min-height: 0;
+  }
+
+  .note-identity {
+    flex: 1;
+  }
+
+  .note-title-line h2 {
+    max-width: none;
+  }
+
+  .note-header-actions {
+    width: 100%;
+    margin-left: 0;
+    gap: 4px;
+    justify-content: flex-end;
+  }
+
+  .note-header-actions > .icon-button,
+  .note-history-buttons .icon-button,
+  .note-trace-button {
+    width: 44px;
+    height: 44px;
+  }
+
+  .view-tab {
+    min-width: 44px;
+    height: 44px;
+    padding: 0 8px;
+    justify-content: center;
+  }
+
+  .note-tray {
+    padding: 10px 8px 8px;
+  }
+
+  .note-tray.is-source {
+    padding: 8px;
+  }
+
+  .right-column {
+    gap: 8px;
+    padding-right: 2px;
+  }
+
+  .toast {
+    bottom: 12px;
+  }
+}

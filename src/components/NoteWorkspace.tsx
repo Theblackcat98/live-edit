@@ -238,7 +238,7 @@ export function NoteWorkspace({
             onReload={handleReload}
           />
         ) : (
-          <div className="document-scroll">
+          <div className="document-scroll" data-testid="note-document">
             <MarkdownDocument note={note} span={span} diff={diff} />
           </div>
         )}

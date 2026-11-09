@@ -1,19 +1,63 @@
 import { useEffect, useRef, useState } from 'react'
+import { Cpu, FileText, MessageSquare } from 'lucide-react'
 import { useWorkspace } from './state/useWorkspace'
 import { TopBar } from './components/TopBar'
 import { VisualPanel } from './components/VisualPanel'
-import { SessionPanel } from './components/SessionPanel'
+import { SessionComposer, SessionPanel } from './components/SessionPanel'
 import { NoteWorkspace } from './components/NoteWorkspace'
 import { RuntimeRail } from './components/RuntimeRail'
 import { StatusBar } from './components/StatusBar'
 import { TraceDrawer } from './components/TraceDrawer'
 import { ToastView } from './components/ToastView'
 import { AboutDialog } from './components/AboutDialog'
+import { cx } from './lib/utils'
+
+type PhoneView = 'session' | 'note' | 'runtime'
+
+const PHONE_TABS = [
+  { id: 'session', label: 'Session', Icon: MessageSquare },
+  { id: 'note', label: 'Note', Icon: FileText },
+  { id: 'runtime', label: 'Runtime', Icon: Cpu },
+] as const
+
+/** The phone surface starts where the responsive layout already hides the columns. */
+const PHONE_QUERY = '(max-width: 780px)'
+
+function usePhoneLayout(): boolean {
+  const [isPhone, setIsPhone] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia(PHONE_QUERY).matches,
+  )
+
+  useEffect(() => {
+    const query = window.matchMedia(PHONE_QUERY)
+    const onChange = (event: MediaQueryListEvent) => setIsPhone(event.matches)
+    setIsPhone(query.matches)
+    query.addEventListener('change', onChange)
+    return () => query.removeEventListener('change', onChange)
+  }, [])
+
+  return isPhone
+}
 
 export default function App() {
   const workspace = useWorkspace()
   const workspaceRef = useRef(workspace)
   const [aboutOpen, setAboutOpen] = useState(false)
+  const [phoneView, setPhoneView] = useState<PhoneView>('session')
+  const isPhone = usePhoneLayout()
+
+  // A verified edit brings the note forward on the phone surface; switching
+  // back to the session tab stays manual.
+  const lastSwitchDiff = useRef(workspace.diff)
+  useEffect(() => {
+    if (!workspace.diff) {
+      lastSwitchDiff.current = null
+      return
+    }
+    if (workspace.diff === lastSwitchDiff.current) return
+    lastSwitchDiff.current = workspace.diff
+    setPhoneView('note')
+  }, [workspace.diff])
 
   useEffect(() => {
     workspaceRef.current = workspace
@@ -72,7 +116,7 @@ export default function App() {
   }
 
   return (
-    <div className="shell">
+    <div className="shell" data-phone-view={phoneView}>
       <TopBar
         title={workspace.title}
         path={workspace.path}
@@ -87,6 +131,33 @@ export default function App() {
       />
 
       <main className="workspace-grid">
+        <div className="phone-tabs" role="tablist" aria-label="Workspace view" data-testid="phone-tabs">
+          {PHONE_TABS.map((tab) => {
+            const active = phoneView === tab.id
+            const live =
+              tab.id === 'session'
+                ? workspace.micOn || workspace.asrBusy
+                : tab.id === 'note'
+                  ? Boolean(workspace.diff) && !active
+                  : false
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                className={cx('phone-tab', active && 'is-active')}
+                data-testid={`phone-tab-${tab.id}`}
+                onClick={() => setPhoneView(tab.id)}
+              >
+                <tab.Icon size={15} />
+                <span>{tab.label}</span>
+                {live && <span className="phone-tab-dot" aria-hidden="true" />}
+              </button>
+            )
+          })}
+        </div>
+
         <div className="column left-column">
           <VisualPanel
             bbox={workspace.bbox}
@@ -114,6 +185,7 @@ export default function App() {
             onResetChat={workspace.resetChat}
             onRunDemo={() => void workspace.runDemo()}
             onOpenTrace={handleOpenTrace}
+            showComposer={!isPhone}
           />
         </div>
 
@@ -157,6 +229,20 @@ export default function App() {
             refreshRuntime={workspace.refreshRuntime}
           />
         </div>
+
+        {isPhone && (
+          <div className="phone-composer" data-testid="phone-composer">
+            <SessionComposer
+              busy={workspace.busy}
+              micOn={workspace.micOn}
+              asrBusy={workspace.asrBusy}
+              commandInput={workspace.commandInput}
+              onInputChange={workspace.setCommandInput}
+              onSubmit={handleSubmit}
+              onToggleMic={workspace.toggleMic}
+            />
+          </div>
+        )}
       </main>
 
       <StatusBar
