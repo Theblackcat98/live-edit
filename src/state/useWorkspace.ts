@@ -33,6 +33,7 @@ import {
   buildPlan,
   conversationalReply,
   critique,
+  isVagueMutation,
   resolveGroundingSpan,
   ROUTE_QUESTIONS,
   routeCommand,
@@ -1076,9 +1077,11 @@ export function useWorkspace(): WorkspaceApi {
         route = routeCommand(command)
         traceLocal.timings.route = Number((performance.now() - routeStarted).toFixed(1))
       }
-      // Deterministic syntax checks outrank the live route in two narrow
+      // Deterministic syntax checks outrank the live route in three narrow
       // cases: a question can never be a mutation (a small model reads
-      // hypotheticals as edits and deletes real content), and "replace X with
+      // hypotheticals as edits and deletes real content), a vague deictic
+      // reference must not be upgraded to a mutation (keyword grounding would
+      // then guess a target from accidental token hits), and "replace X with
       // Y" is always an edit_text — routing it as add_text would insert the
       // replacement instead of swapping the span, and the blast-radius critic
       // never sees the destructive intent.
@@ -1093,6 +1096,21 @@ export function useWorkspace(): WorkspaceApi {
             reason: `${localSyntax.reason} Live d1 route said ${route.action}; the imperative-syntax check overrode it.`,
           }
           runtime.route = 'fallback'
+          } else if (
+            localSyntax.action === 'ambiguous_request' &&
+            isVagueMutation(command)
+          ) {
+            // The live route upgraded "delete that part" to a mutation; the
+            // deterministic vague-reference guardrail diverts it to the same
+            // clarification flow the local router produces. Provenance is
+            // relabeled like the interrogative override — the effective
+            // decision is the deterministic one — and the reason records
+            // what the live route originally said.
+            route = {
+              ...localSyntax,
+              reason: `${localSyntax.reason} Live d1 route said ${route.action}; the vague-reference guardrail diverted it to clarification.`,
+            }
+            runtime.route = 'fallback'
           } else if (
             route.primaryTool &&
             route.primaryTool !== 'edit_text' &&
@@ -1654,14 +1672,10 @@ export function useWorkspace(): WorkspaceApi {
       traceLocal.critic = critic
       publish()
 
-      if (critic.verdict === 'rejected') {
-        setStageStates({ A: 'done', B: 'done', C: 'failed' })
-        patchMessage(delegationId, {
-          delegation: { ...delegation, status: 'rejected' },
-        })
-        const rejection =
-          'I paused before execution. The supervisor rejected the proposed tool call, so the note was not touched. Open the trace to see which check failed.'
-        traceLocal.status = 'rejected'
+      // Any rejection layer — critic verdict or engine-level refusal — lands
+      // in rejectedTraces so the drawer/export shows every stopped call, not
+      // only the ones the critic caught (audit TD-44).
+      const recordRejectedTrace = (reason: string | undefined, pCorrect: number) => {
         setRejectedTraces((previous) => [
           ...previous,
           {
@@ -1685,9 +1699,20 @@ export function useWorkspace(): WorkspaceApi {
               p: grounding.p,
             },
             workerXml: call.xml,
-            critic: { verdict: 'rejected', reason: critic.feedback, pCorrect: critic.pCorrect },
+            critic: { verdict: 'rejected', reason, pCorrect },
           },
         ])
+      }
+
+      if (critic.verdict === 'rejected') {
+        setStageStates({ A: 'done', B: 'done', C: 'failed' })
+        patchMessage(delegationId, {
+          delegation: { ...delegation, status: 'rejected' },
+        })
+        const rejection =
+          'I paused before execution. The supervisor rejected the proposed tool call, so the note was not touched. Open the trace to see which check failed.'
+        traceLocal.status = 'rejected'
+        recordRejectedTrace(critic.feedback, critic.pCorrect)
         addMessage({
           role: 'assistant',
           kind: 'error',
@@ -1713,7 +1738,11 @@ export function useWorkspace(): WorkspaceApi {
       if (!parsed || parsed.name !== call.name) {
         throw new Error('The worker XML did not round-trip through the tool parser.')
       }
-      const execution = executeTool(noteAtStart, { ...call, name: parsed.name, params: parsed.params })
+      const execution = executeTool(
+        noteAtStart,
+        { ...call, name: parsed.name, params: parsed.params },
+        plan.span,
+      )
       traceLocal.timings.execute = Number((performance.now() - execStarted).toFixed(1))
       traceLocal.execution = execution
       publish()
@@ -1724,6 +1753,7 @@ export function useWorkspace(): WorkspaceApi {
           delegation: { ...delegation, status: 'rejected', confidence: critic.pCorrect },
         })
         traceLocal.status = 'failed'
+        recordRejectedTrace(execution.message, critic.pCorrect)
         addMessage({
           role: 'assistant',
           kind: 'error',

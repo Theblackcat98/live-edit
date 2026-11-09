@@ -1,4 +1,4 @@
-import type { ExecutionDiff, ExecutionResult, WorkerCall } from '../types'
+import type { ExecutionDiff, ExecutionResult, SpanTarget, WorkerCall } from '../types'
 import {
   collapseBlankLines,
   findHeading,
@@ -6,6 +6,17 @@ import {
   normalizeWhitespace,
   splitLines,
 } from './doc'
+
+/**
+ * Engine-level blast radius, enforced independently of the critic (audit
+ * TD-44): a direct executeTool call must not be able to delete most of the
+ * note or gut a target, whatever the caller believes.
+ */
+function removalCapFor(lineCount: number): number {
+  return Math.max(9, Math.floor(lineCount * 0.5))
+}
+
+const EDIT_RETENTION_RATIO = 0.3
 
 interface NoteBlockResult {
   note: string
@@ -81,11 +92,12 @@ function insertAfterLine(note: string, anchorLine: number, content: string): Not
   }
 }
 
-export function executeTool(note: string, call: WorkerCall): ExecutionResult {
+export function executeTool(note: string, call: WorkerCall, span?: SpanTarget): ExecutionResult {
   const started = performance.now()
   const finish = (
     result: Omit<ExecutionResult, 'durationMs'>,
   ): ExecutionResult => ({ ...result, durationMs: performance.now() - started })
+  const spanNote = span ? ` (grounded span lines ${span.startLine}–${span.endLine})` : ''
 
   if (call.name === 'edit_text') {
     const start = Number(call.params.start_line)
@@ -105,6 +117,18 @@ export function executeTool(note: string, call: WorkerCall): ExecutionResult {
       return finish({
         ok: false,
         message: 'Anchor check failed: the target text moved before execution.',
+        tool: call.name,
+        note,
+      })
+    }
+    // Blast radius: a replacement keeping under 30% of the target's length
+    // guts it, at any target size — the old 90-character floor let
+    // short-target gutting through (audit TD-44).
+    const retained = call.params.new_text.trim().length
+    if (retained < current.length * EDIT_RETENTION_RATIO) {
+      return finish({
+        ok: false,
+        message: `Replacement collapses the target: ${retained} of ${current.length} characters retained${spanNote}.`,
         tool: call.name,
         note,
       })
@@ -159,6 +183,17 @@ export function executeTool(note: string, call: WorkerCall): ExecutionResult {
       return finish({
         ok: false,
         message: 'Anchor check failed: the target text moved before execution.',
+        tool: call.name,
+        note,
+      })
+    }
+    // Blast radius: a removal of half the note or more is destructive no
+    // matter who asked (audit TD-44).
+    const removed = end - start + 1
+    if (removed >= removalCapFor(lines.length)) {
+      return finish({
+        ok: false,
+        message: `Removal exceeds the blast-radius limit: ${removed} of ${lines.length} lines${spanNote}.`,
         tool: call.name,
         note,
       })

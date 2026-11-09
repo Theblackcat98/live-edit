@@ -165,8 +165,19 @@ export const ROUTE_QUESTIONS: Record<'action' | 'tool', D1Question> = {
   },
 }
 
-const VAGUE_MUTATION =
+export const VAGUE_MUTATION =
   /^(?:please\s+|could you\s+|can you\s+)?(?:delete|remove|change|update|edit|replace|fix|make|shorten|clean up|rewrite|amend)\s+(?:that|this|it|those|these)(?:\s+(?:part|bit|thing|section|line|text|one|stuff))?(?:\s+(?:to|into|with|so it)\s+.+)?[.!]?$/i
+
+/**
+ * True when the (normalized) command mutates a deictic reference — "delete
+ * that part", "change it" — with no grounded object. The local router sends
+ * these to clarification, and the live-route guardrail in useWorkspace uses
+ * the same test to divert a d1 file_mutation upgrade before grounding can
+ * guess a target (audit TD-43).
+ */
+export function isVagueMutation(command: string): boolean {
+  return VAGUE_MUTATION.test(normalizeCommand(command))
+}
 
 const LEADING_FILLER = /^(?:(?:um|uh|er|ah|hey|okay|ok)[,!.]?\s+)+/i
 const SCENE_SETTING =
@@ -667,7 +678,28 @@ function keywordSpan(note: string, command: string): SpanSearchResult | null {
   const top = candidates[0]
   const second = candidates[1]
   const spread = second ? top.score - second.score : top.score
-  const topSpanRange = expandLineSpan(note, top.line)
+  let topSpanRange = expandLineSpan(note, top.line)
+  let sectionGrounded = false
+  // A spoken "section" reference names the heading WITH its body — the same
+  // unit the d1 structural path offers as a `section` candidate. Grounding
+  // only the heading line let a whole-section replacement ("Replace the
+  // Risks section with tiny") land on an 11-char target and sail under the
+  // blast-radius check (audit TD-44). Rename-style phrasings still name the
+  // heading line itself.
+  if (
+    /\bsections?\b/i.test(command) &&
+    !/\b(?:heading|headings|title|rename|retitle|re-title)\b/i.test(command) &&
+    /^#{1,6}\s+/.test(lines[top.line - 1] ?? '')
+  ) {
+    const heading = getHeadings(note).find((candidate) => candidate.line === top.line)
+    if (heading) {
+      const sectionEnd = Math.min(lines.length, findSectionEnd(note, heading) - 1)
+      if (sectionEnd > heading.line) {
+        topSpanRange = { start: heading.line, end: sectionEnd }
+        sectionGrounded = true
+      }
+    }
+  }
   const confidence = clamp(
     0.66 + Math.min(0.24, top.score / 16) + Math.min(0.05, spread / 20),
     0,
@@ -678,9 +710,13 @@ function keywordSpan(note: string, command: string): SpanSearchResult | null {
     topSpanRange.start,
     topSpanRange.end,
     confidence,
-    `Matched distinctive token${top.hits.length > 1 ? 's' : ''} ${top.hits
-      .map((hit) => `“${hit}”`)
-      .join(', ')} at line ${top.line}.`,
+    sectionGrounded
+      ? `Matched distinctive token${top.hits.length > 1 ? 's' : ''} ${top.hits
+          .map((hit) => `“${hit}”`)
+          .join(', ')} on the section heading at line ${top.line}; grounded the whole section (lines ${topSpanRange.start}–${topSpanRange.end}).`
+      : `Matched distinctive token${top.hits.length > 1 ? 's' : ''} ${top.hits
+          .map((hit) => `“${hit}”`)
+          .join(', ')} at line ${top.line}.`,
   )
   const otherCandidates = candidates
     .slice(1, 4)
@@ -848,10 +884,17 @@ function applyReplacementToSpan(
   const lines = splitLines(note)
   const targetLine = span.startLine - 1
 
-  if (phrase && span.startLine === span.endLine) {
-    const line = lines[targetLine]
-    if (line && line.includes(phrase)) {
-      return line.replace(phrase, replacement)
+  if (phrase) {
+    // Surgical phrase replacement: swap exactly the quoted phrase inside the
+    // one span line that contains it and keep every other line verbatim, so
+    // a re-grounded multi-line span is edited in place instead of rewritten.
+    for (let index = span.startLine - 1; index < span.endLine; index += 1) {
+      const line = lines[index]
+      if (!line || !line.includes(phrase)) continue
+      if (span.startLine === span.endLine) return line.replace(phrase, replacement)
+      const spanLines = lines.slice(span.startLine - 1, span.endLine)
+      spanLines[index - (span.startLine - 1)] = line.replace(phrase, replacement)
+      return spanLines.join('\n')
     }
   }
 
@@ -1623,7 +1666,11 @@ export async function resolveGroundingSpan(
       const targetOnlyQuote =
         replacement !== null && quoted.length === 1 && replacement === quoted[0]
       if (replacement && !targetOnlyQuote) {
-        planPatch.newText = applyReplacementToSpan(note, span, replacement)
+        // Preserve phrase precision across the re-ground: the target quote
+        // the user spoke (or the pre-d1 plan span's phrase) keeps the edit
+        // surgical instead of rewriting the whole d1-chosen span.
+        const phrase = quoted.length ? quoted[0] : plan.span?.phrase
+        planPatch.newText = applyReplacementToSpan(note, span, replacement, phrase)
       } else if (miss) {
         planPatch.problem = 'missing_content'
         planPatch.problemDetail = 'Target grounded, but no replacement text was spoken.'
@@ -1692,21 +1739,32 @@ export function critique(
     if (rangeValid) {
       const current = lines.slice(start - 1, end).join('\n')
       const anchor = call.name === 'edit_text' ? params.old_text_anchor : params.target_excerpt
-      anchorExact = normalizeWhitespace(current) === normalizeWhitespace(anchor)
+      // The anchor is validated against the SUPERVISOR'S span, not the call's
+      // own range: a worker that invents a range and copies its text would
+      // otherwise always agree with itself (audit TD-01).
+      const anchorSource = span ? span.excerpt : current
+      anchorExact = normalizeWhitespace(anchorSource) === normalizeWhitespace(anchor)
       checks.push({
         label: 'anchor_exact',
         pass: anchorExact,
-        detail: anchorExact ? 'old_text_anchor matches the current lines exactly.' : 'Anchor drifted from the proposed span.',
+        detail: anchorExact
+          ? span
+            ? 'old_text_anchor matches the grounded span exactly.'
+            : 'old_text_anchor matches the current lines exactly.'
+          : 'Anchor drifted from the grounded span.',
       })
       if (span) {
-        const overlaps = start <= span.endLine && end >= span.startLine
-        targetGrounded = overlaps && Math.abs(start - span.startLine) <= 1
+        // The whole call range must sit inside the grounded span (±1 line of
+        // adjacency tolerance). Checking only the call's start let an 8-line
+        // removal pass against a 1-line span (audit TD-01).
+        const confined = start >= span.startLine - 1 && end <= span.endLine + 1
+        targetGrounded = confined
         checks.push({
           label: 'target_grounded',
           pass: targetGrounded,
           detail: targetGrounded
-            ? `Call overlaps supervisor span ${span.startLine}–${span.endLine}.`
-            : `Call ${start}–${end} is outside grounded span ${span.startLine}–${span.endLine}.`,
+            ? `Call lines ${start}–${end} sit inside supervisor span ${span.startLine}–${span.endLine}.`
+            : `Call ${start}–${end} is not confined to grounded span ${span.startLine}–${span.endLine}.`,
         })
       }
       if (call.name === 'remove_text') {
@@ -1718,7 +1776,10 @@ export function critique(
           detail: destructiveSafe ? `${removed} line${removed === 1 ? '' : 's'} removed; below blast-radius limit.` : 'Removal exceeds the blast-radius limit.',
         })
       }
-      if (call.name === 'edit_text' && current.length > 90) {
+      if (call.name === 'edit_text') {
+        // A replacement that keeps under 30% of the target's length guts it,
+        // at ANY target size — the old 90-character floor let short-target
+        // gutting through (audit TD-44).
         const replacementLength = (params.new_text ?? '').trim().length
         const retainsContext = replacementLength >= current.length * 0.3
         destructiveSafe = destructiveSafe && retainsContext
@@ -1726,8 +1787,8 @@ export function critique(
           label: 'blast_radius',
           pass: retainsContext,
           detail: retainsContext
-            ? 'Replacement retains enough of the grounded block.'
-            : 'Replacement collapses a large grounded block. Ask for a narrower target.',
+            ? `Replacement retains enough of the target (${replacementLength} of ${current.length} characters).`
+            : 'Replacement collapses the grounded target. Ask for a narrower target.',
         })
       }
     }
