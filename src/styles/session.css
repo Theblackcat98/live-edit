@@ -376,6 +376,329 @@
   text-underline-position: from-font;
 }
 
+/* Pending edit card — design.md §9 (user adjudication) ────────────────────
+   Mounted into the session column by the Phase-5 wiring; until then it is
+   unwired. Visual language mirrors DelegationCard (rail, chip, mono meta);
+   the diff block reuses the trace drawer's ExecutionDiff body pattern with
+   *proposed* (dashed/hollow accent) styling — distinct from the applied
+   solid-green `.is-diff` highlight in document.css. Resolution states
+   (applied / discarded / stale) render muted with no controls. */
+
+.message-pending {
+  padding-left: 30px;
+  margin-top: -4px;
+}
+
+.pending-card {
+  position: relative;
+  padding: 7px 9px 8px 11px;
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  box-shadow:
+    0 0 0 1px var(--line),
+    0 1px 2px rgba(0, 0, 0, 0.025);
+  overflow: hidden;
+}
+
+.pending-card.is-applied {
+  background: color-mix(in srgb, var(--green-tint) 32%, var(--surface));
+}
+
+.pending-card.is-discarded {
+  background: color-mix(in srgb, var(--red-tint) 38%, var(--surface));
+}
+
+.pending-card.is-stale {
+  background: color-mix(in srgb, var(--orange-tint) 45%, var(--surface));
+}
+
+/* Resolved cards linger briefly in the queue (design.md §9) — quieter. */
+.pending-card.is-applied,
+.pending-card.is-discarded,
+.pending-card.is-stale {
+  opacity: 0.82;
+}
+
+.pending-rail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: var(--accent);
+}
+
+.pending-card.is-applied .pending-rail {
+  background: var(--green);
+}
+
+.pending-card.is-discarded .pending-rail {
+  background: var(--red);
+}
+
+.pending-card.is-stale .pending-rail {
+  background: var(--orange);
+}
+
+.pending-main {
+  min-width: 0;
+}
+
+.pending-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.pending-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: var(--radius-chip);
+  background: var(--accent-tint);
+  color: var(--accent-ink);
+  flex-shrink: 0;
+}
+
+.pending-card.is-applied .pending-icon {
+  background: var(--green-tint);
+  color: var(--green);
+}
+
+.pending-card.is-discarded .pending-icon {
+  background: var(--red-tint);
+  color: var(--red);
+}
+
+.pending-card.is-stale .pending-icon {
+  background: var(--orange-tint);
+  color: var(--orange);
+}
+
+.pending-title {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.pending-verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.015em;
+  white-space: nowrap;
+}
+
+.pending-verdict.is-red {
+  color: var(--red);
+}
+
+.pending-verdict.is-orange {
+  color: var(--orange);
+}
+
+.pending-tool {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.pending-tool-name {
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.pending-tool-raw {
+  color: var(--ink-3);
+  font-size: 9.5px;
+}
+
+.pending-diff-meta {
+  margin-left: auto;
+  color: var(--ink-3);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+.pending-asked {
+  display: block;
+  margin-top: 3px;
+  color: var(--ink-2);
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pending-asked-label {
+  color: var(--ink-3);
+}
+
+/* The proposed change itself. Dashed hairline = proposal, not committed
+   change (the applied diff in the note is a solid green fill + flash). */
+.pending-diff {
+  margin-top: 5px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--line));
+  border-radius: var(--radius-chip);
+  background: var(--inset);
+  overflow: hidden;
+}
+
+.pending-diff-line {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  column-gap: 7px;
+  padding: 2px 8px;
+}
+
+.pending-diff-line + .pending-diff-line {
+  border-top: 1px solid var(--line-soft);
+}
+
+.pending-diff-line > span {
+  text-align: right;
+  font-size: 9.5px;
+  padding-top: 1px;
+}
+
+.pending-diff-line code {
+  font-size: 10px;
+  line-height: 1.55;
+  letter-spacing: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pending-diff-line.is-removed {
+  background: color-mix(in srgb, var(--red-tint) 40%, transparent);
+  color: var(--ink-2);
+}
+
+.pending-diff-line.is-removed > span {
+  color: var(--red);
+}
+
+.pending-diff-line.is-added {
+  background: color-mix(in srgb, var(--accent-tint) 45%, transparent);
+  color: var(--ink);
+}
+
+.pending-diff-line.is-added > span {
+  color: var(--accent-ink);
+}
+
+.pending-verdict-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.pending-scores {
+  color: var(--ink-3);
+  font-size: 9px;
+  letter-spacing: 0.02em;
+}
+
+.pending-reason {
+  color: var(--ink-2);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.pending-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  margin-top: 5px;
+  color: var(--ink-2);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.pending-note svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.pending-note.is-stale {
+  color: var(--orange);
+}
+
+.pending-note.is-busy-note {
+  color: var(--accent-ink);
+}
+
+/* Adjudication controls — real buttons, ≥44px hit targets at every width so
+   they stay thumb-sized on the phone command surface (§9.3), keyboard
+   reachable via the global :focus-visible outline. Disabled while a worker
+   run is busy, with the reason shown on the note above (§9.4). */
+.pending-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.pending-act {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: var(--radius-control);
+  font-size: 11.5px;
+  font-weight: 500;
+  transition:
+    background-color 140ms var(--ease-out-strong),
+    color 140ms var(--ease-out-strong),
+    box-shadow 140ms var(--ease-out-strong),
+    transform 140ms var(--ease-out-strong);
+}
+
+.pending-act.is-apply {
+  background: var(--green-tint);
+  color: var(--green);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 45%, transparent);
+}
+
+.pending-act.is-apply:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--green-tint) 55%, var(--surface));
+  box-shadow: inset 0 0 0 1px var(--green);
+}
+
+.pending-act.is-discard {
+  background: var(--surface);
+  color: var(--ink-2);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+.pending-act.is-discard:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--red);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--red) 45%, var(--line-strong));
+}
+
+.pending-act:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.pending-act:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* Composer */
 
 .session-compose {

@@ -311,6 +311,35 @@
   }
 }
 
+/* ── Proposed (pending) diff — design.md §9, architecture-refactor.md §9.3 ─
+   NoteWorkspace wiring in P5 attaches this class to the markdown blocks a
+   pending edit would touch (alongside the existing span/diff states).
+   Deliberately distinct from the applied highlight (.is-diff above): a
+   dashed, hollow accent = a proposal the user can still ✓ / ✗, not a
+   committed change — and no flash animation, the proposal sits steady until
+   it resolves. PendingEditCard's inline diff (session.css) mirrors the same
+   language on its standalone before/after block. */
+
+.doc-block.proposed-diff,
+.doc-table-row.proposed-diff {
+  background: color-mix(in srgb, var(--accent-tint) 45%, transparent);
+  outline: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: -1px;
+}
+
+.doc-block.proposed-diff .doc-line-no,
+.doc-table-row.proposed-diff .doc-line-no {
+  color: var(--accent-ink);
+}
+
+.doc-table-row.proposed-diff .doc-table-cell:first-of-type {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.doc-table-row.proposed-diff .doc-table-cell {
+  color: var(--accent-ink);
+}
+
 .doc-line-no {
   padding-top: 3px;
   color: var(--ink-3);
