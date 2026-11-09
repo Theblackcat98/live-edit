@@ -170,6 +170,15 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, on
             checks: trace.critic.checks,
           }
         : undefined,
+      d1Check: trace.d1Check
+        ? {
+            verdict: trace.d1Check.verdict,
+            noul: trace.d1Check.noul,
+            destructiveSafety: trace.d1Check.destructiveSafety,
+            reason: trace.d1Check.reason,
+            ms: trace.d1Check.ms,
+          }
+        : undefined,
       execution: trace.execution
         ? {
             ok: trace.execution.ok,
@@ -298,8 +307,14 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, on
                 <strong>{trace.call?.name ?? '—'}</strong>
               </div>
               <div className="trace-summary-cell">
-                <span className="mono">critic</span>
-                <strong>{trace.critic ? pLabel(trace.critic.pCorrect) : '—'}</strong>
+                <span className="mono">{trace.d1Check ? 'd1 check' : 'critic'}</span>
+                <strong>
+                  {trace.d1Check
+                    ? trace.d1Check.verdict
+                    : trace.critic
+                      ? pLabel(trace.critic.pCorrect)
+                      : '—'}
+                </strong>
               </div>
               <div className="trace-summary-cell">
                 <span className="mono">total</span>
@@ -322,6 +337,26 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, on
                   <span className="trace-verdict-meta mono">
                     P(correct) {formatP(trace.critic.pCorrect)} · P(safe){' '}
                     {formatP(trace.critic.pSafe)} · note untouched
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {trace.d1Check && trace.d1Check.verdict !== 'approved' && (
+              <div className="trace-verdict">
+                <span className="trace-verdict-icon" aria-hidden="true">
+                  <X size={11} />
+                </span>
+                <div>
+                  <strong>
+                    {trace.d1Check.verdict === 'unavailable'
+                      ? 'Safety check unavailable — held for your decision'
+                      : 'Safety check disapproved — held for your decision'}
+                  </strong>
+                  <p>{trace.d1Check.reason}</p>
+                  <span className="trace-verdict-meta mono">
+                    match {trace.d1Check.noul === null ? 'unreported' : trace.d1Check.noul.toFixed(2)} ·
+                    safety {trace.d1Check.destructiveSafety ?? 'unreported'} · pending edit · note untouched
                   </span>
                 </div>
               </div>
