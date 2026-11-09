@@ -10,9 +10,10 @@
  * No npm dependencies: Node 22 global fetch/WebSocket only.
  */
 import { spawn, execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const APP_URL = process.env.QA_APP_URL ?? 'http://localhost:5173'
 const CDP_PORT = 9226
@@ -84,6 +85,91 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 // ------------------------------------------------------------------- cdp ---
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+// ------------------------------------------------------------ d1 control ---
+// Case 30 (design.md §13.5, plan §8 gate) stops and restarts the d1 server
+// mid-battery. scripts/stop-models.sh is all-or-nothing — it stops text, omni
+// AND d1-omni together — so the suite uses the script's own per-member
+// mechanism instead: SIGTERM the pid recorded in the d1-omni pidfile (exactly
+// stop-models.sh's `pid="$(cat "$pidfile")"; kill "$pid"`), leaving the other
+// two members untouched. The restart goes through scripts/start-models.sh
+// unchanged, resolved from this repo's root: it is idempotent per member ("a
+// member already answering is left alone"), so only d1 comes back here, and
+// it already polls every member's health before exiting.
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const D1_PORT = 8085
+const D1_PIDFILE = path.join(homedir(), 'Documents', 'Models', 'logs', 'lfm3', 'd1-omni.pid')
+
+/** d1 is "up" only when :8085/health answers 200 (llama.cpp: {"status":"ok"}). */
+async function d1HealthOk() {
+  try {
+    const res = await fetch(`http://127.0.0.1:${D1_PORT}/health`, { signal: AbortSignal.timeout(2000) })
+    if (!res.ok) return false
+    await res.json().catch(() => null) // 200 with a body we cannot parse still means the server answers
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function pollD1(up, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if ((await d1HealthOk()) === up) return true
+    await sleep(1000)
+  }
+  return false
+}
+
+/** Stop ONLY d1 via its pidfile (stop-models.sh's per-member kill, verbatim). */
+async function stopD1Server() {
+  if (!existsSync(D1_PIDFILE)) return { ok: false, why: `no d1-omni pidfile at ${D1_PIDFILE}` }
+  let pid = 0
+  try {
+    pid = Number(readFileSync(D1_PIDFILE, 'utf8').trim())
+  } catch (err) {
+    return { ok: false, why: `unreadable pidfile: ${err?.message ?? err}` }
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return { ok: false, why: 'pidfile holds no usable pid' }
+  try {
+    process.kill(pid, 'SIGTERM')
+  } catch (err) {
+    return { ok: false, why: `kill ${pid} failed: ${err?.message ?? err}` }
+  }
+  const down = await pollD1(false, 20_000)
+  return down
+    ? { ok: true, why: null }
+    : { ok: false, why: `d1 still answering :${D1_PORT}/health after SIGTERM to pid ${pid}` }
+}
+
+/**
+ * Restart d1 via the repo's start-models.sh (idempotent per member) and poll
+ * /health until it answers — case 30's finally block calls this so a failed
+ * assertion can never leave d1 down for the rest of the battery.
+ */
+async function restartD1Server() {
+  const script = path.join(REPO_ROOT, 'scripts', 'start-models.sh')
+  await new Promise((resolve, reject) => {
+    const child = spawn('bash', [script], { stdio: 'inherit' })
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL') } catch { /* already gone */ }
+      reject(new Error('start-models.sh exceeded 300s'))
+    }, 300_000)
+    child.on('exit', (code) => {
+      clearTimeout(timer)
+      if (code === 0) resolve()
+      else reject(new Error(`start-models.sh exited ${code}`))
+    })
+    child.on('error', (err) => {
+      clearTimeout(timer)
+      reject(err)
+    })
+  })
+  if (!(await pollD1(true, 120_000))) {
+    throw new Error(`d1 never answered :${D1_PORT}/health after start-models.sh`)
+  }
+}
 
 async function waitDevtools() {
   const deadline = Date.now() + 20_000
@@ -484,6 +570,84 @@ async function main() {
     return ws?.note ?? null
   }
 
+  /**
+   * Wait for a pending card to show a resolved state class in the DOM
+   * (`is-applied` / `is-discarded` / `is-stale` — PendingEditCard's
+   * `is-${edit.status}`). Needed because lib/pending's toStorable persists
+   * only *pending* entries: once the debounced save fires, a resolved entry
+   * drops out of localStorage entirely, so the in-memory card — not the
+   * persisted queue — is the observable record of how adjudication resolved.
+   */
+  async function waitPendingCard(statusClass, timeout = 8000) {
+    const deadline = Date.now() + timeout
+    while (Date.now() < deadline) {
+      const found = await evalJs(`document.querySelectorAll('.pending-card.${statusClass}').length`)
+      if (found > 0) return true
+      await sleep(300)
+    }
+    return false
+  }
+
+  /**
+   * Reliable pending-edit producer for cases 29/31–34 (plan §8/§9 gates):
+   * reseed the pristine demo note and send 12c's blast-radius command. The
+   * over-broad call is refused by the hard gates ('rejected' — that terminal
+   * is case 12c's concern) or non-approved by d1 → 'pending'. A 'verified'
+   * terminal here is itself a §8 violation ("case 12c can now end only as
+   * hard-gate refusal or pending — never auto-verified"), and every consuming
+   * case fails on its precondition assertion.
+   */
+  async function producePendingEdit() {
+    await seedWorkspace(null)
+    await waitStorageFlushed()
+    const noteBefore = await note()
+    const snapsBefore = (await getWs())?.snapshots?.length ?? 0
+    const rejectsBefore = (await getWs())?.rejectedTraces?.length ?? 0
+    await submitCommand('Replace the Risks section with tiny')
+    const run = await waitForRun()
+    const info = await runsInfo()
+    const pending = await pendingInfo()
+    return { run, info, pending, noteBefore, snapsBefore, rejectsBefore }
+  }
+
+  /**
+   * The recorded shape of a non-approval on the trace, per src/types.ts's
+   * D1CheckResult as recorded by pipeline.ts (`traceLocal.d1Check = check`
+   * from lib/d1check.ts's runD1Check): 'disapproved' carries both scores —
+   * a finite `noul`, a 'safe' | 'unintended_data_loss' `destructiveSafety`
+   * — plus `failingQuestion`, one of the two typed question ids; 'unavailable'
+   * carries a human-readable `reason` (bridge error or unusable answer).
+   * Scores + failing question are exactly what plan §8's gate demands case 29
+   * assert ("Trace.d1Check populated (scores + failing question)").
+   */
+  function d1Evidence(check) {
+    if (!check || typeof check !== 'object') return { ok: false, detail: 'no d1Check on the trace' }
+    if (check.verdict !== 'disapproved' && check.verdict !== 'unavailable') {
+      return { ok: false, detail: `verdict=${check.verdict} is neither disapproved nor unavailable` }
+    }
+    if (check.verdict === 'disapproved') {
+      const scoresOk =
+        Number.isFinite(check.noul) &&
+        (check.destructiveSafety === 'safe' || check.destructiveSafety === 'unintended_data_loss') &&
+        (check.failingQuestion === 'does_call_match_directive' || check.failingQuestion === 'destructive_safety')
+      return {
+        ok: scoresOk,
+        detail: `disapproved noul=${check.noul} safety=${check.destructiveSafety} failingQuestion=${check.failingQuestion ?? '-'}`,
+      }
+    }
+    const unavailableOk = typeof check.reason === 'string' && check.reason.length > 0
+    return {
+      ok: unavailableOk,
+      detail: `unavailable noul=${JSON.stringify(check.noul)} reason=${(check.reason ?? '').slice(0, 60)}`,
+    }
+  }
+
+  /** The standard §13.1 section bar: heading lines, case-insensitive. */
+  function readmeSectionHits(text) {
+    return ['overview', 'getting started', 'usage', 'contributing', 'license']
+      .filter((section) => new RegExp(`^#{2,3}\\s+.*\\b${section}\\b`, 'im').test(text)).length
+  }
+
   // ------------------------------------------------------------ battery ---
 
   /** @type {{id:string,title:string,status:'PASS'|'FAIL'|'KNOWN-BUG',evidence:string}[]} */
@@ -618,6 +782,32 @@ async function main() {
     record('8', 'add line under Security → verified, present',
       info.status === 'verified' && /rotate keys monthly/i.test(n) && !/under Security:/i.test(n),
       `status=${info.status}, hasLine=${/rotate keys monthly/i.test(n)}, junkPrefix=${/under Security:/i.test(n)}`)
+  }
+
+  // Case 8f — design.md §13.7 (dictation exception, §11), plan §7.4: a QUOTED
+  // insert. The quoted text is the user's own words, so the harness may build
+  // the add_text call directly — and the trace must label it
+  // `runtime.worker = 'dictation'`, never a model-call label. The quoted text
+  // must land verbatim (design.md §5: verbatim is inserted as-is), and the
+  // "under Security:" command scaffolding must stay out of the note (case 8's
+  // junk-prefix bar). AUTHORED TO THE PLAN'S CONTRACT, EXPECTED RED UNTIL
+  // IMPLEMENTATION: the dictation path is not yet implemented in pipeline.ts
+  // (plan §7.4), so today a live worker-authored insert reads
+  // runtime.worker = 'live' with a sampler on the call — both are model-call
+  // labels and fail this case by design. Gates the §7.4 dictation exception.
+  await submitCommand('add a line under Security: "rotate production keys monthly starting Monday"')
+  {
+    const run8f = await waitForRun()
+    const info8f = await runsInfo()
+    const n8f = await note()
+    const quoted = 'rotate production keys monthly starting Monday'
+    const verbatim = n8f.includes(quoted)
+    const junkPrefix = /under Security:/i.test(n8f)
+    const dictationLabel = info8f.runtime?.worker === 'dictation'
+    const neverModelCall = info8f.call?.sampler == null
+    record('8f', 'dictation: quoted insert lands verbatim, traced runtime.worker="dictation" (never a model-call label) — §7.4 gate',
+      info8f.status === 'verified' && verbatim && !junkPrefix && dictationLabel && neverModelCall,
+      `status=${info8f.status}, verbatim=${verbatim}, junkPrefix=${junkPrefix}, runtime.worker=${info8f.runtime?.worker ?? '-'}, call.sampler=${info8f.call?.sampler ? 'present (model decode)' : 'absent'}${run8f.timedOut ? ', TIMEOUT' : ''}`)
   }
 
   await submitCommand('pull the LTV/CAC formula from the slide into Revenue')
@@ -1125,6 +1315,434 @@ async function main() {
     record('26', 'ambiguous "change the number" → clarify, note byte-unchanged, reply asks which number/target',
       info.status === 'clarify' && n === noteBeforeClarify && asksWhichTarget,
       `status=${info.status}, noteUnchanged=${n === noteBeforeClarify}, asksWhichTarget=${asksWhichTarget}, reply="${reply.slice(0, 90)}"${run.timedOut ? ', TIMEOUT' : ''}`)
+  }
+
+  // --- Group G: P3–P5 gates — cases 27–34 ---------------------------------
+  // The definition-of-done mapping (architecture-refactor.md §15): §13.1 → 27,
+  // §13.2 → 28, §13.3 → 31/32, §13.4 → 33, §13.5 → 30; case 29 is §8's gate
+  // (d1 disapproval evidence on the trace), case 34 is §9 step 2 / decision
+  // D3 (pending persistence). The §13.7 dictation assertions live with case
+  // 8's family in Group B (8f).
+  say('Group G: README (§13.1), follow-up context (§13.2), d1 evidence + d1 down (plan §8/§13.5), pending adjudication (§13.3/§13.4/§9/D3)')
+
+  {
+    // Case 27 — design.md §13.1, plan §7 gate ("new case 27 — design.md
+    // §13.1, the README case on the seed note and on a # Untitled note"):
+    // "write a README template document to begin" must produce a real
+    // multi-section README inserted at the top of the seed note — title +
+    // ≥4 of the standard sections, authored by the worker (workerAuthored
+    // provenance, directive task 'create') — the literal spoken phrase
+    // "README template document" appears nowhere as inserted content, and
+    // the existing Q3 content stays intact below. Part (b), case 27b below,
+    // repeats the bar on a fresh `# Untitled` note.
+    await seedWorkspace(null)
+    await waitStorageFlushed()
+    await submitCommand('write a README template document to begin')
+    const run27 = await waitForRun()
+    const info27 = await runsInfo()
+    const ws27 = await getWs()
+    const n27 = ws27?.note ?? ''
+    const q3At = n27.indexOf('# Q3 Business Review')
+    const head27 = q3At >= 0 ? n27.slice(0, q3At) : ''
+    const sectionHits27 = readmeSectionHits(head27)
+    const readmeOk27 =
+      /^#\s+.*readme/i.test(n27.split('\n')[0] ?? '') &&
+      sectionHits27 >= 4 &&
+      head27.split('\n').length >= 10
+    const phraseLeak27 = /readme template document/i.test(n27)
+    const q3Intact27 =
+      q3At >= 0 &&
+      /Redis cache migration/.test(n27) &&
+      /\|\s*Q3\s*\|\s*\$1\.2M\s*\|\s*Pending\s*\|/.test(n27)
+    const authored27 = workerAuthored(info27) && info27.directive?.task === 'create'
+    record('27', 'seed note: "write a README template document to begin" → verified, worker-authored multi-section README at top, phrase never inserted, Q3 intact below',
+      info27.status === 'verified' && authored27 && readmeOk27 && q3Intact27 && !phraseLeak27,
+      `status=${info27.status}, workerAuthored=${authored27}, task=${info27.directive?.task ?? '-'}, title=${JSON.stringify((n27.split('\n')[0] ?? '').slice(0, 40))}, sections=${sectionHits27}/5, headLines=${head27.split('\n').length}, phraseLeak=${phraseLeak27}, q3Intact=${q3Intact27}${run27.timedOut ? ', TIMEOUT' : ''}`)
+  }
+
+  {
+    // Case 27b — §13.1's second surface (plan §7 gate / §15 mapping): the
+    // same command on a fresh `# Untitled` note (case 13a's New-note
+    // interaction produces the placeholder). The same worker-authored
+    // multi-section README bar applies, and the Untitled placeholder must be
+    // replaced — gone from the note entirely.
+    await seedWorkspace(null)
+    await waitStorageFlushed()
+    await evalJs(`document.querySelector('[aria-label="New note"]')?.click()`)
+    let untitled27b = await note()
+    const deadline27b = Date.now() + 5000
+    while (String(untitled27b).trim() !== '# Untitled' && Date.now() < deadline27b) {
+      await sleep(300)
+      untitled27b = await note()
+    }
+    if (String(untitled27b).trim() !== '# Untitled') {
+      record('27b', 'Untitled note: README command replaces the placeholder (precondition: New note produced # Untitled)', false,
+        `New note never produced '# Untitled' — note=${JSON.stringify(String(untitled27b).slice(0, 40))}`)
+    } else {
+      await submitCommand('write a README template document to begin')
+      const run27b = await waitForRun()
+      const info27b = await runsInfo()
+      const n27b = (await getWs())?.note ?? ''
+      const firstLine27b = n27b.split('\n')[0] ?? ''
+      const sectionHits27b = readmeSectionHits(n27b)
+      const authored27b = workerAuthored(info27b) && info27b.directive?.task === 'create'
+      const readmeOk27b =
+        /^#\s+.*readme/i.test(firstLine27b) && sectionHits27b >= 4 && n27b.split('\n').length >= 10
+      const placeholderGone27b = !/#\s*Untitled/i.test(n27b)
+      const phraseLeak27b = /readme template document/i.test(n27b)
+      record('27b', 'Untitled note: same README command → verified, worker-authored multi-section README, placeholder replaced, phrase never inserted',
+        info27b.status === 'verified' && authored27b && readmeOk27b && placeholderGone27b && !phraseLeak27b,
+        `status=${info27b.status}, workerAuthored=${authored27b}, title=${JSON.stringify(firstLine27b.slice(0, 40))}, sections=${sectionHits27b}/5, lines=${n27b.split('\n').length}, placeholderGone=${placeholderGone27b}, phraseLeak=${phraseLeak27b}${run27b.timedOut ? ', TIMEOUT' : ''}`)
+    }
+  }
+
+  {
+    // Case 28 — design.md §13.2, plan §7 gate ("case 28 — §13.2 follow-up"):
+    // "do the same for Q4 to $1.5M" must resolve the reference inside the
+    // directive (§5: references resolved before delegation) with the §6
+    // context packet as corroboration. The assertion binds only the outcome —
+    // the Q4 row edited the same way the Q3 row was, Q3 kept, Q1/Q2
+    // untouched — plus worker-authoring provenance on the second run.
+    await seedWorkspace(null)
+    await waitStorageFlushed()
+    await submitCommand('update the Q3 revenue row to $1.45M Final')
+    const run28a = await waitForRun()
+    const info28a = await runsInfo()
+    const q3Ok28 = /\|\s*Q3\s*\|\s*\$1\.45M\s*\|\s*Final\s*\|/.test((await getWs())?.note ?? '')
+    await submitCommand('do the same for Q4 to $1.5M')
+    const run28b = await waitForRun()
+    const info28b = await runsInfo()
+    const n28b = (await getWs())?.note ?? ''
+    const q4Ok28 = /\|\s*Q4\s*\|\s*\$1\.5M\s*\|\s*Final\s*\|/.test(n28b)
+    const q3Still28 = /\|\s*Q3\s*\|\s*\$1\.45M\s*\|\s*Final\s*\|/.test(n28b)
+    const neighboursOk28 =
+      /\|\s*Q1\s*\|\s*\$0\.92M\s*\|\s*Closed\s*\|/.test(n28b) &&
+      /\|\s*Q2\s*\|\s*\$1\.08M\s*\|\s*Closed\s*\|/.test(n28b) &&
+      !/\|\s*Q4\s*\|\s*\$1\.35M\s*\|\s*Forecast\s*\|/.test(n28b)
+    const authored28 = workerAuthored(info28b)
+    record('28', 'follow-up "do the same for Q4 to $1.5M" → verified; Q4 row reads $1.5M/Final, Q3 kept at $1.45M, Q1/Q2 untouched, second run worker-authored',
+      info28a.status === 'verified' && q3Ok28 && info28b.status === 'verified' && q4Ok28 && q3Still28 && neighboursOk28 && authored28,
+      `run1=${info28a.status} q3=${q3Ok28}; run2=${info28b.status} q4=${q4Ok28} q3Kept=${q3Still28} neighbours=${neighboursOk28}, workerAuthored=${authored28}, task=${info28b.directive?.task ?? '-'}${run28a.timedOut || run28b.timedOut ? ', TIMEOUT' : ''}`)
+  }
+
+  {
+    // Case 29 — plan §8's gate (architecture-refactor.md §8): "a fixture
+    // call d1 disapproves ends `rejected` with `Trace.d1Check` populated
+    // (scores + failing question)". A command crafted to make d1 disapprove
+    // on live servers is unreliable, so the case follows the plan's own
+    // route — 12c's blast-radius command. Two honest terminals carry the
+    // evidence: 'pending' (the D7 wiring routes a d1 non-approval to
+    // adjudication; pipeline.ts records `traceLocal.d1Check` BEFORE creating
+    // the pending edit, so the newest run carries it too) or 'rejected'
+    // (plan §8's intermediate P4 shape). A hard-gate refusal carries no
+    // d1Check (gates run before d1 — that is 12c's case): if it is the only
+    // outcome, the gate has no d1 evidence to show and this case FAILS, by
+    // design. On 'pending' the card's d1 fields must carry the same verdict,
+    // then the case adjudicates ✗ so the battery leaves nothing dangling.
+    await seedWorkspace(null)
+    await waitStorageFlushed()
+    const noteBefore29 = await note()
+    await submitCommand('Replace the Risks section with tiny')
+    const run29 = await waitForRun()
+    const info29 = await runsInfo()
+    let ok29 = false
+    let detail29 = ''
+    if (info29.status === 'pending' || info29.status === 'rejected') {
+      const evidence29 = d1Evidence(info29.d1Check)
+      if (info29.status === 'pending') {
+        const card29 = (await pendingInfo()).last
+        const cardMatches29 = Boolean(
+          card29?.id && card29.status === 'pending' && card29.d1?.verdict === info29.d1Check?.verdict,
+        )
+        const discard29 = cardMatches29 ? await adjudicatePending(card29.id, 'discard') : { resolved: false }
+        const untouched29 = (await note()) === noteBefore29
+        ok29 = evidence29.ok && cardMatches29 && discard29.resolved && untouched29
+        detail29 = `pending: trace ${evidence29.detail}; card.d1.verdict=${card29?.d1?.verdict ?? '-'} matchesTrace=${cardMatches29}; discard=${discard29.resolved ? 'resolved' : 'unresolved'}; noteUntouched=${untouched29}`
+      } else {
+        ok29 = evidence29.ok
+        detail29 = `rejected: trace ${evidence29.detail}`
+      }
+    } else {
+      detail29 = `terminal ${info29.status} carries no d1 disapproval evidence (neither pending nor rejected)`
+    }
+    record('29', 'd1 disapproval evidence: blast-radius command settles pending-or-rejected with Trace.d1Check populated (verdict + scores + failing question)',
+      ok29, `status=${info29.status}, d1Check=${info29.d1Check?.verdict ?? 'null'}, ${detail29}${run29.timedOut ? ', TIMEOUT' : ''}`)
+  }
+
+  {
+    // Case 30 — design.md §13.5 / plan §8 gate ("d1 server stopped
+    // mid-battery: an edit ends in the `unavailable` path, note unchanged,
+    // trace says so") + design.md §11: silence from the safety model neither
+    // rubber-stamps nor dead-ends a run — a plain edit arrives as a pending
+    // proposal marked "d1 unavailable", nothing executes. The stop/restart
+    // is wrapped in try/finally so a failed assertion can never leave d1
+    // down: stop = SIGTERM from the d1-omni pidfile (stop-models.sh's
+    // per-member mechanism — the script itself is all-or-nothing across all
+    // three members); restart = the repo's start-models.sh (idempotent per
+    // member, so only d1 comes back) + a /health poll until ok, because the
+    // rest of the battery needs d1.
+    await seedWorkspace(null)
+    await waitStorageFlushed()
+    const noteBefore30 = await note()
+    const snapsBefore30 = (await getWs())?.snapshots?.length ?? 0
+    let d1Killed = false
+    let stopDetail30 = 'not attempted'
+    let restartDetail30 = 'not needed'
+    let ok30 = false
+    let evidence30 = ''
+    try {
+      const stop30 = await stopD1Server()
+      d1Killed = stop30.ok
+      stopDetail30 = stop30.ok
+        ? 'SIGTERM from the d1-omni pidfile (stop-models.sh per-member mechanism); :8085/health stopped answering'
+        : stop30.why
+      if (!stop30.ok) {
+        evidence30 = `could not stop d1: ${stop30.why}`
+      } else {
+        await submitCommand('add a line under Security: rotate keys monthly')
+        const run30 = await waitForRun()
+        const info30 = await runsInfo()
+        const card30 = (await pendingInfo()).last
+        const ws30 = await getWs()
+        const n30 = ws30?.note ?? ''
+        const pendingOk30 = info30.status === 'pending' && card30?.status === 'pending' && Boolean(card30?.id)
+        const unavailableOk30 =
+          info30.d1Check?.verdict === 'unavailable' &&
+          typeof info30.d1Check.reason === 'string' && info30.d1Check.reason.length > 0 &&
+          card30?.d1?.verdict === 'unavailable' && card30?.d1?.noul === null
+        const untouchedOk30 =
+          n30 === noteBefore30 && !/rotate keys monthly/i.test(n30) &&
+          (ws30?.snapshots?.length ?? 0) === snapsBefore30
+        const authoredOk30 = workerAuthored(info30)
+        ok30 = pendingOk30 && unavailableOk30 && untouchedOk30 && authoredOk30
+        evidence30 = `status=${info30.status}, d1Check=${info30.d1Check?.verdict ?? 'null'} (reason=${(info30.d1Check?.reason ?? '').slice(0, 50)}), card.d1=${card30?.d1?.verdict ?? '-'} noul=${JSON.stringify(card30?.d1?.noul)}, noteUntouched=${untouchedOk30}, workerAuthored=${authoredOk30}${run30.timedOut ? ', TIMEOUT' : ''}`
+      }
+    } finally {
+      if (d1Killed && !(await d1HealthOk())) {
+        try {
+          await restartD1Server()
+          restartDetail30 = 'restarted via scripts/start-models.sh (idempotent per member); :8085/health ok'
+        } catch (err) {
+          restartDetail30 = `RESTART FAILED: ${err?.message ?? err} — the rest of the battery needs d1`
+          console.error(`\nCASE 30: ${restartDetail30}`)
+        }
+      } else if (d1Killed) {
+        restartDetail30 = 'd1 answered again before the restart ran'
+      }
+    }
+    record('30', 'd1 down: plain edit → pending "d1 unavailable", note untouched, nothing executed; d1 restarted and /health ok for the rest of the battery',
+      ok30, `stop=${stopDetail30}; ${evidence30}; restart=${restartDetail30}`)
+  }
+
+  {
+    // Case 31 — design.md §13.3 (✓ applies), plan §9 gate ("31 — disapproved
+    // → pending → ✓ applies, snapshot pushed"): a d1-rejected proposal
+    // becomes a pending edit; ✓ re-runs the hard gates against the unchanged
+    // note (clean apply — nothing source-edited between proposal and
+    // verdict), the call executes via executeTool + commitNote, a snapshot
+    // labelled 'Pending edit approved · <tool>' is pushed, and the card
+    // resolves *applied*.
+    const producer31 = await producePendingEdit()
+    const card31 = producer31.pending.last
+    const precondition31 = producer31.info.status === 'pending' && card31?.status === 'pending' && Boolean(card31?.id)
+    if (!precondition31) {
+      record('31', 'pending → ✓ applies: edit lands, snapshot pushed, card resolves applied', false,
+        `precondition failed — terminal ${producer31.info.status} (a 'verified' here is itself a §8 violation: blast radius must never auto-verify), card=${card31?.status ?? 'none'}`)
+    } else {
+      const verdict31 = card31.d1?.verdict ?? '-'
+      const resolution31 = await adjudicatePending(card31.id, 'apply')
+      const ws31 = await getWs()
+      const n31 = ws31?.note ?? ''
+      const snaps31 = ws31?.snapshots ?? []
+      const before31 = Array.isArray(card31.diff?.before) ? card31.diff.before : []
+      const after31 = Array.isArray(card31.diff?.after) ? card31.diff.after : []
+      // The edit's content is in the note: an add/edit proposal's after-block
+      // (and its content param) is present; a removal proposal's target lines
+      // are gone.
+      const landedOk31 = after31.length > 0
+        ? n31.includes(after31.join('\n')) &&
+          (!card31.call?.params?.content || n31.includes(card31.call.params.content))
+        : before31.filter((line) => line.trim()).every((line) => !n31.includes(line))
+      const newest31 = snaps31[snaps31.length - 1] ?? null
+      const snapshotOk31 =
+        snaps31.length > producer31.snapsBefore &&
+        newest31?.label === `Pending edit approved · ${card31.call?.name}` &&
+        newest31?.tool === card31.call?.name
+      const cardApplied31 = await waitPendingCard('is-applied')
+      record('31', `pending (${verdict31}) → ✓ applies: gates re-run clean, edit lands, snapshot "Pending edit approved · ${card31.call?.name ?? '-'}", card resolves applied`,
+        resolution31.resolved && landedOk31 && snapshotOk31 && cardApplied31,
+        `resolved=${resolution31.resolved}, landed=${landedOk31}, snapshots ${producer31.snapsBefore}→${snaps31.length} label=${JSON.stringify(newest31?.label ?? '-')}, tool=${newest31?.tool ?? '-'}, cardApplied=${cardApplied31}`)
+    }
+  }
+
+  {
+    // Case 32 — design.md §13.3 (✗ discards), plan §9 gate ("32 — ✗ — note
+    // byte-identical, rejected trace grows"): ✗ writes nothing anywhere —
+    // the note stays byte-identical, the snapshot count is unchanged — and
+    // appends the proposal to the rejected-traces log (design.md §9, plan
+    // §9.5): an omni-first-shaped RejectedTraceRecord (storage v2) with the
+    // directive AND the d1 verdict, labelled by who rejected it
+    // ('pending edit adjudication' / grounding 'pending-adjudication').
+    const producer32 = await producePendingEdit()
+    const card32 = producer32.pending.last
+    const precondition32 = producer32.info.status === 'pending' && card32?.status === 'pending' && Boolean(card32?.id)
+    if (!precondition32) {
+      record('32', 'pending → ✗ discards: note byte-identical, no snapshot, rejected-traces record with directive + d1', false,
+        `precondition failed — terminal ${producer32.info.status} (a 'verified' here is itself a §8 violation), card=${card32?.status ?? 'none'}`)
+    } else {
+      const resolution32 = await adjudicatePending(card32.id, 'discard')
+      const ws32 = await getWs()
+      const n32 = ws32?.note ?? ''
+      const snaps32 = ws32?.snapshots?.length ?? 0
+      const rejects32 = ws32?.rejectedTraces ?? []
+      const record32 = rejects32[rejects32.length - 1] ?? null
+      const noteByteOk32 = n32 === producer32.noteBefore
+      const snapsOk32 = snaps32 === producer32.snapsBefore
+      const grew32 = rejects32.length === producer32.rejectsBefore + 1
+      const recOk32 = Boolean(
+        record32 &&
+        record32.route?.provenance === 'pending edit adjudication' &&
+        record32.grounding?.source === 'pending-adjudication' &&
+        record32.critic?.verdict === 'rejected' &&
+        record32.directive?.instruction &&
+        record32.d1?.verdict === card32.d1?.verdict,
+      )
+      const cardDiscarded32 = await waitPendingCard('is-discarded')
+      record('32', 'pending → ✗ discards: note byte-identical, snapshot count unchanged, rejected-traces record carries directive + d1 verdict, card resolves discarded',
+        resolution32.resolved && noteByteOk32 && snapsOk32 && grew32 && recOk32 && cardDiscarded32,
+        `resolved=${resolution32.resolved}, noteByteIdentical=${noteByteOk32}, snapshots ${producer32.snapsBefore}→${snaps32}, rejectedTraces ${producer32.rejectsBefore}→${rejects32.length}, record.provenance=${record32?.route?.provenance ?? '-'}, record.grounding=${record32?.grounding?.source ?? '-'}, record.directive=${Boolean(record32?.directive)}, record.d1=${record32?.d1?.verdict ?? 'MISSING'}, cardDiscarded=${cardDiscarded32}`)
+    }
+  }
+
+  {
+    // Case 33 — design.md §13.4 / plan §9 gate ("33 — staleness:
+    // source-edit the target lines while pending, ✓ resolves stale, nothing
+    // written"): the pending edit's grounded target lines are changed by a
+    // manual source edit while the card waits; ✓ then re-runs the hard gates
+    // against the *current* note (design.md §8), the drifted anchor fails,
+    // and the card resolves *stale* with the "Nothing was written"
+    // explanation (PendingEditCard's statusExplanation). No snapshot beyond
+    // the manual source edit, and the proposal joins the rejected-traces log
+    // (plan §9.5: stale appends too).
+    const producer33 = await producePendingEdit()
+    const card33 = producer33.pending.last
+    const precondition33 = producer33.info.status === 'pending' && card33?.status === 'pending' && Boolean(card33?.id)
+    const startLine33 = Number(card33?.call?.params?.start_line)
+    const endLine33 = Number(card33?.call?.params?.end_line)
+    const rangeOk33 =
+      Number.isInteger(startLine33) && Number.isInteger(endLine33) && startLine33 >= 1 && endLine33 >= startLine33
+    if (!precondition33 || !rangeOk33) {
+      record('33', 'staleness: source-edit the target lines while pending, ✓ → card resolves stale, nothing written', false,
+        `${!precondition33 ? `precondition failed — terminal ${producer33.info.status} (a 'verified' here is itself a §8 violation), card=${card33?.status ?? 'none'}` : ''}${!precondition33 && !rangeOk33 ? '; ' : ''}${!rangeOk33 ? `pending call has no usable grounded range: start_line=${card33?.call?.params?.start_line}, end_line=${card33?.call?.params?.end_line}` : ''}`)
+    } else {
+      // Source-edit exactly the grounded lines (the app's own Markdown view:
+      // case-15-era interaction — view tab → textarea draft → Apply changes,
+      // which commits a "Manual source edit" snapshot).
+      const srcEdit33 = await evalJs(`(() => {
+        const raw = localStorage.getItem(${JSON.stringify(STORAGE_KEY)})
+        const ws = raw ? JSON.parse(raw) : null
+        const lines = (ws?.note ?? '').split('\\n')
+        const start = ${startLine33}
+        const end = ${endLine33}
+        for (let i = start - 1; i <= end - 1 && i < lines.length; i++) {
+          if (lines[i].trim()) lines[i] = lines[i] + ' (hand-revised)'
+        }
+        const mutated = lines.join('\\n')
+        const tab = document.querySelector('[aria-label="Markdown source view"]')
+        if (!tab) throw new Error('Markdown source view tab not found')
+        tab.click()
+        const ta = document.querySelector('.source-textarea')
+        if (!ta) throw new Error('source textarea not found (source view did not open)')
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+        setter.call(ta, mutated)
+        ta.dispatchEvent(new Event('input', { bubbles: true }))
+        return { mutated, changed: mutated !== ws.note }
+      })()`)
+      await sleep(300)
+      await evalJs(`(() => {
+        const b = document.querySelector('.source-apply')
+        if (!b) throw new Error('Apply changes button not found')
+        if (b.disabled) throw new Error('Apply changes disabled (busy or draft not dirty)')
+        b.click()
+      })()`)
+      let sourceCommitted33 = false
+      let snapsMid33 = (await getWs())?.snapshots?.length ?? 0
+      const deadline33 = Date.now() + 8000
+      while (Date.now() < deadline33) {
+        const wsMid33 = await getWs()
+        snapsMid33 = wsMid33?.snapshots?.length ?? 0
+        if (wsMid33?.note === srcEdit33.mutated && snapsMid33 > producer33.snapsBefore) {
+          sourceCommitted33 = true
+          break
+        }
+        await sleep(300)
+      }
+      // ✓ on the now-drifted pending.
+      const resolution33 = await adjudicatePending(card33.id, 'apply')
+      const ws33 = await getWs()
+      const n33 = ws33?.note ?? ''
+      const before33 = Array.isArray(card33.diff?.before) ? card33.diff.before : []
+      const after33 = Array.isArray(card33.diff?.after) ? card33.diff.after : []
+      const nothingWritten33 = after33.length > 0
+        ? !n33.includes(after33.join('\n')) &&
+          (!card33.call?.params?.content || !n33.includes(card33.call.params.content))
+        : before33.filter((line) => line.trim()).every((line) => n33.includes(line))
+      const snapsStable33 = (ws33?.snapshots?.length ?? 0) === snapsMid33
+      const staleCard33 = await waitPendingCard('is-stale')
+      const staleExplained33 = await evalJs(`(() => {
+        const card = document.querySelector('.pending-card.is-stale')
+        return card ? card.textContent.includes('Nothing was written') : false
+      })()`)
+      const rejectsGrew33 = (ws33?.rejectedTraces?.length ?? 0) === producer33.rejectsBefore + 1
+      record('33', `staleness: ✓ after the target lines were hand-edited → card resolves stale ("Nothing was written"), edit content absent, no new snapshot (range ${startLine33}–${endLine33})`,
+        sourceCommitted33 && resolution33.resolved && staleCard33 && staleExplained33 && nothingWritten33 && snapsStable33 && rejectsGrew33,
+        `sourceCommitted=${sourceCommitted33}, resolved=${resolution33.resolved}, staleCard=${staleCard33}, staleExplained=${staleExplained33}, nothingWritten=${nothingWritten33}, snapshots ${snapsMid33}→${ws33?.snapshots?.length ?? 0} stable=${snapsStable33}, rejectedTraces ${producer33.rejectsBefore}→${ws33?.rejectedTraces?.length ?? 0}`)
+    }
+  }
+
+  {
+    // Case 34 — plan §9 step 2 / decision D3 (answers design.md Q5: pending
+    // edits persist across reloads; storage schema v2 keeps the 10 most
+    // recent pending entries). The card is produced, the page reloads
+    // WITHOUT wiping storage (case 15's plain reload plus seedWorkspace's
+    // post-reload readiness steps — deliberately not seedWorkspace(null)),
+    // and the queue must come back from storage with the same id, its d1
+    // verdict intact, and the actionable card rendered.
+    const producer34 = await producePendingEdit()
+    const card34 = producer34.pending.last
+    const precondition34 = producer34.info.status === 'pending' && card34?.status === 'pending' && Boolean(card34?.id)
+    if (!precondition34) {
+      record('34', 'persistence (D3): reload restores the pending card with its d1 verdict', false,
+        `precondition failed — terminal ${producer34.info.status} (a 'verified' here is itself a §8 violation), card=${card34?.status ?? 'none'}`)
+    } else {
+      const verdictBefore34 = card34.d1?.verdict ?? null
+      const taskBefore34 = card34.directive?.task ?? null
+      const callBefore34 = card34.call?.name ?? null
+      await cdp.send('Page.reload', { ignoreCache: false })
+      await sleep(800)
+      await waitAppReady()
+      await installTtsHook()
+      const pend34 = await pendingInfo()
+      const restored34 = pend34.all.find((entry) => entry?.id === card34.id) ?? null
+      const restoredOk34 = Boolean(
+        restored34 &&
+        restored34.status === 'pending' &&
+        restored34.d1?.verdict === verdictBefore34 &&
+        restored34.directive?.task === taskBefore34 &&
+        restored34.call?.name === callBefore34,
+      )
+      const cardShown34 = await evalJs(`(() => {
+        const card = document.querySelector('.pending-card.is-pending')
+        return Boolean(
+          card &&
+          document.querySelector('button[aria-label="Apply proposed edit"]') &&
+          document.querySelector('button[aria-label="Discard proposed edit"]'),
+        )
+      })()`)
+      record('34', 'persistence (D3): reload restores the pending card from storage with its d1 verdict intact and ✓/✗ actionable',
+        restoredOk34 && cardShown34,
+        `id=${card34.id}, restored=${restoredOk34} (status=${restored34?.status ?? 'none'}, d1=${restored34?.d1?.verdict ?? '-'} vs before=${verdictBefore34}, task=${restored34?.directive?.task ?? '-'}, call=${restored34?.call?.name ?? '-'}), cardInDom=${cardShown34}, queueCount=${pend34.count}`)
+    }
   }
 
   // ------------------------------------------------------------- report ---
