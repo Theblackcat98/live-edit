@@ -6,8 +6,8 @@
  * delegation) must never leak in as model-authored history.
  */
 import { describe, expect, it } from 'vitest'
-import type { Message, Trace } from '../types'
-import { buildOmniHistory } from './pipeline'
+import type { Directive, Message, Trace } from '../types'
+import { buildDictationCall, buildOmniHistory } from './pipeline'
 
 let seq = 0
 function msg(partial: Partial<Message>): Message {
@@ -36,6 +36,37 @@ function run(partial: Partial<Trace>): Trace {
     ...partial,
   } as Trace
 }
+
+describe('buildDictationCall (design.md §11 dictation exception)', () => {
+  const note = '# Note\n\n## Reminders\n\n- Old item\n'
+
+  it('builds an under_heading add_text with the verbatim text untouched', () => {
+    const directive: Directive = {
+      task: 'insert',
+      instruction: 'Add the dictated line under Reminders',
+      target: { description: 'Reminders section', heading: 'Reminders' },
+      verbatim: 'Standup moved to 9am — bring the Q3 printouts.',
+    }
+    const call = buildDictationCall(directive, note)
+    expect(call.name).toBe('add_text')
+    expect(call.params.position).toBe('under_heading')
+    expect(call.params.anchor).toBe('Reminders')
+    expect(call.params.content).toBe('Standup moved to 9am — bring the Q3 printouts.')
+    expect(call.xml).toContain('Standup moved to 9am')
+  })
+
+  it('appends when the directive names no heading', () => {
+    const directive: Directive = {
+      task: 'insert',
+      instruction: 'Append the dictated line',
+      verbatim: 'Exact words.',
+    }
+    const call = buildDictationCall(directive, note)
+    expect(call.params.position).toBe('append')
+    expect(call.params.anchor).toBeUndefined()
+    expect(call.params.content).toBe('Exact words.')
+  })
+})
 
 describe('buildOmniHistory', () => {
   it('pairs commands with their visible replies', () => {

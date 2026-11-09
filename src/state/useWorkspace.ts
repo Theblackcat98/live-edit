@@ -18,7 +18,7 @@ import type {
   Trace,
 } from '../types'
 import { DEMO_SEQUENCE, INITIAL_NOTE, NOTE_PATH, NOTE_TITLE } from '../data/note'
-import { speak, stopSpeaking, cleanSpeechText, VoiceRecorder } from '../lib/speech'
+import { speak, stopSpeaking, cleanSpeechText, speechSynthesisAvailable, VoiceRecorder } from '../lib/speech'
 import { buildSuggestions } from '../lib/suggestions'
 import { loadWorkspaceState, saveWorkspaceState, type PersistedWorkspace } from '../lib/storage'
 import { endpointUp, probeRuntime, synthesizeSpeech, transcribeAudio } from '../lib/bridge'
@@ -574,6 +574,24 @@ export function useWorkspace(): WorkspaceApi {
       const clean = cleanSpeechText(text)
       if (!clean) return
 
+      // Browser-voice dispatch: the speaking state is set at DISPATCH, not
+      // on the utterance's onstart — headless and some embedded browsers
+      // never fire onstart, which left a playing reply with a permanently
+      // disabled Stop button (battery case 17a). onend/onerror still clear
+      // it; stopSpeech cancels the utterance outright.
+      const speakWithBrowserVoice = (value: string) => {
+        if (!speechSynthesisAvailable()) return
+        setSpeaking(true)
+        speak(value, {
+          onStart: () => {
+            if (speechTokenRef.current === token) setSpeaking(true)
+          },
+          onEnd: () => {
+            if (speechTokenRef.current === token) setSpeaking(false)
+          },
+        })
+      }
+
       // Live path: the Omni model speaks its own reply over /tts (24 kHz WAV).
       if (endpointUp(healthRef.current, 'omni')) {
         setTtsBusy(true)
@@ -598,28 +616,14 @@ export function useWorkspace(): WorkspaceApi {
               if (speechTokenRef.current !== token) return
               setSpeaking(false)
               // Model audio failed mid-playback — finish with the browser voice.
-              speak(clean, {
-                onStart: () => {
-                  if (speechTokenRef.current === token) setSpeaking(true)
-                },
-                onEnd: () => {
-                  if (speechTokenRef.current === token) setSpeaking(false)
-                },
-              })
+              speakWithBrowserVoice(clean)
             }
             setSpeaking(true)
             await audio.play()
           } catch (error) {
             if (controller.signal.aborted || speechTokenRef.current !== token) return
             // TTS request failed — fall back to the browser voice.
-            speak(clean, {
-              onStart: () => {
-                if (speechTokenRef.current === token) setSpeaking(true)
-              },
-              onEnd: () => {
-                if (speechTokenRef.current === token) setSpeaking(false)
-              },
-            })
+            speakWithBrowserVoice(clean)
           } finally {
             if (speechTokenRef.current === token) setTtsBusy(false)
           }
@@ -628,14 +632,7 @@ export function useWorkspace(): WorkspaceApi {
       }
 
       // Fallback: browser speechSynthesis.
-      speak(clean, {
-        onStart: () => {
-          if (speechTokenRef.current === token) setSpeaking(true)
-        },
-        onEnd: () => {
-          if (speechTokenRef.current === token) setSpeaking(false)
-        },
-      })
+      speakWithBrowserVoice(clean)
     },
     [],
   )

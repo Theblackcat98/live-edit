@@ -814,6 +814,32 @@ function packetWorkerCall(
   }
 }
 
+/**
+ * The dictation exception (design.md §11): when Omni's directive carries
+ * `verbatim` — exact words the user dictated — the harness builds the
+ * add_text call itself. The worker never re-authors dictated text; the
+ * call flows through the same gates and d1 check as a worker call.
+ */
+export function buildDictationCall(directive: Directive, note: string): WorkerCall {
+  const heading = directive.target?.heading ?? null
+  const params: Record<string, string> = {
+    file_path: NOTE_PATH,
+    position: heading ? 'under_heading' : 'append',
+    ...(heading ? { anchor: heading } : {}),
+    content: directive.verbatim as string,
+  }
+  return {
+    name: 'add_text',
+    params,
+    thought: 'User-dictated exact text — harness-built call (dictation exception); no worker decode.',
+    xml: renderToolCallXml('add_text', params),
+    rawTokens: 0,
+    promptHints: ['Dictation exception: user-quoted exact text, inserted verbatim'],
+    toolSchemasInjected: 0,
+    noteView: numberNoteLines(note),
+  }
+}
+
 /** Rejected-trace record for the Omni-first path (the legacy recordRejectedTrace is supervisor-shaped). */
 function recordOmniRejection(
   deps: PipelineDeps,
@@ -865,6 +891,37 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
       }
     : null
 
+  // Provisional streaming bubble: Omni's deltas land here live (battery
+  // case 18); the authoritative text replaces them for answer/clarify, and
+  // the bubble is retracted entirely when the turn delegates or acts — the
+  // delegation must stay silent in the transcript.
+  let streamId: string | null = null
+  let streamedText = ''
+  const onText = (delta: string) => {
+    streamedText += delta
+    if (!streamId) {
+      streamId = deps.addMessage({ role: 'assistant', text: streamedText, runId: traceLocal.id })
+    } else {
+      deps.patchMessage(streamId, { text: streamedText })
+    }
+  }
+  const retractStream = () => {
+    if (streamId) {
+      const id = streamId
+      deps.setMessages((previous) => previous.filter((message) => message.id !== id))
+      streamId = null
+      streamedText = ''
+    }
+  }
+  const settleStream = (text: string) => {
+    if (streamId) {
+      deps.patchMessage(streamId, { text })
+      streamId = null
+    } else {
+      deps.addMessage({ role: 'assistant', text, runId: traceLocal.id })
+    }
+  }
+
   let omni: Awaited<ReturnType<typeof runOmniTurn>>
   try {
     omni = await runOmniTurn({
@@ -877,17 +934,22 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
           ? { source: frame.source as 'live-camera' | 'live-screen' | 'synthetic-slide', dataUrl: frame.dataUrl }
           : null,
       lastRun,
+      onText,
     })
   } catch (error) {
+    retractStream()
     throw new Error(
       `Omni turn failed: ${error instanceof Error ? error.message : 'unknown error'}`,
     )
   }
   if (!omni) {
+    retractStream()
     finish('failed')
     return
   }
   runtime.chat = 'live'
+  runtime.route = 'live'
+  if (omni.repair) traceLocal.omniRepair = omni.repair
   traceLocal.timings.route = omni.ms
   if (omni.promptTokens) {
     traceLocal.promptTokens = omni.promptTokens
@@ -899,13 +961,14 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
     const text = omni.text ?? ''
     traceLocal.timings.chat = omni.ms
     deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
-    deps.addMessage({ role: 'assistant', text, runId: traceLocal.id })
+    settleStream(text)
     deps.speakReply(text)
     finish(omni.outcome === 'answer' ? 'conversational' : 'clarify')
     return
   }
 
   if (omni.outcome === 'action') {
+    retractStream()
     deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
     deps.setStage('executing')
     const delta = omni.action === 'undo' ? -1 : 1
@@ -945,13 +1008,30 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
   // --- delegate: worker authors + grounds from the §6 packet ---------------
   const directive = omni.directive
   if (!directive) {
+    retractStream()
     throw new Error('Omni delegated without a directive.')
   }
+  retractStream()
   traceLocal.directive = directive
   publish()
   deps.setStageStates({ A: 'done', B: 'running', C: 'idle' })
   deps.setStage('generating')
   deps.setFlowModel('worker')
+
+  // --- dictation exception (design.md §11): exact user-dictated text is
+  // built by the harness, never authored by the worker. The call still
+  // flows through the hard gates and the d1 check like any other; the
+  // trace records the provenance honestly (runtime.worker = 'dictation').
+  if (typeof directive.verbatim === 'string' && directive.verbatim.trim().length > 0) {
+    const call = buildDictationCall(directive, noteAtStart)
+    runtime.worker = 'dictation'
+    traceLocal.timings.generate = 0
+    traceLocal.call = call
+    traceLocal.workerNoteView = call.noteView
+    publish()
+    await verifyAndExecute(deps, ctx, directive, call, frame)
+    return
+  }
 
   if (!endpointUp(deps.healthRef.current, 'text')) {
     deps.addMessage({
@@ -978,6 +1058,11 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
   let attemptedTool: ToolName | null = null
   let attemptedParsed: ParsedToolCall | null = null
   for (const sampler of [PACKET_WORKER_SAMPLER.attempt1, PACKET_WORKER_SAMPLER.retry]) {
+    // Turn-budget guard (battery case 12b): a slow first attempt (a 6,000-
+    // token deliberation can eat most of a turn) must not be followed by a
+    // second equally slow one — fail with the concrete error instead of
+    // blowing past any sane turn timeout.
+    if (attemptText !== '' && performance.now() - workerStarted > 45_000) break
     const messages =
       call === null && attemptText === ''
         ? buildPacketWorkerMessages(packetInput)
@@ -988,7 +1073,15 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
             attemptedTool,
             anchorCorrection: anchorCorrectionFor(noteAtStart, attemptedParsed),
           })
-    const completion = await chatComplete('text', messages, sampler)
+    let completion: Awaited<ReturnType<typeof chatComplete>>
+    try {
+      completion = await chatComplete('text', messages, sampler)
+    } catch (error) {
+      // Transport failure (incl. the bridge's 90s timeout): retrying the
+      // same dead/slow endpoint inside this turn buys nothing.
+      attemptError = error instanceof Error ? error.message : 'worker request failed'
+      break
+    }
     attemptText = completion.text
     const xmlInput = /<think>/.test(completion.text)
       ? completion.text
@@ -1035,15 +1128,34 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
     finish('failed')
     return
   }
+  runtime.worker = 'live'
   traceLocal.call = call
   traceLocal.workerNoteView = call.noteView
   publish()
+
+  await verifyAndExecute(deps, ctx, directive, call, frame)
+}
+
+/**
+ * The shared tail of every Omni-first mutation (worker-authored or
+ * dictation-built): delegation card, deterministic hard gates, the engine
+ * dry-run that renders the diff, the d1 safety check, then execute — or a
+ * pending edit when d1 disapproves or is unavailable.
+ */
+async function verifyAndExecute(
+  deps: PipelineDeps,
+  ctx: TurnContext,
+  directive: Directive,
+  call: WorkerCall,
+  frame: { dataUrl: string; source: string } | null,
+): Promise<void> {
+  const { command, noteAtStart, traceLocal, runtime, publish, finish } = ctx
 
   const delegation: DelegationInfo = {
     runId: traceLocal.id,
     tool: call.name,
     status: 'checking',
-    modelLabel: '1.7B',
+    modelLabel: runtime.worker === 'dictation' ? 'dictation' : '1.7B',
     thought: directive.instruction,
   }
   const delegationId = deps.addMessage({
