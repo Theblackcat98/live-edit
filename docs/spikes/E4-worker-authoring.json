@@ -1,0 +1,1062 @@
+{
+  "spike": "E4 — worker authoring capability (architecture-refactor.md §4, design.md §6 packet)",
+  "at": "2026-11-09T11:14:18.585Z",
+  "server": {
+    "url": "http://127.0.0.1:8080",
+    "modelAlias": "lfm3-1.7b",
+    "health": "ok"
+  },
+  "sampler": {
+    "attempt1": {
+      "temperature": 0.3,
+      "maxTokens": 3000
+    },
+    "retry": {
+      "temperature": 0.4,
+      "maxTokens": 3000
+    },
+    "note": "retry = P3 policy (error appended) with the repo attempt-2 temperature bump"
+  },
+  "promptDesign": {
+    "system": "author the content, ground own span (line numbers + exact anchor from the note), exactly one XML tool call in the repo contract (worker.ts renderToolCallXml syntax; xml.ts parser applies)",
+    "user": "typed directive (design.md §5 JSON) + context packet (last 3 completed edit turns as {user command, directive summary, diff summary}) + FULL line-numbered note + all 4 tool schemas (repo TOOL_DEFS rendering)",
+    "duplicatedRules": [
+      "src/lib/xml.ts parseToolCallXml + KNOWN_TOOLS",
+      "src/lib/doc.ts splitLines/normalizeWhitespace/parseHeading/getHeadings/findHeading",
+      "src/lib/tools.ts removalCapFor + EDIT_RETENTION_RATIO (informational blast radius)",
+      "src/data/tools.ts TOOL_DEFS",
+      "src/data/note.ts NOTE_PATH + INITIAL_NOTE",
+      "src/data/scene.ts VISUAL_MARKDOWN.formula (frame_extract payload)"
+    ]
+  },
+  "scoring": {
+    "parse": "parseToolCallXml returns a known-tool call (repo parser, tolerant of surrounding text)",
+    "params": "all required params present, non-empty, correctly typed (integers, position enum) per TOOL_DEFS + executeTool guards",
+    "anchor": "edit/remove: 1<=start<=end<=lineCount AND whitespace-normalized anchor == note lines at range; add/extract: position enum resolvable against the note (heading exists / line in bounds)",
+    "fullValid": "parse AND params AND anchor on the same attempt"
+  },
+  "summary": {
+    "fixtures": 12,
+    "passBar": "85% of fixtures fully valid (parse + params + anchor) first-try",
+    "firstTry": {
+      "parseOk": 10,
+      "parseRate": "83.3%",
+      "paramsOk": 6,
+      "paramsRate": "50.0%",
+      "anchorOk": 6,
+      "anchorRate": "50.0%",
+      "fullyValid": 5,
+      "fullyValidRate": "41.7%",
+      "passBarMet": false
+    },
+    "retry": {
+      "fixturesRetried": 7,
+      "recovered": 1,
+      "recoveryRate": "14.3%",
+      "validAfterRetry": 6
+    },
+    "latencyMs": {
+      "firstTry": {
+        "min": 1687,
+        "median": 9503,
+        "max": 20580
+      },
+      "allAttempts": {
+        "min": 1506,
+        "median": 10482,
+        "max": 20580
+      }
+    },
+    "promptTokens": {
+      "note": "llama.cpp-reported prompt tokens per attempt, when the server reports usage",
+      "firstTry": [
+        {
+          "id": "F01",
+          "promptTokens": 1439
+        },
+        {
+          "id": "F02",
+          "promptTokens": 1417
+        },
+        {
+          "id": "F03",
+          "promptTokens": 1421
+        },
+        {
+          "id": "F04",
+          "promptTokens": 1424
+        },
+        {
+          "id": "F05",
+          "promptTokens": 1424
+        },
+        {
+          "id": "F06",
+          "promptTokens": 1414
+        },
+        {
+          "id": "F07",
+          "promptTokens": 1527
+        },
+        {
+          "id": "F08",
+          "promptTokens": 1461
+        },
+        {
+          "id": "F09",
+          "promptTokens": 978
+        },
+        {
+          "id": "F10",
+          "promptTokens": 1643
+        },
+        {
+          "id": "F11",
+          "promptTokens": 1453
+        },
+        {
+          "id": "F12",
+          "promptTokens": 1452
+        }
+      ]
+    }
+  },
+  "fixtures": [
+    {
+      "id": "F01",
+      "label": "edit · Q3 revenue row (QA 6)",
+      "noteName": "seed",
+      "noteLineCount": 43,
+      "userCommand": "update the Q3 revenue row to $1.45M Final",
+      "directive": {
+        "task": "edit",
+        "instruction": "Update the Q3 revenue row in the Revenue table: set Revenue to $1.45M and Status to Final.",
+        "target": {
+          "description": "the Q3 row of the Revenue table under \"## 2. Revenue\"",
+          "heading": "2. Revenue"
+        },
+        "verbatim": null,
+        "constraints": [
+          "markdown table row",
+          "leave the other rows unchanged"
+        ],
+        "frame_relevant": false
+      },
+      "expectedTool": "edit_text",
+      "contextPacketTurns": 0,
+      "promptChars": 4113,
+      "attempts": [
+        {
+          "attempt": "attempt-1",
+          "requestOk": true,
+          "error": null,
+          "latencyMs": 6789,
+          "promptTokens": 1439,
+          "outputTokens": 1564,
+          "rawOutput": "<tool_call>\n<function=edit_text>\n<parameter=file_path>\nnotes/quarterly-review.md\n</parameter>\n<parameter=start_line>\n17\n</parameter>\n<parameter=end_line>\n17\n</parameter>\n<parameter=old_text_anchor>\n 17 │ | Q3 | $1.2M | Pending |\n</parameter>\n<parameter=new_text>\n 17 │ | Q3 | $1.45M | Final |\n</parameter>\n</function>\n</tool_call>",
+          "reasoningSeparated": true,
+          "toolCallBlockCount": 1,
+          "parseOk": true,
+          "parsedTool": "edit_text",
+          "parsedParams": {
+            "file_path": "notes/quarterly-review.md",
+            "start_line": "17",
+            "end_line": "17",
+            "old_text_anchor": "17 │ | Q3 | $1.2M | Pending |",
+            "new_text": "17 │ | Q3 | $1.45M | Final |"
+          },
+          "toolMatchesDirectiveExpectation": true,
+          "paramsOk": true,
+          "paramsProblems": [],
+          "groundingOk": false,
+          "groundingDetail": "anchor mismatch at lines 17–17",
+          "groundingBoundsOk": true,
+          "anchorOk": false,
+          "blastRadiusOk": true,
+          "blastRadiusNote": "retained 28 of 24 chars (floor 7)",
+          "fullValid": false
+        },
+        {
+          "attempt": "retry",
+          "requestOk": true,
+          "error": null,
+          "latencyMs": 1506,
+          "promptTokens": 1613,
+          "outputTokens": 324,
+          "rawOutput": "<tool_call>\n<function=edit_text>\n<parameter=file_path>\nnotes/quarterly-review.md\n</parameter>\n<parameter=start_line>\n17\n</parameter>\n<parameter=end_line>\n17\n</parameter>\n<parameter=old_text_anchor>\n| Q3 | $1.2M | Pending |\n</parameter>\n<parameter=new_text>\n| Q3 | $1.45M | Final |\n</parameter>\n</function>\n</tool_call>",
+          "reasoningSeparated": true,
+          "toolCallBlockCount": 1,
+          "parseOk": true,
+          "parsedTool": "edit_text",
+          "parsedParams": {
+            "file_path": "notes/quarterly-review.md",
+            "start_line": "17",
+            "end_line": "17",
+            "old_text_anchor": "| Q3 | $1.2M | Pending |",
+            "new_text": "| Q3 | $1.45M | Final |"
+          },
+          "toolMatchesDirectiveExpectation": true,
+          "paramsOk": true,
+          "paramsProblems": [],
+          "groundingOk": true,
+          "groundingDetail": "anchor matches note lines 17–17",
+          "groundingBoundsOk": true,
+          "anchorOk": true,
+          "blastRadiusOk": true,
+          "blastRadiusNote": "retained 23 of 24 chars (floor 7)",
+          "fullValid": true
+        }
+      ],
+      "firstTryFullValid": false,
+      "validAfterRetry": true,
+      "retryRecovered": true
+    },
+    {
+      "id": "F02",
+      "label": "remove · Redis bullet (QA 7)",
+      "noteName": "seed",
+      "noteLineCount": 43,
+      "userCommand": "remove the bullet about Redis",
+      "directive": {
+        "task": "remove",
+        "instruction": "Remove the Product notes bullet about the Redis cache migration.",
+        "target": {
+          "description": "the Redis bullet in \"## 3. Product notes\"",
+          "heading": "3. Product notes"
+        },
+        "verbatim": null,
+        "constraints": [
+          "keep the other Product notes bullets"
+        ],
+        "frame_relevant": false
+      },
+      "expectedTool": "remove_text",
+      "contextPacketTurns": 0,
+      "promptChars": 4063,
+      "attempts": [
+        {
+          "attempt": "attempt-1",
+          "requestOk": true,
+          "error": null,
+          "latencyMs": 3038,
+          "promptTokens": 1417,
+          "outputTokens": 694,
+          "rawOutput": "<tool_call>\n<function=edit_text>\n<parameter=file_path>\nnotes/quarterly-review.md\n</parameter>\n<parameter=start_line>\n25\n</parameter>\n<parameter=end_line>\n25\n</parameter>\n<parameter=old_text_anchor>\n\n- Redis cache migration was postponed to Q4.\n</parameter>\n<parameter=new_text>\n\n</parameter>\n</function>\n</tool_call>",
+          "reasoningSeparated": true,
+          "toolCallBlockCount": 1,
+          "parseOk": true,
+          "parsedTool": "edit_text",
+          "parsedParams": {
+            "file_path": "notes/quarterly-review.md",
+            "start_line": "25",
+            "end_line": "25",
+            "old_text_anchor": "- Redis cache migration was postponed to Q4.",
+            "new_text": ""
+          },
+          "toolMatchesDirectiveExpectation": false,
+          "paramsOk": false,
+          "paramsProblems": [
+            "missing required param \"new_text\""
+          ],
+          "groundingOk": true,
+          "groundingDetail": "anchor matches note lines 25–25",
+          "groundingBoundsOk": true,
+          "anchorOk": true,
+          "blastRadiusOk": null,
+          "blastRadiusNote": "",
+          "fullValid": false
+        },
+        {
+          "attempt": "retry",
+          "requestOk": true,
+          "error": null,
+          "latencyMs": 3559,
+          "promptTokens": 1529,
+          "outputTokens": 756,
+          "rawOutput": "<tool_call>\n<function=edit_text>\n<parameter=file_path>\nnotes/quarterly-review.md\n</parameter>\n<parameter=start_line>\n25\n</parameter>\n<parameter=end_line>\n25\n</parameter>\n<parameter=old_text_anchor>\n\n- Redis cache migration was postponed to Q4.\n</parameter>\n<parameter=new_text>\n\n</parameter>\n</function>\n</tool_call>",
+          "reasoningSeparated": true,
+          "toolCallBlockCount": 1,
+          "parseOk": true,
+          "parsedTool": "edit_text",
+          "parsedParams": {
+            "file_path": "notes/quarterly-review.md",
+            "start_line": "25",
+            "end_line": "25",
+            "old_text_anchor": "- Redis cache migration was postponed to Q4.",
+            "new_text": ""
+          },
+          "toolMatchesDirectiveExpectation": false,
+          "paramsOk": false,
+          "paramsProblems": [
+            "missing required param \"new_text\""
+          ],
+          "groundingOk": true,
+          "groundingDetail": "anchor matches note lines 25–25",
+          "groundingBoundsOk": true,
+          "anchorOk": true,
+          "blastRadiusOk": null,
+          "blastRadiusNote": "",
+          "fullValid": false
+        }
+      ],
+      "firstTryFullValid": false,
+      "validAfterRetry": false,
+      "retryRecovered": false
+    },
+    {
+      "id": "F03",
+      "label": "insert · line under Security (QA 8)",
+      "noteName": "seed",
+      "noteLineCount": 43,
+      "userCommand": "add a line under Security: rotate keys monthly",
+      "directive": {
+        "task": "insert",
+        "instruction": "Add a line to the Security section of the note, after its existing bullets.",
+        "target": {
+          "description": "under the \"## 6. Security\" heading",
+          "heading": "6. Security"
+        },
+        "verbatim": "rotate keys monthly",
+        "constraints": [
+          "keep the existing Security bullets"
+        ],
+        "frame_relevant": false
+      },
+      "expectedTool": "add_text",
+      "contextPacketTurns": 0,
+      "promptChars": 4077,
+      "attempts": [
+        {
+          "attempt": "attempt-1",
+          "requestOk": true,
+          "error": null,
+          "latencyMs": 20580,
+          "promptTokens": 1421,
+          "outputTokens": 3000,
+          "rawOutput": "We need to edit the note file `notes/quarterly-review.md`. The directive: \"Add a line to the Security section of the note, after its existing bullets.\" Under heading \"## 6. Security\". Existing bullets are lines 41-43? Let's look at current note lines around that.\n\nFrom context:\n\nLines:\n39 │ ## 5. Follow-ups\n40 │ \n41 │ - Finance to confirm Q3 revenue by Friday.\n42 │ - Dana to share the revised hiring model.\n43 │ \n44 │ ## 6. Security   (Wait, line numbers given: Let's recount from provided lines.)\n\nLet me list them with line numbers:\n\n1 # Q3 Business Review\n2 \n3 Prepared for the operating review...\n4 \n5 ## 1. Executive summary\n6 \n7 Revenue grew...\n8 \n9 > Decision needed...\n10 \n11 ## 2. Revenue\n12 \n13 | Quarter | Revenue | Status |\n14 | --- | --- | --- |\n15 | Q1 | $0.92M | Closed |\n16 | Q2 | $1.08M | Closed |\n17 | Q3 | $1.2M | Pending |\n18 | Q4 | $1.35M | Forecast |\n19 \n20 The Q3 figure...\n21 \n22 ## 3. Product notes\n23 \n24 - Shipped the new workspace permissions model.\n25 - Redis cache migration was postponed to Q4.\n26 - Mobile capture beta reached 1,200 weekly users.\n27 \n28 ## 4. Risks\n29 \n30 1. Enterprise pipeline...\n31 2. Support volume...\n32 3. Hiring depends...\n33 \n34 ## 5. Follow-ups\n35 \n36 - Finance to confirm Q3 revenue by Friday.\n37 - Dana to share the revised hiring model.\n38 \n39 ## 6. Security\n40 \n41 - Rotate production API keys before 30 November.\n42 - Complete the SSO audit with IT.\n43 \n\nWait, after line 39 \"## 6. Security\" there is a blank line? Then lines 41-42 are bullets under security. So we need to add a new line after its existing bullets. That means after line 42 (the last bullet) and before maybe the next heading or end of section. The \"Security\" section currently has heading at line 39, then blank line 40, then two bullets lines 41-42. After that there is no further content until perhaps a blank line? Actually after line 43 we see nothing else; but in the note snippet we have:\n\n39 │ ## 6. Security\n40 │ \n41 │ - Rotate production API keys before 30 November.\n42 │ - Complete the SSO audit with IT.\n43 │ \n\nSo lines 44 onward would be next heading (maybe none). So to add a line after existing bullets, we can insert a new bullet or just a line? The directive says \"Add a line to the Security section of the note, after its existing bullets.\" It also provides verbatim: \"rotate keys monthly\". Wait, that's interesting. In the target object:\n\n{\n  \"task\": \"insert\",\n  \"instruction\": \"Add a line to the Security section of the note, after its existing bullets.\",\n  \"target\": {\n    \"description\": \"under the \\\"## 6. Security\\\" heading\",\n    \"heading\": \"6. Security\"\n  },\n  \"verbatim\": \"rotate keys monthly\",\n  \"constraints\": [\n    \"keep the existing Security bullets\"\n  ],\n  \"frame_relevant\": false\n}\n\nThe verbatim string is \"rotate keys monthly\". That seems like a phrase to insert as a new bullet? Or maybe it's a line that should be added. The instruction: add a line after its existing bullets, and we have verbatim text \"rotate keys monthly\". So likely they want us to add a new bullet point with content \"rotate keys monthly\" under Security section.\n\nBut need to check context: Existing security bullets are about rotating production API keys before 30 November. The phrase \"rotate keys monthly\" might be a different requirement? Could be that we need to insert the line \"rotate keys monthly\" as an additional bullet or maybe as part of existing bullet list? Let's parse:\n\nThe note currently under Security (lines 39-43) has heading \"## 6. Security\", then blank line, then two bullets: \"- Rotate production API keys before 30 November.\" and \"- Complete the SSO audit with IT.\"\n\nWe need to add a new line after these bullets. So we could add another bullet like \"- Rotate keys monthly\" or maybe \"rotate keys monthly\" as a separate line (maybe not prefixed by dash). But typical Markdown bullet points start with hyphen or asterisk. The existing lines have hyphens at the start of each bullet. So we should maintain that style.\n\nThus after line 42, we add a new line 44? Actually current numbering: line 43 is blank (maybe after last bullet). Let's see exact text:\n\n39 │ ## 6. Security\n40 │ \n41 │ - Rotate production API keys before 30 November.\n42 │ - Complete the SSO audit with IT.\n43 │ \n\nSo line 43 appears empty. So we can insert a new bullet at line 44 (or after line 42). The instruction \"after its existing bullets\" means after lines 41-42, i.e., between them? Usually after the last bullet is line 42; then blank line 43; but there might be no content after that. So we can add a new bullet as line 44.\n\nThe verbatim text: \"rotate keys monthly\". That could be part of a bullet like \"- Rotate keys monthly\" or maybe it's just the phrase without dash? The user gave verbatim exactly: \"rotate keys monthly\". We need to decide if we include hyphen. Since existing bullets have hyphens, I think we should match style and add a new bullet with that text.\n\nThus new line could be:\n\n44 │ - Rotate keys monthly\n\nBut is there any nuance? The phrase \"rotate keys monthly\" might refer to rotating API keys monthly rather than before 30 November. But the existing bullet says \"Rotate production API keys before 30 November.\" That's a specific deadline. Maybe they want to add another line about rotation frequency: \"rotate keys monthly\". Could be that we need to insert as an additional item in security.\n\nLet's follow constraints: keep existing Security bullets. So we must not remove any of them. Adding a new bullet is fine.\n\nThus I will insert after the last bullet (line 42). The anchor for insertion: position \"after_line\" or \"under_heading\"? The tool schema says: add_text with parameters file_path, position, anchor, content. Options: append, prepend, after_line, under_heading. We need to choose correct one.\n\nWe want to insert a new line within the Security section after existing bullets. That is essentially after line 42 (the last bullet). So we can use \"after_line\" with line number? The parameter \"position\" is enum: append | prepend | after_line | under_heading. There's no explicit line number for after_line; maybe it means insert after the specified line? Usually \"after_line\" would be after a given line number. But they also have anchor (string|integer) field separate. For add_text, parameters: file_path, position, anchor, content. The description: Insert new text or Markdown at a precise position: append, prepend, after a line, or under a heading. So \"after_line\" likely means after the specified line number. And \"anchor\" might be the heading? Not sure.\n\nLet's examine tool definitions:\n\nFrom schema function=add_text:\n- file_path (string)\n- position (enum: append | prepend | after_line | under_heading, required): Where the content is inserted.\n- anchor (string | integer): Line number or exact heading supplied by the supervisor.\n- content (string, required): Markdown to insert.\n\nSo we need to provide \"anchor\" as either line number or heading. For inserting after a specific line, maybe \"after_line\" and anchor is the line number? Or perhaps \"position\": \"after_line\" means after the given line, and \"anchor\" might be something else like heading? The description: \"Insert new text or Markdown at a precise position: append, prepend, after a line, or under a heading.\" So for \"under_heading\", anchor is heading. For \"after_line\", maybe we give line number as anchor? Not entirely clear.\n\nGiven typical usage in these tasks, I think they expect us to set:\n- file_path = \"notes/quarterly-review.md\"\n- position = \"after_line\" (or after_line)\n- anchor = 42? Or maybe the heading \"## 6. Security\"? The target description says under the \"## 6. Security\" heading. So we might need to use anchor as the heading string \"# 6. Security\"? Actually heading is \"## 6. Security\". So anchor could be that exact line.\n\nBut also they gave verbatim: \"rotate keys monthly\". That's content.\n\nLet's parse the fields:\n\n- file_path: target note path.\n- position: where to insert (append, prepend, after_line, under_heading).\n- anchor: line number or exact heading supplied by the supervisor. So we need to give either a line number or the heading text. For \"under_heading\", maybe anchor is heading; for \"after_line\" maybe it's just after that line? I think we can provide both position and anchor appropriately.\n\nGiven the directive: target: description: under the \"## 6. Security\" heading, heading: \"6. Security\". So they explicitly mention heading. So likely use \"under_heading\" with anchor = \"## 6. Security\". And position maybe not needed? But schema requires all four fields. Let's see typical usage from prior tasks? Not sure.\n\nBetter to choose \"after_line\"? No, we need after existing bullets under that heading. That is after the last bullet line (line 42). So I think we can set:\n\n- file_path: notes/quarterly-review.md\n- position: after_line (or maybe \"after_section\" but not in options)\n- anchor: 42? Or \"## 6. Security\"? The instruction says \"under the '## 6. Security' heading\". That suggests using under_heading and anchor = \"## 6. Security\". But also we need to insert after existing bullets, which are within that section.\n\nLet's examine tool definitions more thoroughly:\n\nThe function add_text has parameters:\n- file_path\n- position (required)\n- anchor (string | integer) \n- content\n\nThus we must supply all four. I'll decide as follows:\n- file_path: \"notes/quarterly-review.md\"\n- position: \"after_line\" maybe? But then what is anchor for after_line? Could be the line number after which to insert. So set anchor = 42 (the last bullet). That would place content after line 42.\n- content: \"- Rotate keys monthly\"\n\nBut also we need to keep heading and bullets above.\n\nAlternatively, \"under_heading\" with anchor = \"## 6. Security\" and position maybe not needed? But they require position as well. Hmm.\n\nLet's think about typical usage in similar tasks I've seen: For example, if you want to insert a new bullet under a heading, you might use \"under_heading\" and provide the heading text. If you want to append at end of file, you'd use \"append\". After a line, you give line number.\n\nThus for after existing bullets within Security section, we can do:\n\n- position: \"after_line\"\n- anchor: 42 (the last bullet line)\n- content: \"- Rotate keys monthly\"\n\nBut is there a blank line between bullet and next heading? There's line 43 blank. So after line 42, there is line 43 empty. Inserting after line 42 would place new line before the blank line? That might be okay.\n\nAlternatively, we could use \"after_heading\" but not an option; only under_heading.\n\nLet's decide: I'll go with position = \"after_line\", anchor = 42, content = \"- Rotate keys monthly\". However, need to ensure spacing and bullet formatting. The existing bullets start with hyphen and space. So new line should match same style.\n\nThus new text:\n\n- after the last bullet of security (line 42). So we add a new bullet line: \"- Rotate keys monthly\"\n\nBut maybe they want \"rotate keys monthly\" without dash? Let's read verbatim again: \"rotate keys monthly\". Usually in bullet list you'd write \"- rotate keys monthly\". But it could be that the phrase is meant to replace something else. The existing bullet says \"Rotate production API keys before 30 November.\" That seems like a specific deadline, not frequency. So adding \"rotate keys monthly\" as another bullet about rotation frequency makes sense.\n\nThus I'll insert:\n\n44 │ - Rotate keys monthly\n\nBut we need to maintain blank lines? Usually markdown lists are separated by newline; after line 42 there is a blank line (line 43). If we add new bullet before the blank line, it might become part of same list. Let's see: The current bullets:\n\n41 │ - Rotate production API keys before 30 November.\n42 │ - Complete the SSO audit with IT.\n\nIf we insert after line 42, then there will be a blank line (line 43) and then new bullet? Actually typical formatting: A blank line separates sections. But within same heading, you can have multiple bullets separated by newline without blank lines. So if we add a new bullet right after line 42, we could just place it on the next line with dash.\n\nThus final content:\n\nLine 44 (new) = \"- Rotate keys monthly\"\n\nNow let's implement using tool call \"add_text\". We'll need to specify position and anchor appropriately.\n\nGiven the schema: \"position\" is one of append | prepend | after_line | under_heading. I think \"after_line\" means after a specific line number, i.e., insert after that line. So we set position = \"after_line\", anchor = 42 (the last bullet",
+          "reasoningSeparated": true,
+          "toolCallBlockCount": 0,
+          "parseOk": false,
+          "parsedTool": null,
+          "parsedParams": null,
+          "toolMatchesDirectiveExpectation": null,
+          "paramsOk": false,
+          "paramsProblems": [
+            "no parsed call"
+          ],
+          "groundingOk": false,
+          "groundingDetail": "no parsed call",
+          "groundingBoundsOk": null,
+          "anchorOk": null,
+          "blastRadiusOk": null,
+          "blastRadiusNote": "",
+          "fullValid": false
+        },
+        {
+          "attempt": "retry",
+          "requestOk": true,
+          "error": null,
+          "latencyMs": 13687,
+          "promptTokens": 3469,
+          "outputTokens": 2217,
+          "rawOutput": "<tool_call>\n<function=tool_name>\n<parameter=file_path>\nnotes/quarterly-review.md\n</parameter>\n<parameter=position>\nafter_line\n</parameter>\n<parameter=anchor>\n## 6. Security\n</parameter>\n<parameter=content>\n- rotate keys monthly\n</parameter>\n</function>\n</tool_call>",
+          "reasoningSeparated": true,
+          "toolCallBlockCount": 1,
+          "parseOk": false,
+          "parsedTool": null,
+          "parsedParams": null,
+          "toolMatchesDirectiveExpectation": null,
+          "paramsOk": false,
+          "paramsProblems": [
+            "no parsed call"
+          ],
+          "groundingOk": false,
+          "groundingDetail": "no parsed call",
+          "groundingBoundsOk": null,
+          "anchorOk": null,
+          "blastRadiusOk": null,
+          "blastRadiusNote": "",
+          "fullValid": false
+        }
+      ],
+      "firstTryFullValid": false,
+      "validAfterRetry": false,
+      "retryRecovered": false
+    },
+    {
+      "id": "F04",
+      "label": "insert · spoken bullet under Follow-ups (QA 19)",
+      "noteName": "seed",
+      "noteLineCount": 43,
+      "userCommand": "hey, could you add a bullet under Follow-ups saying send the deck to finance",
+      "directive": {
+        "task": "insert",
+        "instruction": "Add a bullet to the Follow-ups section, phrased as an action item.",
+        "target": {
+          "description": "under the \"## 5. Follow-ups\" heading",
+          "heading": "5. Follow-ups"
+        },
+        "verbatim": "send the deck to finance",
+        "constraints": [
+          "match the existing bullet style"
+        ],
+        "frame_relevant": false
+      },
+      "expectedTool": "add_text",
+      "contextPacketTurns": 0,
+      "promptChars": 4074,
+      "attempts": [
+        {
+          "attempt": "attempt-1",
+          "requestOk": true,
+          "error": null,
+          "latencyMs": 11445,
+          "promptTokens": 1424,
+          "outputTokens": 2638,
+          "rawOutput": "<tool_call>\n<function=edit_text>\n<parameter=file_path>\nnotes/quarterly-review.md\n</parameter>\n<parameter=position>\nunder_heading\n</parameter>\n<parameter=anchor>\n## 5. Follow-ups\n</parameter>\n<parameter=content>\n- send the deck to finance\n\n</parameter>\n</function>\n</tool_call>",
+          "reasoningSeparated": true,
+          "toolCallBlockCount": 1,
+          "parseOk": true,
+          "parsedTool": "edit_text",
+          "parsedParams": {
+            "file_path": "notes/quarterly-review.md",
+            "position": "under_heading",
+            "anchor": "## 5. Follow-ups",
+            "content": "- send the deck to finance"
+          },
+          "toolMatchesDirectiveExpectation": false,
+          "paramsOk": false,
+          "paramsProblems": [
+            "missing required param \"start_line\"",
+            "missing required param \"end_line\"",
+            "missing required param \"old_text_anchor\"",
+            "missing required param \"new_text\"",
+            "param \"start_line\" is not an integer (got undefined)",
+            "param \"end_line\" is not an integer (got undefined)"
+          ],
+          "groundingOk": false,
+          "groundingDetail": "range NaN–NaN is out of bounds for the 43-line note",
+          "groundingBoundsOk": false,
+          "anchorOk": false,
+          "blastRadiusOk": null,
+          "blastRadiusNote": "",
+          "fullValid": false
+        },
+        {
+          "attempt": "retry",
+          "requestOk": true,
+          "error": null,
+          "latencyMs": 5749,
+          "promptTokens": 1598,
+          "outputTokens": 1316,
+          "rawOutput": "<tool_call>\n<function=edit_text>\n<parameter=file_path>\nnotes/quarterly-review.md\n</parameter>\n<parameter=position>\nunder_heading\n</parameter>\n<parameter=anchor>\n## 5. Follow-ups\n</parameter>\n<parameter=content>\n- send the deck to finance\n\n</parameter>\n</function>\n</tool_call>",
+          "reasoningSeparated": true,
+          "toolCallBlockCount": 1,
+          "parseOk": true,
+          "parsedTool": "edit_text",
+          "parsedParams": {
+            "file_path": "notes/quarterly-review.md",
+            "position": "under_heading",
+            "anchor": "## 5. Follow-ups",
+            "content": "- send the deck to finance"
+          },
+          "toolMatchesDirectiveExpectation": false,
+          "paramsOk": false,
+          "paramsProblems": [
+            "missing required param \"start_line\"",
+            "missing required param \"end_line\"",
+            "missing required param \"old_text_anchor\"",
+            "missing required param \"new_text\"",
+            "param \"start_line\" is not an integer (got undefined)",
+            "param \"end_line\" is not an integer (got undefined)"
+          ],
+          "groundingOk": false,
+          "groundingDetail": "range NaN–NaN is out of bounds for the 43-line note",
+          "groundingBoundsOk": false,
+          "anchorOk": false,
+          "blastRadiusOk": null,
+          "blastRadiusNote": "",
+          "fullValid": false
+        }
+      ],
+      "firstTryFullValid": false,
+      "validAfterRetry": false,
+      "retryRecovered": false
+    },
+    {
+      "id": "F05",
+      "label": "edit · rename title (QA 20)",
+      "noteName": "seed",
+      "noteLineCount": 43,
+      "userCommand": "Rename the title to Q3 Review Final",
+      "directive": {
+        "task": "edit",
+        "instruction": "Rename the note title — the top-level H1 heading — to \"Q3 Review Final\".",
+        "target": {
+          "description": "line 1, the H1 heading at the top of the note",
+          "heading": null
+        },
+        "verbatim": null,
+        "constraints": [
+          "change only the title line"
+        ],
+        "frame_relevant": false
+      },
+      "expectedTool": "edit_text",
+      "contextPacketTurns": 0,
+      "promptChars": 4049,
+      "attempts": [
+        {
+          "attempt": "attempt-1",
+          "requestOk": true,
+          "error": null,
+          "latencyMs": 1687,
+          "promptTokens": 1424,
+          "outputTokens": 372,
+          "rawOutput": "<tool_call>\n<function=edit_text>\n<parameter=file_path>\nnotes/quarterly-review.md\n</parameter>\n<parameter=start_line>\n1\n</parameter>\n<parameter=end_line>\n1\n</parameter>\n<parameter=old_text_anchor>\n# Q3 Business Review\n</parameter>\n<parameter=new_text>\n# Q3 Review Final\n</parameter>\n</function>\n</tool_call>",
+          "reasoningSeparated": true,
+          "toolCallBlockCount": 1,
+          "parseOk": true,
+          "parsedTool": "edit_text",
+          "parsedParams": {
+            "file_path": "notes/quarterly-review.md",
+            "start_line": "1",
+            "end_line": "1",
+            "old_text_anchor": "# Q3 Business Review",
+            "new_text": "# Q3 Review Final"
+          },
+          "toolMatchesDirectiveExpectation": true,
+          "paramsOk": true,
+          "paramsProblems": [],
+          "groundingOk": true,
+          "groundingDetail": "anchor matches note lines 1–1",
+          "groundingBoundsOk": true,
+          "anchorOk": true,
+          "blastRadiusOk": true,
+          "blastRadiusNote": "retained 17 of 20 chars (floor 6)",
+          "fullValid": true
+        }
+      ],
+      "firstTryFullValid": true,
+      "validAfterRetry": null,
+      "retryRecovered": null
+    },
+    {
+      "id": "F06",
+      "label": "remove · API keys bullet, filler-prefixed (QA 21)",
+      "noteName": "seed",
+      "noteLineCount": 43,
+      "userCommand": "um, please delete the bullet about API keys",
+      "directive": {
+        "task": "remove",
+        "instruction": "Delete the Security bullet about rotating production API keys.",
+        "target": {
+          "description": "the first bullet under \"## 6. Security\"",
+          "heading": "6. Security"
+        },
+        "verbatim": null,
+        "constraints": [
+          "keep the SSO audit bullet"
+        ],
+        "frame_relevant": false
+      },
+      "expectedTool": "remove_text",
+      "contextPacketTurns": 0,
+      "promptChars": 4043,
+      "attempts": [
+        {
+          "attempt": "attempt-1",
+          "requestOk": true,
+          "error": null,
+          "latencyMs": 5817,
+          "promptTokens": 1414,
+          "outputTokens": 1337,
+          "rawOutput": "<tool_call>\n<function=remove_text>\n<parameter=file_path>\nnotes/quarterly-review.md\n</parameter>\n<parameter=start_line>\n41\n</parameter>\n<parameter=end_line>\n41\n</parameter>\n<parameter=target_excerpt>\n- Rotate production API keys before 30 November.\n</parameter>\n</function>\n</tool_call>",
+          "reasoningSeparated": true,
+          "toolCallBlockCount": 1,
+          "parseOk": true,
+          "parsedTool": "remove_text",
+          "parsedParams": {
+            "file_path": "notes/quarterly-review.md",
+            "start_line": "41",
+            "end_line": "41",
+            "target_excerpt": "- Rotate production API keys before 30 November."
+          },
+          "toolMatchesDirectiveExpectation": true,
+          "paramsOk": true,
+          "paramsProblems": [],
+          "groundingOk": true,
+          "groundingDetail": "anchor matches note lines 41–41",
+          "groundingBoundsOk": true,
+          "anchorOk": true,
+          "blastRadiusOk": true,
+          "blastRadiusNote": "removal 1 of 43 lines (cap 21)",
+          "fullValid": true
+        }
+      ],
+      "firstTryFullValid": true,
+      "validAfterRetry": null,
+      "retryRecovered": null
+    },
+    {
+      "id": "F07",
+      "label": "extract · LTV/CAC formula into Revenue (QA 9, D2 frame_extract)",
+      "noteName": "seed",
+      "noteLineCount": 43,
+      "userCommand": "pull the LTV/CAC formula from the slide into Revenue",
+      "directive": {
+        "task": "extract",
+        "instruction": "Pull the LTV/CAC north-star formula from the live slide into the Revenue section of the note. The supervising model read the frame; its extracted content is in frame_extract below — place that content under the Revenue heading as a LaTeX block.",
+        "target": {
+          "description": "under the \"## 2. Revenue\" heading",
+          "heading": "2. Revenue"
+        },
+        "verbatim": null,
+        "constraints": [
+          "latex block",
+          "do not alter the Revenue table"
+        ],
+        "frame_extract": "**North star — LTV / CAC**\n\n$$\n\\frac{\\mathrm{LTV}}{\\mathrm{CAC}} = 3.4\\times\n$$\n\nTarget floor: 3.0×. Captured from the camera feed at 14:06.",
+        "frame_relevant": true
+      },
+      "expectedTool": "extract_visual_to_note",
+      "contextPacketTurns": 0,
+      "promptChars": 4415,
+      "attempts": [
+        {
+          "attempt": "attempt-1",
+          "requestOk": true,
+          "error": null,
+          "latencyMs": 13094,
+          "promptTokens": 1527,
+          "outputTokens": 3000,
+          "rawOutput": "We need to parse the directive.\n\nThe user says: \"DIRECTIVE from the supervising model (typed; it is authoritative):\n{\n  \"task\": \"extract\",\n  \"instruction\": \"Pull the LTV/CAC north-star formula from the live slide into the Revenue section of the note. The supervising model read the frame; its extracted content is in frame_extract below — place that content under the \\\"## 2. Revenue\\\" heading as a LaTeX block.\",\n  \"target\": {\n    \"description\": \"under the \\\"## 2. Revenue\\\" heading\",\n    \"heading\": \"2. Revenue\"\n  },\n  \"verbatim\": null,\n  \"constraints\": [\n    \"latex block\",\n    \"do not alter the Revenue table\"\n  ],\n  \"frame_extract\": \"**North star — LTV / CAC**\\n\\n$$\\n\\\\frac{\\\\mathrm{LTV}}{\\\\mathrm{CAC}} = 3.4\\\\times\\n$$\\n\\nTarget floor: 3.0×. Captured from the camera feed at 14:06.\",\n  \"frame_relevant\": true\n}\n\nContext — last 3 completed edit turns (background only; none yet). Current note lines numbered.\n\nWe need to insert a LaTeX block under the \"## 2. Revenue\" heading. The heading is line 11: \"## 2. Revenue\". Under that heading, there is a table starting at line 13. We need to place the extracted content as a LaTeX block. The frame_extract contains:\n\n**North star — LTV / CAC**\n\n$$\\frac{\\mathrm{LTV}}{\\mathrm{CAC}} = 3.4\\times$$\n\nTarget floor: 3.0×. Captured from the camera feed at 14:06.\n\nWe need to format as a LaTeX block. The instruction says \"place that content under the Revenue heading as a LaTeX block.\" So we should add after line 11 (the heading) or maybe before the table? Usually, under the heading, we can insert a LaTeX block. Let's see current lines:\n\nLine 11: ## 2. Revenue\nLine 12: (blank)\nLine 13: | Quarter | Revenue | Status |\n...\n\nWe need to add after line 11 perhaps? Or maybe within the section before the table. The frame_extract includes a heading \"**North star — LTV / CAC**\" and then LaTeX equation and target floor.\n\nThus we should insert a LaTeX block (maybe using \\begin{align*} ... \\end{align*} or just as plain latex). Since they said \"latex block\", maybe use the `extract_visual_to_note` tool with visual_format \"latex_block\" and anchor_heading \"## 2. Revenue\". But we have a direct edit_text operation: insert new text at position under heading.\n\nThe tool catalog includes `insert_new_text`? Actually there is `add_text` function (file_path, position, anchor, content). The schema for add_text: Insert new text or Markdown at a precise position: append, prepend, after_line, or under_heading. So we can use `under_heading`. That matches \"under the heading\". So we need to call `add_text` with file_path \"notes/quarterly-review.md\", position \"under_heading\", anchor \"## 2. Revenue\", content being the LaTeX block.\n\nBut note: The frame_extract includes a line \"**North star — LTV / CAC**\" and then an equation starting with $$ ... $$. We need to preserve formatting exactly? Probably we should copy verbatim from frame_extract, but as a LaTeX block. Let's construct the content:\n\nWe can put:\n\n**North star — LTV / CAC**\n\n$$\\frac{\\mathrm{LTV}}{\\mathrm{CAC}} = 3.4\\times$$\n\nTarget floor: 3.0×. Captured from the camera feed at 14:06.\n\nBut as a LaTeX block, maybe we want to wrap in `\\begin{lstlisting}`? Not sure. The instruction says \"as a LaTeX block\". In markdown, we can use triple backticks with latex language, but they might expect something like:\n\n\\[\n\\frac{\\mathrm{LTV}}{\\mathrm{CAC}} = 3.4\\times\n\\]\n\nBut the frame_extract includes the equation starting with $$ and then newline. The original note uses plain text for table etc. So I think we should just insert a LaTeX block using `$$` delimiters? Or maybe they want to treat it as a LaTeX inline math environment.\n\nGiven the constraints: \"latex block\" is one of the options in add_text (visual_format). But that's for extract_visual_to_note tool. However, we are not using that tool; we directly insert content via add_text. The instruction says \"place that content under the Revenue heading as a LaTeX block.\" So I think we need to use `add_text` with position \"under_heading\" and anchor \"## 2. Revenue\". Content should be exactly the extracted text, but formatted as a LaTeX block.\n\nLet's decide on exact content:\n\nFrom frame_extract:\n\"**North star — LTV / CAC**\\n\\n$$\\n\\\\frac{\\\\mathrm{LTV}}{\\\\mathrm{CAC}} = 3.4\\\\times\\n$$\\n\\nTarget floor: 3.0×. Captured from the camera feed at 14:06.\"\n\nWe need to preserve line breaks and maybe markdown bold for heading? The frame_extract includes \"**North star — LTV / CAC**\" with asterisks indicating bold. Should we keep that? Probably yes, as it's part of extracted content.\n\nThus content:\n\n**North star — LTV / CAC**\n\n$$\\frac{\\mathrm{LTV}}{\\mathrm{CAC}} = 3.4\\times$$\n\nTarget floor: 3.0×. Captured from the camera feed at 14:06.\n\nBut note there is a missing closing parenthesis after \"3.4×\"? The original equation seems incomplete: \"3.4×\" maybe times something? But we just copy as given.\n\nThus I'll construct:\n\n**North star — LTV / CAC**\n\n$$\\frac{\\mathrm{LTV}}{\\mathrm{CAC}} = 3.4\\times$$\n\nTarget floor: 3.0×. Captured from the camera feed at 14:06.\n\nBut maybe they want to keep line breaks exactly as in frame_extract, including double newlines. We'll include them.\n\nNow we need to insert under heading \"## 2. Revenue\". So after line 11 (the heading) and before line 12 blank? Or after blank? The add_text tool's \"under_heading\" likely means inserting content beneath the heading but still within same section. I think it's fine.\n\nLet's use `add_text` with:\n\nfile_path: \"notes/quarterly-review.md\"\nposition: \"under_heading\"\nanchor: \"## 2. Revenue\"\ncontent: (the LaTeX block)\n\nBut we need to decide content formatting exactly as a LaTeX block. Usually, in markdown you can do:\n\n```\n\\begin{equation}\n\\frac{\\mathrm{LTV}}{\\mathrm{CAC}} = 3.4\\times\n\\end{equation}\n```\n\nBut the frame_extract uses $$ ... $$. I'll just copy the raw text but wrap with triple backticks and latex? The instruction \"latex block\" maybe means we should use a LaTeX code block (like `$$...$$`). However, typical usage: \"LaTeX block\" in markdown is either using `$$` for display math or `\\[ ... \\]`. I'll go with the same as frame_extract but inside triple backticks? Not sure.\n\nGiven the tool's add_text doesn't have a parameter for formatting language. It just inserts content string. So we can write exactly what they want: maybe something like:\n\n\\[\n\\frac{\\mathrm{LTV}}{\\mathrm{CAC}} = 3.4\\times\n\\]\n\nBut original had $$ ... $$. I'll preserve as given.\n\nLet's craft the content string:\n\n**North star — LTV / CAC**\n\n$$\\frac{\\mathrm{LTV}}{\\mathrm{CAC}} = 3.4\\times$$\n\nTarget floor: 3.0×. Captured from the camera feed at 14:06.\n\nBut note there is a missing closing parenthesis and maybe \"times\" incomplete; but we just copy exactly as in frame_extract, which includes line breaks:\n\n**North star — LTV / CAC**\n\n(blank line)\n$$ \\frac{\\mathrm{LTV}}{\\mathrm{CAC}} = 3.4\\times $$\n\n(blank line)\nTarget floor: 3.0×. Captured from the camera feed at 14:06.\n\nIn raw text, there are double backslashes for LaTeX commands; but in our note we have plain characters like \"$\\frac...$\". The frame_extract is a string with escaped newlines and backslashes. We need to decide how to embed that into content. Since we are writing the tool call, we can just put the raw text as it appears.\n\nLet's copy exactly:\n\n**North star — LTV / CAC**\n\n$$\\n\\\\frac{\\\\mathrm{LTV}}{\\\\mathrm{CAC}} = 3.4\\\\times\\n$$\n\nTarget floor: 3.0×. Captured from the camera feed at 14:06.\n\nBut that includes backslashes for LaTeX commands; in a markdown file, we need to escape them? The note currently uses plain text with dollar signs and backslashes? Let's check line 17 of current note: \"| Q3 | $1.2M | Pending |\". That's just a table cell with dollar sign. So they use LaTeX math inside tables as $...$. So we can include $$ for display.\n\nThus I'll write:\n\n**North star — LTV / CAC**\n\n$$\\frac{\\mathrm{LTV}}{\\mathrm{CAC}} = 3.4\\times$$\n\nTarget floor: 3.0×. Captured from the camera feed at 14:06.\n\nBut maybe need to keep \"×\" as unicode multiplication sign, not \\times? The frame_extract uses \"3.4×\". Actually it says \"3.4×\". In LaTeX you'd write $3.4\\times$. But they wrote \"3.4×\". I'll replicate exactly: \"3.4×\". However, the original line in the table has \"$1.2M\" etc with dollar signs for thousands? Not relevant.\n\nGiven uncertainty, we can just copy the raw string from frame_extract but replace double backslashes appropriately when writing as a JSON string. The tool call will treat content as plain text; I need to escape correctly within the function arguments. Usually in these tasks, we write the content inside quotes and it's fine.\n\nLet's construct add_text call:\n\n{\n  \"file_path\": \"notes/quarterly-review.md\",\n  \"position\": \"under_heading\",\n  \"anchor\": \"## 2. Revenue\",\n  \"content\": \"**North star — LTV / CAC**\\n\\n$$\\\\frac{\\\\mathrm{LTV}}{\\\\mathrm{CAC}} = 3.4\\\\times\\\\$$ \\n\\nTarget floor: 3.0×. Captured from the camera feed at 14:06.\"\n}\n\nBut need to be careful about line breaks and escaping of backslashes. In JSON, we need double escape for backslashes. The tool call format uses typical JSON with proper quoting.\n\nAlternatively, maybe there is a simpler approach: use `insert_new_text`? But the catalog includes \"add_text\" function defined as:\n\n<schema function=add_text>\nInsert new text or Markdown at a precise position: append, prepend, after_line, or under_heading, required...\n  file_path (string)\n  position (enum)\n  anchor (string | integer)\n  content (string)\n\nSo we need to provide exactly those fields.\n\nThus I'll craft the call:\n\nfile_path: \"notes/quarterly-review.md\"\nposition: \"under_heading\"\nanchor: \"## 2. Revenue\"\ncontent: The multi-line string with line breaks \\n and appropriate markdown bold and LaTeX delimiters.\n\nLet's write content exactly as we want it to appear in the note under heading:\n\n**North star — LTV / CAC**\n\n$$\\frac{\\mathrm{LTV}}{\\mathrm{CAC}} = 3.4\\times$$\n\nTarget floor: 3.0×. Captured from the camera feed at 14:06.\n\nBut maybe they want a LaTeX block, meaning we should wrap the equation in \\[ ... \\] or $$...$$. I'll use $$ as original.\n\nThus:\n\n**North star — LTV / CAC**\n\n$$\\frac{\\mathrm{LTV}}{\\mathrm{CAC}} = 3.4\\times$$\n\nTarget floor: 3.0×. Captured from the camera feed at 14:06.\n\nBut we need to preserve a blank line after heading? The existing note has blank lines between sections. After \"## 2. Revenue\" there is an empty line (line12). Then table starts. So inserting before the table, i.e., after heading and maybe one blank line, would be appropriate. Our content includes two paragraphs separated by blank lines.\n\nThus final inserted text:\n\n**North star — LTV / CAC**\n\n$$\\frac{\\mathrm{LTV}}{\\mathrm{CAC}} = 3.4\\times$$\n\nTarget floor: 3.0×. Captured from the camera feed at 14:06.\n\nBut we also need to keep bold formatting for \"North star — LTV / CAC\". The original frame_extract includes \"**North star — LTV / CAC**\" with asterisks, which is markdown bold. So include that.\n\nThus content:\n\n**North star — LTV / CAC**\n\n$$\\frac{\\mathrm{LTV}}{\\mathrm{CAC}} = 3.4\\times$$\n\nTarget floor: 3.0×. Captured from the camera feed at 14:06.\n\nBut maybe we need a blank line between bold and equation? In frame_extract there is a newline after \"**North star — LTV / CAC**\", then an empty line, then \"$$\\",
+          "reasoningSeparated": true,
+          "toolCallBlockCount": 0,
+          "parseOk": false,
+          "parsedTool": null,
+          "parsedParams": null,
+          "toolMatchesDirectiveExpectation": null,
+          "paramsOk": false,
+          "paramsProblems": [
+            "no parsed call"
+          ],
+          "groundingOk": false,
+          "groundingDetail": "no parsed call",
+          "groundingBoundsOk": null,
+          "anchorOk": null,
+          "blastRadiusOk": null,
+          "blastRadiusNote": "",
+          "fullValid": false
+        },
+        {
+          "attempt": "retry",
+          "requestOk": true,
+          "error": null,
+          "latencyMs": 11242,
+          "promptTokens": 3778,
+          "outputTokens": 2489,
+          "rawOutput": "<tool_call>\n<function=edit_text>\n<parameter=file_path>\nnotes/quarterly-review.md\n</parameter>\n<parameter=position>\nunder_heading\n</parameter>\n<parameter=anchor>\n## 2. Revenue\n</parameter>\n<parameter=content>\n**North star — LTV / CAC**\n\n$$\\frac{\\mathrm{LTV}}{\\mathrm{CAC}} = 3.4\\times$$\n\nTarget floor: 3.0×. Captured from the camera feed at 14:06.\n</parameter>\n</function>\n</tool_call>",
+          "reasoningSeparated": true,
+          "toolCallBlockCount": 1,
+          "parseOk": true,
+          "parsedTool": "edit_text",
+          "parsedParams": {
+            "file_path": "notes/quarterly-review.md",
+            "position": "under_heading",
+            "anchor": "## 2. Revenue",
+            "content": "**North star — LTV / CAC**\n\n$$\\frac{\\mathrm{LTV}}{\\mathrm{CAC}} = 3.4\\times$$\n\nTarget floor: 3.0×. Captured from the camera feed at 14:06."
+          },
+          "toolMatchesDirectiveExpectation": false,
+          "paramsOk": false,
+          "paramsProblems": [
+            "missing required param \"start_line\"",
+            "missing required param \"end_line\"",
+            "missing required param \"old_text_anchor\"",
+            "missing required param \"new_text\"",
+            "param \"start_line\" is not an integer (got undefined)",
+            "param \"end_line\" is not an integer (got undefined)"
+          ],
+          "groundingOk": false,
+          "groundingDetail": "range NaN–NaN is out of bounds for the 43-line note",
+          "groundingBoundsOk": false,
+          "anchorOk": false,
+          "blastRadiusOk": null,
+          "blastRadiusNote": "",
+          "fullValid": false
+        }
+      ],
+      "firstTryFullValid": false,
+      "validAfterRetry": false,
+      "retryRecovered": false
+    },
+    {
+      "id": "F08",
+      "label": "create · README template at top of seed note (design §13.1)",
+      "noteName": "seed",
+      "noteLineCount": 43,
+      "userCommand": "write a README template document to begin",
+      "directive": {
+        "task": "create",
+        "instruction": "Write a README template document to begin the note: title it README and give it the standard sections — overview, getting started, usage, contributing, license. The note currently holds a Q3 review; the user wants the template at the top.",
+        "target": {
+          "description": "top of the note, before the \"# Q3 Business Review\" heading",
+          "heading": null
+        },
+        "verbatim": null,
+        "constraints": [
+          "markdown",
+          "keep the existing Q3 content intact"
+        ],
+        "frame_relevant": false
+      },
+      "expectedTool": "add_text",
+      "contextPacketTurns": 0,
+      "promptChars": 4255,
+      "attempts": [
+        {
+          "attempt": "attempt-1",
+          "requestOk": true,
+          "error": null,
+          "latencyMs": 11482,
+          "promptTokens": 1461,
+          "outputTokens": 2608,
+          "rawOutput": "<tool_call>\n<function=edit_text>\n<parameter=file_path>\nnotes/quarterly-review.md\n</parameter>\n<parameter=position>\nprepend\n</parameter>\n<parameter=anchor>\n\n</parameter>\n<parameter=new_text>\n# README\n\n## Overview\nThis is a template for the quarterly business review held on 14 November. It provides an overview of revenue quality, product execution, and decisions needed before the board meeting. Figures are provisional until finance sign-off.\n\n## Getting Started\n- Review the executive summary.\n- Ensure finance confirms Q3 revenue by Friday.\n- Prepare for board meeting discussions.\n\n## Usage\nThis README serves as a structural guide to capture sections such as executive summary, revenue data, product notes, risks, follow-ups, and security actions in each quarter's review.\n\n## Contributing\nContributors are encouraged to add new quarters or update existing entries. Use the same section headings and bullet style.\n\n## License\nThis project is licensed under the applicable open source license. See the LICENSE file for details.\n</parameter>\n</function>\n</tool_call>",
+          "reasoningSeparated": true,
+          "toolCallBlockCount": 1,
+          "parseOk": true,
+          "parsedTool": "edit_text",
+          "parsedParams": {
+            "file_path": "notes/quarterly-review.md",
+            "position": "prepend",
+            "anchor": "",
+            "new_text": "# README\n\n## Overview\nThis is a template for the quarterly business review held on 14 November. It provides an overview of revenue quality, product execution, and decisions needed before the board meeting. Figures are provisional until finance sign-off.\n\n## Getting Started\n- Review the executive summary.\n- Ensure finance confirms Q3 revenue by Friday.\n- Prepare for board meeting discussions.\n\n## Usage\nThis README serves as a structural guide to capture sections such as executive summary, revenue data, product notes, risks, follow-ups, and security actions in each quarter's review.\n\n## Contributing\nContributors are encouraged to add new quarters or update existing entries. Use the same section headings and bullet style.\n\n## License\nThis project is licensed under the applicable open source license. See the LICENSE file for details."
+          },
+          "toolMatchesDirectiveExpectation": false,
+          "paramsOk": false,
+          "paramsProblems": [
+            "missing required param \"start_line\"",
+            "missing required param \"end_line\"",
+            "missing required param \"old_text_anchor\"",
+            "param \"start_line\" is not an integer (got undefined)",
+            "param \"end_line\" is not an integer (got undefined)"
+          ],
+          "groundingOk": false,
+          "groundingDetail": "range NaN–NaN is out of bounds for the 43-line note",
+          "groundingBoundsOk": false,
+          "anchorOk": false,
+          "blastRadiusOk": null,
+          "blastRadiusNote": "",
+          "fullValid": false
+        },
+        {
+          "attempt": "retry",
+          "requestOk": true,
+          "error": null,
+          "latencyMs": 13238,
+          "promptTokens": 1779,
+          "outputTokens": 3000,
+          "rawOutput": "<tool_call>\n<function=edit_text>\n<parameter=file_path>\nnotes/quarterly-review.md\n</parameter>\n<parameter=start_line>\n1\n</parameter>\n<parameter=end_line>\n1\n</parameter>\n<parameter=old_text_anchor>\n\n</parameter>\n<parameter=new_text>\n# README\n\n## Overview\nThis is a template for the quarterly business review held on 14 November. It provides an overview of revenue quality, product execution, and decisions needed before the board meeting. Figures are provisional until finance sign-off.\n\n## Getting Started\n- Review the executive summary.\n- Ensure finance confirms Q3 revenue by Friday.\n- Prepare for board meeting discussions.\n\n## Usage\nThis README serves as a structural guide to capture sections such as executive summary, revenue data, product notes, risks, follow-ups, and security actions in each quarter's review.\n\n## Contributing\nContributors are encouraged to add new quarters or update existing entries. Use the same section headings and bullet style.\n\n## License\nThis project is licensed under the",
+          "reasoningSeparated": true,
+          "toolCallBlockCount": 1,
+          "parseOk": false,
+          "parsedTool": null,
+          "parsedParams": null,
+          "toolMatchesDirectiveExpectation": null,
+          "paramsOk": false,
+          "paramsProblems": [
+            "no parsed call"
+          ],
+          "groundingOk": false,
+          "groundingDetail": "no parsed call",
+          "groundingBoundsOk": null,
+          "anchorOk": null,
+          "blastRadiusOk": null,
+          "blastRadiusNote": "",
+          "fullValid": false
+        }
+      ],
+      "firstTryFullValid": false,
+      "validAfterRetry": false,
+      "retryRecovered": false,
+      "readmeSample": {
+        "fromFixtureLabel": "create · README template at top of seed note (design §13.1)",
+        "fromAttempt": "attempt-1",
+        "fromValidAttempt": false,
+        "tool": "edit_text",
+        "content": "# README\n\n## Overview\nThis is a template for the quarterly business review held on 14 November. It provides an overview of revenue quality, product execution, and decisions needed before the board meeting. Figures are provisional until finance sign-off.\n\n## Getting Started\n- Review the executive summary.\n- Ensure finance confirms Q3 revenue by Friday.\n- Prepare for board meeting discussions.\n\n## Usage\nThis README serves as a structural guide to capture sections such as executive summary, revenue data, product notes, risks, follow-ups, and security actions in each quarter's review.\n\n## Contributing\nContributors are encouraged to add new quarters or update existing entries. Use the same section headings and bullet style.\n\n## License\nThis project is licensed under the applicable open source license. See the LICENSE file for details."
+      }
+    },
+    {
+      "id": "F09",
+      "label": "create · README template on bare # Untitled note (design §13.1)",
+      "noteName": "untitled",
+      "noteLineCount": 2,
+      "userCommand": "write a README template document to begin",
+      "directive": {
+        "task": "create",
+        "instruction": "Write a README template document to begin the note: title it README and give it the standard sections — overview, getting started, usage, contributing, license. The note is a brand-new note holding only the placeholder heading \"# Untitled\"; the README becomes the note's opening content.",
+        "target": {
+          "description": "the note, starting at the top",
+          "heading": null
+        },
+        "verbatim": null,
+        "constraints": [
+          "markdown"
+        ],
+        "frame_relevant": false
+      },
+      "expectedTool": "add_text",
+      "contextPacketTurns": 0,
+      "promptChars": 2685,
+      "attempts": [
+        {
+          "attempt": "attempt-1",
+          "requestOk": true,
+          "error": null,
+          "latencyMs": 9503,
+          "promptTokens": 978,
+          "outputTokens": 2185,
+          "rawOutput": "<tool_call>\n<function=edit_text>\n<parameter=file_path>\nnotes/quarterly-review.md\n</parameter>\n<parameter=start_line>\n1\n</parameter>\n<parameter=end_line>\n1\n</parameter>\n<parameter=old_text_anchor>\n# Untitled\n</parameter>\n<parameter=new_text>\n# README\n\n## Overview\nThis document provides an overview of the quarterly review project and its objectives.\n\n## Getting Started\nFollow the steps below to begin the review process...\n\n## Usage\nDescribe how to use the tools or data within this note...\n\n## Contributing\nGuidelines for contributing ideas, code, or updates...\n\n## License\n[Insert license information here]\n</parameter>\n</function>\n</tool_call>",
+          "reasoningSeparated": true,
+          "toolCallBlockCount": 1,
+          "parseOk": true,
+          "parsedTool": "edit_text",
+          "parsedParams": {
+            "file_path": "notes/quarterly-review.md",
+            "start_line": "1",
+            "end_line": "1",
+            "old_text_anchor": "# Untitled",
+            "new_text": "# README\n\n## Overview\nThis document provides an overview of the quarterly review project and its objectives.\n\n## Getting Started\nFollow the steps below to begin the review process...\n\n## Usage\nDescribe how to use the tools or data within this note...\n\n## Contributing\nGuidelines for contributing ideas, code, or updates...\n\n## License\n[Insert license information here]"
+          },
+          "toolMatchesDirectiveExpectation": false,
+          "paramsOk": true,
+          "paramsProblems": [],
+          "groundingOk": true,
+          "groundingDetail": "anchor matches note lines 1–1",
+          "groundingBoundsOk": true,
+          "anchorOk": true,
+          "blastRadiusOk": true,
+          "blastRadiusNote": "retained 368 of 10 chars (floor 3)",
+          "fullValid": true
+        }
+      ],
+      "firstTryFullValid": true,
+      "validAfterRetry": null,
+      "retryRecovered": null,
+      "readmeSample": {
+        "fromFixtureLabel": "create · README template on bare # Untitled note (design §13.1)",
+        "fromAttempt": "attempt-1",
+        "fromValidAttempt": true,
+        "tool": "edit_text",
+        "content": "# README\n\n## Overview\nThis document provides an overview of the quarterly review project and its objectives.\n\n## Getting Started\nFollow the steps below to begin the review process...\n\n## Usage\nDescribe how to use the tools or data within this note...\n\n## Contributing\nGuidelines for contributing ideas, code, or updates...\n\n## License\n[Insert license information here]"
+      }
+    },
+    {
+      "id": "F10",
+      "label": "edit · follow-up \"do the same for Q4\" (design §13.2, 3-turn packet)",
+      "noteName": "followup",
+      "noteLineCount": 42,
+      "userCommand": "do the same for Q4 to $1.5M",
+      "directive": {
+        "task": "edit",
+        "instruction": "Do the same for Q4: update the Q4 revenue row in the Revenue table to $1.5M and Status Final, mirroring the Q3 row update from the previous turn (value plus Status column).",
+        "target": {
+          "description": "the Q4 row of the Revenue table",
+          "heading": "2. Revenue"
+        },
+        "verbatim": null,
+        "constraints": [
+          "only the Q4 row changes"
+        ],
+        "frame_relevant": false
+      },
+      "expectedTool": "edit_text",
+      "contextPacketTurns": 3,
+      "promptChars": 4773,
+      "attempts": [
+        {
+          "attempt": "attempt-1",
+          "requestOk": true,
+          "error": null,
+          "latencyMs": 4381,
+          "promptTokens": 1643,
+          "outputTokens": 989,
+          "rawOutput": "<tool_call>\n<function=edit_text>\n<parameter=file_path>\nnotes/quarterly-review.md\n</parameter>\n<parameter=start_line>\n18\n</parameter>\n<parameter=end_line>\n18\n</parameter>\n<parameter=old_text_anchor>\n| Q4 | $1.35M | Forecast |\n</parameter>\n<parameter=new_text>\n| Q4 | $1.5M | Final |\n</parameter>\n</function>\n</tool_call>",
+          "reasoningSeparated": true,
+          "toolCallBlockCount": 1,
+          "parseOk": true,
+          "parsedTool": "edit_text",
+          "parsedParams": {
+            "file_path": "notes/quarterly-review.md",
+            "start_line": "18",
+            "end_line": "18",
+            "old_text_anchor": "| Q4 | $1.35M | Forecast |",
+            "new_text": "| Q4 | $1.5M | Final |"
+          },
+          "toolMatchesDirectiveExpectation": true,
+          "paramsOk": true,
+          "paramsProblems": [],
+          "groundingOk": true,
+          "groundingDetail": "anchor matches note lines 18–18",
+          "groundingBoundsOk": true,
+          "anchorOk": true,
+          "blastRadiusOk": true,
+          "blastRadiusNote": "retained 22 of 26 chars (floor 7)",
+          "fullValid": true
+        }
+      ],
+      "firstTryFullValid": true,
+      "validAfterRetry": null,
+      "retryRecovered": null
+    },
+    {
+      "id": "F11",
+      "label": "remove · vague \"that section about API keys\" (QA 23 shape)",
+      "noteName": "seed",
+      "noteLineCount": 43,
+      "userCommand": "remove that section about API keys",
+      "directive": {
+        "task": "remove",
+        "instruction": "Remove the section about API keys — the \"## 6. Security\" section at the end of the note: its heading and its two bullets (rotating production API keys, completing the SSO audit).",
+        "target": {
+          "description": "the whole \"## 6. Security\" section at the end of the note",
+          "heading": "6. Security"
+        },
+        "verbatim": null,
+        "constraints": [
+          "nothing outside the Security section is touched"
+        ],
+        "frame_relevant": false
+      },
+      "expectedTool": "remove_text",
+      "contextPacketTurns": 0,
+      "promptChars": 4201,
+      "attempts": [
+        {
+          "attempt": "attempt-1",
+          "requestOk": true,
+          "error": null,
+          "latencyMs": 10482,
+          "promptTokens": 1453,
+          "outputTokens": 2417,
+          "rawOutput": "<tool_call>\n<function=remove_text>\n<parameter=file_path>\nnotes/quarterly-review.md\n</parameter>\n<parameter=start_line>\n39\n</parameter>\n<parameter=end_line>\n43\n</parameter>\n<parameter=target_excerpt>\n## 6. Security\n\n- Rotate production API keys before 30 November.\n- Complete the SSO audit with IT.\n</parameter>\n</function>\n</tool_call>",
+          "reasoningSeparated": true,
+          "toolCallBlockCount": 1,
+          "parseOk": true,
+          "parsedTool": "remove_text",
+          "parsedParams": {
+            "file_path": "notes/quarterly-review.md",
+            "start_line": "39",
+            "end_line": "43",
+            "target_excerpt": "## 6. Security\n\n- Rotate production API keys before 30 November.\n- Complete the SSO audit with IT."
+          },
+          "toolMatchesDirectiveExpectation": true,
+          "paramsOk": true,
+          "paramsProblems": [],
+          "groundingOk": true,
+          "groundingDetail": "anchor matches note lines 39–43",
+          "groundingBoundsOk": true,
+          "anchorOk": true,
+          "blastRadiusOk": true,
+          "blastRadiusNote": "removal 5 of 43 lines (cap 21)",
+          "fullValid": true
+        }
+      ],
+      "firstTryFullValid": true,
+      "validAfterRetry": null,
+      "retryRecovered": null
+    },
+    {
+      "id": "F12",
+      "label": "insert · fourth risk in Risks list (authoring probe)",
+      "noteName": "seed",
+      "noteLineCount": 43,
+      "userCommand": "add a fourth risk about vendor concentration to the Risks list",
+      "directive": {
+        "task": "insert",
+        "instruction": "Add a fourth numbered risk about vendor concentration to the \"## 4. Risks\" list, matching the existing \"1. / 2. / 3.\" numbered style.",
+        "target": {
+          "description": "the numbered list under \"## 4. Risks\"",
+          "heading": "4. Risks"
+        },
+        "verbatim": null,
+        "constraints": [
+          "numbered list item",
+          "keep risks 1–3 unchanged"
+        ],
+        "frame_relevant": false
+      },
+      "expectedTool": "add_text",
+      "contextPacketTurns": 0,
+      "promptChars": 4138,
+      "attempts": [
+        {
+          "attempt": "attempt-1",
+          "requestOk": true,
+          "error": null,
+          "latencyMs": 17677,
+          "promptTokens": 1452,
+          "outputTokens": 2325,
+          "rawOutput": "<tool_call>\n<function=edit_text>\n<parameter=file_path>\nnotes/quarterly-review.md\n</parameter>\n<parameter=position>\nafter_line\n</parameter>\n<parameter=anchor>\n3. Hiring depends on the revised Q4 plan.\n</parameter>\n<parameter=content>\n4. Vendor concentration in key software suppliers remains high, creating single-point-of-failure risk.\n\n</parameter>\n</function>\n</tool_call>",
+          "reasoningSeparated": true,
+          "toolCallBlockCount": 1,
+          "parseOk": true,
+          "parsedTool": "edit_text",
+          "parsedParams": {
+            "file_path": "notes/quarterly-review.md",
+            "position": "after_line",
+            "anchor": "3. Hiring depends on the revised Q4 plan.",
+            "content": "4. Vendor concentration in key software suppliers remains high, creating single-point-of-failure risk."
+          },
+          "toolMatchesDirectiveExpectation": false,
+          "paramsOk": false,
+          "paramsProblems": [
+            "missing required param \"start_line\"",
+            "missing required param \"end_line\"",
+            "missing required param \"old_text_anchor\"",
+            "missing required param \"new_text\"",
+            "param \"start_line\" is not an integer (got undefined)",
+            "param \"end_line\" is not an integer (got undefined)"
+          ],
+          "groundingOk": false,
+          "groundingDetail": "range NaN–NaN is out of bounds for the 43-line note",
+          "groundingBoundsOk": false,
+          "anchorOk": false,
+          "blastRadiusOk": null,
+          "blastRadiusNote": "",
+          "fullValid": false
+        },
+        {
+          "attempt": "retry",
+          "requestOk": true,
+          "error": null,
+          "latencyMs": 18251,
+          "promptTokens": 1643,
+          "outputTokens": 3000,
+          "rawOutput": "<tool_call>\n<function=add_text>\n<parameter=file_path>\nnotes/quarterly-review.md\n</parameter>\n<parameter=position>\nafter_line\n</parameter>\n<parameter=anchor>\n32\n</parameter>\n<parameter=content>",
+          "reasoningSeparated": true,
+          "toolCallBlockCount": 1,
+          "parseOk": false,
+          "parsedTool": null,
+          "parsedParams": null,
+          "toolMatchesDirectiveExpectation": null,
+          "paramsOk": false,
+          "paramsProblems": [
+            "no parsed call"
+          ],
+          "groundingOk": false,
+          "groundingDetail": "no parsed call",
+          "groundingBoundsOk": null,
+          "anchorOk": null,
+          "blastRadiusOk": null,
+          "blastRadiusNote": "",
+          "fullValid": false
+        }
+      ],
+      "firstTryFullValid": false,
+      "validAfterRetry": false,
+      "retryRecovered": false
+    }
+  ]
+}
