@@ -327,6 +327,79 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, on
               </div>
             )}
 
+            {trace.directive && (
+              // Omni's typed delegation directive (design.md §5), recorded on
+              // the trace from P2 on. Legacy supervisor-first traces have no
+              // directive field — for them this section simply does not
+              // render, leaving the drawer exactly as it was.
+              <TraceSection index="D" title="Delegation directive" caption="Omni → worker · typed brief">
+                <div className="trace-route">
+                  <div className="trace-query-row">
+                    <div className="trace-query-name mono">task</div>
+                    <div className="trace-query-value">
+                      <span className="chip chip-accent mono">{trace.directive.task}</span>
+                      <span
+                        className={cx(
+                          'chip mono',
+                          trace.directive.frame_relevant ? 'chip-orange' : 'chip-ghost',
+                        )}
+                        title="whether the worker's task depends on the current video frame"
+                      >
+                        frame {trace.directive.frame_relevant ? 'relevant' : 'not needed'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="trace-query-row">
+                    <div className="trace-query-name mono">instruction</div>
+                    <div className="trace-query-value">
+                      <div className="trace-tool-list">
+                        <p className="trace-reason">{trace.directive.instruction}</p>
+                      </div>
+                    </div>
+                  </div>
+                  {trace.directive.verbatim && (
+                    // The one case where content legitimately travels inside
+                    // the directive: the user dictated exact words (§5).
+                    <div className="trace-query-row">
+                      <div className="trace-query-name mono">verbatim</div>
+                      <div className="trace-query-value">
+                        <div className="trace-tool-list">
+                          <p className="trace-reason mono">{trace.directive.verbatim}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {trace.directive.target && (
+                    <div className="trace-query-row">
+                      <div className="trace-query-name mono">target</div>
+                      <div className="trace-query-value">
+                        <div className="trace-tool-list">
+                          <p className="trace-reason">{trace.directive.target.description}</p>
+                          {trace.directive.target.heading && (
+                            <p className="trace-muted">under {trace.directive.target.heading}</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {trace.directive.constraints && trace.directive.constraints.length > 0 && (
+                    <div className="trace-query-row">
+                      <div className="trace-query-name mono">constraints</div>
+                      <div className="trace-query-value">
+                        <div className="trace-tool-list">
+                          {trace.directive.constraints.map((constraint) => (
+                            <span className="chip chip-ghost mono" key={constraint}>
+                              {constraint}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </TraceSection>
+            )}
+
             <TraceSection
               index="A"
               title="Pre-flight routing"
