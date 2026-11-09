@@ -321,8 +321,9 @@ npm run qa        # 31-case CDP battery — needs the dev server + trinity up (s
 
 ## 9.5 Known scope limits
 
-- Span grounding is still local keyword/quote search plus hand-pinned special cases (e.g. the
-  title→H1 pin in `findSpanForMutation`); d1's typed span extraction (§4 Stage B) never replaced it.
+- Span grounding is live: vague references go to d1-Omni's typed span question over structural
+  candidates (§4 Stage B, landed 2026-11-08); the deterministic keyword/quote search — plus the
+  literal quote/line/ordinal pre-empts — is the fallback and the d1-down path.
 - Natural phrasing is normalized before routing/planning (`normalizeCommand` strips fillers,
   scene-setting clauses and hedges; gerund verb forms match everywhere), and template detection
   no longer requires verb-first phrasing — §10 WS3, QA cases 12d/12e.
@@ -358,7 +359,15 @@ npm run qa        # 31-case CDP battery — needs the dev server + trinity up (s
       cases 12d/12e + chat hygiene (WS4) — battery green 31/31.
 - [x] VL-2B removed from the runtime (2026-11-08): no :8081 probe or worker path; extraction is
       deterministic — battery green 31/31 with :8081 absent.
-- [ ] Domain LoRA fine-tuning on rejected traces (§7 Phase 5; the data export already lands).
+- [x] Structural span grounding (§4 Stage B, 2026-11-08): d1-Omni typed span question over
+      structural candidates (sections/paragraphs/bullets/rows, kind-constrained by the spoken
+      noun); adopt at p ≥ 0.25, overturn a deterministic miss only at p ≥ 0.5; the title→H1 and
+      "remove the X section" special cases were deleted. QA cases 23/24 cover vague grounding.
+- [x] Phone-width command surface (2026-11-08): ≤780px Session/Note/Runtime tabs with a
+      persistent bottom composer; 21-check standalone CDP run at 390×844 (no overflow, mic
+      capture state, typed command → visible edit, zero console errors).
+- [ ] Domain LoRA fine-tuning on rejected traces (§7 Phase 5). Descoped 2026-11-08 at user
+      request — the JSONL export still produces the dataset; the SFT pass itself did not run.
 
 ## 9.7 Live test pass (2026-11-08)
 
@@ -403,9 +412,10 @@ responsive hand-off to the note-only layout.
    grounding disambiguation and critic decisions.
 3. [x] Pass live camera/screen frames into the bridge (`resolveSceneFrame` feeds d1 routing, Omni
    chat and visual extraction); the synthetic scene is the fallback.
-4. [x] Persistent workspace (localStorage, b1c76ec). *Open:* a real mobile command surface.
-5. [x] Log rejected traces — the JSONL export already produces the SFT dataset. *Open:* the
-   LoRA/tool-call SFT pass itself (backlog).
+4. [x] Persistent workspace (localStorage, b1c76ec) and the real mobile command surface
+   (≤780px phone tabs + persistent composer, 2026-11-08).
+5. [x] Log rejected traces — the JSONL export already produces the SFT dataset. The LoRA/tool-call
+   SFT pass was descoped on 2026-11-08 at user request (see §9.6).
 
 Current work continues in §10.
 

@@ -51,9 +51,12 @@ The app talks to **real local LFM3 servers** (llama.cpp, started by this repo's
 - **Critic** — deterministic local gates (anchor exactness, blast radius, range
   bounds) are hard checks; when they pass, `d1-Omni-2B` adds a semantic
   zero-token verdict.
-- **Grounding** — a deterministic local span search (exact quotes, line
-  numbers, headings, keywords); **execution** is the real in-tab diff engine
-  with anchor checks and undo/redo.
+- **Grounding** — vague spoken references are grounded by a typed `d1-Omni` span
+  question (`/v1/systemone`) over structural candidates (sections, paragraphs,
+  bullets, table rows); literal quotes, line numbers and ordinals pre-empt the
+  model call, and the deterministic keyword/quote search is only the fallback
+  when d1 is down. **Execution** is the real in-tab diff engine with anchor
+  checks and undo/redo.
 
 The **Runtime truth** card in the supervisor rail continuously probes the three
 endpoints (10 s cadence, refresh button) and labels each surface LIVE,
@@ -123,8 +126,10 @@ their own snapshots.
 - The synthetic visual scene is a fixed prop: revenue table, north-star formula, quarterly bars and a
   finance sticky note.
 - The runtime rail shows the active worker (`LFM3-1.7B`) and each endpoint's live/fallback state.
-- Below 820px the layout collapses to the note workspace. The Markdown editor remains usable, but
-  the live session, command bar and runtime rail are desktop/tablet affordances in this build.
+- Below 820px the layout collapses to the note workspace; at ≤780px a phone
+  surface takes over — Session / Note / Runtime tabs, a persistent bottom command
+  bar (mic + input + send), 44px touch targets, and an auto-switch to the note
+  tab when an edit lands.
 
 ## Verification
 
@@ -143,14 +148,17 @@ headless Chrome (CDP-driven) against the running trinity servers:
   errors. Killing a server flips the card to FALLBACK and the affected stage uses its local
   deterministic path.
 
-On 2026-11-08 the QA battery (`npm run qa`, 31 cases after the §10 hardening pass) ran fully
-green — 31/31 PASS, zero console errors, zero page exceptions — over the three-server trinity
-(Omni :8083, d1-Omni :8085, LFM3-1.7B :8080), re-validated after VL-2B's removal from the
-runtime. It covers natural-phrasing template creation ("The document is empty now, begin by
-writing a readme template .md doc"), chat-hygiene (no `<tool_call>`/`<function=` leakage in
-replies), blast-radius rejection, undo/redo, persistence and spoken-style phrasing.
+On 2026-11-08 the QA battery (`npm run qa`, 33 cases after §10 hardening + the typed
+span-grounding cases) ran fully green — 33/33 PASS, zero console errors, zero page
+exceptions — over the three-server trinity (Omni :8083, d1-Omni :8085, LFM3-1.7B :8080).
+It covers natural-phrasing template creation ("The document is empty now, begin by
+writing a readme template .md doc"), chat-hygiene (no `<tool_call>`/`<function=` leakage
+in replies), blast-radius rejection, undo/redo, persistence, spoken-style phrasing, and
+vague-reference span grounding over live d1 (`remove that section about API keys` → the
+Security section, `d1-span` provenance).
 
 See [`plan.md`](./plan.md) for the full product and architecture plan.
 
 The workspace is optimised for a desktop viewport around 1280–1600px wide. Narrower viewports collapse
-the supervisor rail first, then the visual/session column; the note editor stays interactive.
+the supervisor rail first, then the visual/session column; at ≤780px the phone tab layout keeps voice
+capture and note edits one thumb away.

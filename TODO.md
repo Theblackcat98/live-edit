@@ -5,41 +5,53 @@ LiquidScribe is functional end to end on the three-model trinity: LFM3-Omni-2B
 and LFM3-1.7B (tool-call worker, :8080). `extract_visual_to_note` is
 deterministic. LFM3-VL-2B (:8081) was removed from the runtime on 2026-11-08.
 
-Landed: streaming chat with multi-turn memory and barge-in, d1 typed grounding,
-persistent workspace, rejected-trace JSONL export, camera/screen frames into
-the bridge, "New note". §10 MVP hardening (d1 tool choice honored, thresholds
-unified, Omni chat contract + sanitizer, natural-phrasing document creation)
-landed in b1693ab with a 31/31 green QA battery. VL-2B removal keeps the
-battery at 31/31 with :8081 absent; `npm run typecheck` and `npm run build`
-pass. plan.md §9.6 is the authoritative build status; the §7 phase list is
-the original roadmap.
+Landed: streaming chat with multi-turn memory and barge-in, d1 typed grounding
+(structural span extraction, 2026-11-08), persistent workspace, rejected-trace
+JSONL export, camera/screen frames into the bridge, "New note", §10 MVP
+hardening (b1693ab), the phone-width command surface (≤780px Session/Note/
+Runtime tabs + persistent composer), and the floor-adaptive VAD gate
+(2026-11-08). The QA battery is now 33 cases and green with zero console
+errors; `npm run typecheck` and `npm run build` pass. plan.md §9.6 is the
+authoritative build status; the §7 phase list is the original roadmap.
 
 ## Verification (needs a human — real hardware ears/voice)
 
-- [ ] Real-mic pass: speak a command, confirm auto-stop on pause, and check Omni
-      transcription quality with a real voice (the espeak test heard "rose" for
-      "row").
-- [ ] Real-speaker pass: model TTS audibility, stop button mid-sentence, speaker
-      toggle.
+Both passes were automated as far as this workstation allows
+(`scripts/hardware-voice-check.mjs`; measurements and WAVs under
+`/tmp/lscribe-voice/`). The product side is fixed and verified: the old fixed
+speech gate (RMS 0.045) sat above real-mic processed speech (measured
+0.0136–0.0384), so auto-stop only fired via the 20 s cap and the long mostly
+silent blob wrecked ASR. The gate is now floor-adaptive
+(`max(0.004, 2.2 × noise floor)` with onset/warmup guards, 1.2 s trailing
+silence stop) and quiet captures get a peak-safe ASR gain lift; Omni
+transcribes the natural model voice correctly ("Update the Q3 revenue row
+status to final."). The stop button cuts playback in ~27 ms and the speaker
+toggle mutes TTS (0 `/tts` requests).
+
+What no agent could close on this host: every speaker→mic path attenuates
+>60 dB (a full-scale 1 kHz tone at 150% volume lands +1.5 dB over the mic
+noise floor; the HDMI audio connector reports disconnected; the ZhuHai USB
+sink drives no audible transducer), so the over-the-air loop cannot be
+machine-verified here.
+
+- [ ] Real-mic pass (human voice; speakers not required): speak a command at
+      the default mic (the Brio 101 webcam mic measures best; the Realtek USB
+      mic is ~11 dB deafer), confirm auto-stop ~1.2 s after you stop talking,
+      and check the transcript quality.
+- [ ] Real-speaker pass (human ears): with the speaker toggle on, confirm the
+      TTS reply is audible (the sink demonstrably receives the stream at
+      −16 dBFS RMS — if the room stays silent, check the ZhuHai USB amp/
+      wiring or switch the default sink), then stop mid-reply and toggle off.
 
 ## Next implementation work
 
-- [ ] **Structural span grounding** (plan.md §4 Stage B, §9.5). Replace the
-      local keyword/quote search and hand-pinned special cases in
-      `findSpanForMutation` (`src/lib/supervisor.ts`) with d1-Omni-2B typed span
-      extraction. Acceptance: vague spoken references ("that section about API
-      keys") resolve to exact `[start_char, end_char]` / line spans, and the
-      special cases can be deleted without QA regressions.
 - [ ] **LoRA/tool-call SFT pass on rejected traces** (plan.md §7 Phase 5,
       §9.6, §9.8 item 5). The rejected-trace JSONL export already produces the
       training data; run a lightweight LoRA fine-tune of LFM3-1.7B on a single
-      GPU. Acceptance: the tuned worker keeps the 31/31 QA battery green or
-      better, with fewer malformed or rejected calls.
-- [ ] **Real mobile command surface** (plan.md §9.8 item 4). The workspace
-      persists and the note editor is usable below 820px, but the live session,
-      command bar and runtime rail collapse to desktop/tablet affordances.
-      Acceptance: a phone-width surface can capture a voice command and show
-      the resulting edit.
+      GPU. Acceptance: the tuned worker keeps the QA battery green or better,
+      with fewer malformed or rejected calls. *(Descoped 2026-11-08 at user
+      request. The LFM3-1.7B HF weights are already local at
+      `~/Documents/Models/lfm3/hf/LFM3-1.7B` if this is revisited.)*
 
 ## Ops notes
 
@@ -47,9 +59,12 @@ the original roadmap.
       omni :8083 and d1-omni :8085 (pid files in
       `~/Documents/Models/logs/lfm3/`); `scripts/stop-models.sh` stops them.
       There is no :8081 server or probe any more.
-- `npm run qa` is the 31-case CDP battery. It needs the dev server on :5173 and
+- `npm run qa` is the 33-case CDP battery. It needs the dev server on :5173 and
       the trinity up. Warm the dev server with a curl first; a cold Vite
       dependency optimization can lose the suite's first navigation race.
+- `scripts/hardware-voice-check.mjs` automates the two hardware passes over
+      real mic/speakers (no fake media; `--skip-mic` / `--skip-speaker` split;
+      artifacts in `/tmp/lscribe-voice/`).
 - llama.cpp servers run `--reasoning on`. The 1.7B worker gets a 3000-token
       budget and two attempts because it reasons at length inside `<think>`.
       The old VL `chat_template_kwargs: {"enable_thinking": false}` path was
@@ -64,16 +79,14 @@ the original roadmap.
 
 ## Known rough edges
 
-- Span grounding is still local keyword/quote search plus special cases (for
-  example the title→H1 pin in `findSpanForMutation`); every vague phrasing
-  risks becoming another special case. Tracked as the first implementation item
-  above.
 - Chat context: the full note is sent only on note-related turns (§10 WS2);
-  other turns get a title + H2 outline. Note-related turns still resend the
-  full note, with prefix caching absorbing most of it.
+      other turns get a title + H2 outline. Note-related turns still resend the
+      full note, with prefix caching absorbing most of it.
 - Speech fallbacks still depend on browser support when a model server is down.
 - The Demo button still runs the scripted demo-document sequence (intentional
-  affordance).
+      affordance).
 - Vite HMR can serve a stale module graph after removing exports across files —
-  restart `npm run dev` when imports change (observed once with `SUGGESTIONS`
-  removal).
+      restart `npm run dev` when imports change.
+- Voice on this workstation: the speaker→mic acoustic path is unusable
+      (>60 dB attenuation — hardware, not app). The Brio 101 mic hears best of
+      the three capture devices; the Realtek USB mic is ~11 dB deafer.
