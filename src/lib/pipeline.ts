@@ -29,9 +29,11 @@ import type {
   ContextUsage,
   CriticResult,
   DelegationInfo,
+  Directive,
   ExecutionDiff,
   FrameSource,
   Message,
+  PendingEdit,
   PipelineStage,
   Probability,
   RejectedTraceRecord,
@@ -66,9 +68,24 @@ import {
   type GroundingResolution,
   type SupervisorPlan,
 } from './supervisor'
-import { buildWorkerCall, buildWorkerMessages, renderToolCallXml } from './worker'
+import {
+  buildPacketWorkerMessages,
+  buildWorkerCall,
+  buildWorkerMessages,
+  buildWorkerRetryMessages,
+  numberNoteLines,
+  renderToolCallXml,
+  PACKET_WORKER_SAMPLER,
+  type PacketWorkerPromptInput,
+} from './worker'
 import { routeFromAnswers } from './route'
 import { executeTool } from './tools'
+import { OMNI_FIRST } from './flags'
+import { runOmniTurn, type OmniHistoryTurn } from './omni'
+import { buildD1State, buildWorkerPacket, noteHash } from './context'
+import { runHardGates } from './gates'
+import { runD1Check } from './d1check'
+import { createPendingEdit } from './pending'
 import { parseToolCallXml, type ParsedToolCall } from './xml'
 import { currentSceneSource, resolveSceneFrame } from './frame'
 import {
@@ -80,6 +97,7 @@ import {
   type ChatOptions,
 } from './bridge'
 import { clamp, estimateTokens, makeId, pAdopted, pFloor, sleep, truncate } from './utils'
+import { splitLines } from './doc'
 import type { VoiceRecorder } from './speech'
 
 /** Result of a snapshot-stack restore, as the hook's restoreHistory reports it. */
@@ -140,7 +158,7 @@ export interface PipelineDeps {
   /** A/B/C stage chips. */
   setStageStates: (states: Record<StageId, StageState>) => void
   /** Which model currently owns the flow rail. */
-  setFlowModel: (model: 'd1' | 'worker' | null) => void
+  setFlowModel: (model: 'omni' | 'd1' | 'worker' | null) => void
   /** Live trace of the running turn. */
   setTrace: (trace: Trace) => void
   /** Completed-run list (newest first, capped at 24). */
@@ -151,6 +169,8 @@ export interface PipelineDeps {
   setContextUsage: (update: (previous: ContextUsage) => ContextUsage) => void
   /** Rejected-call records shown in the trace drawer. */
   setRejectedTraces: (update: (previous: RejectedTraceRecord[]) => RejectedTraceRecord[]) => void
+  /** Store a pending edit for user adjudication (design.md §9); the hook owns the queue. */
+  addPendingEdit: (pending: PendingEdit) => void
 
   // --- message and history mutators -------------------------------------------
   /** Append a transcript message; returns its id. */
@@ -684,6 +704,11 @@ export async function runPipelineTurn(
   const ctx: TurnContext = { command, noteAtStart, traceLocal, runtime, liveUsage, publish, finish }
 
   try {
+    if (OMNI_FIRST) {
+      await runOmniFirstTurn(deps, ctx)
+      return
+    }
+
     await sleep(220)
 
     const route = await runRouteStage(deps, ctx)
@@ -728,6 +753,448 @@ export async function runPipelineTurn(
       deps.setFlowModel(null)
     }
   }
+}
+
+/**
+ * Omni's history (design.md §6), assembled from the transcript and the
+ * recorded runs: answer turns contribute their visible reply; delegation
+ * turns contribute the recorded directive as a tool record — never harness
+ * prose, never another turn's internals.
+ */
+export function buildOmniHistory(messages: Message[], runs: Trace[]): OmniHistoryTurn[] {
+  const runsById = new Map(runs.map((run) => [run.id, run]))
+  const turns: OmniHistoryTurn[] = []
+  let current: OmniHistoryTurn | null = null
+  for (const message of messages) {
+    if (message.role === 'user') {
+      current = { command: message.text }
+      turns.push(current)
+      continue
+    }
+    if (!current) continue
+    // Delegation cards are 'tool' messages; replies are 'assistant' ones.
+    if (message.role !== 'assistant' && message.role !== 'tool') continue
+    const run = message.runId ? runsById.get(message.runId) : undefined
+    if (message.delegation && run?.directive && !current.delegation) {
+      current.delegation = {
+        tool: 'delegate_edit',
+        arguments: JSON.stringify(run.directive),
+        result: run.status === 'verified' ? 'Executed' : 'Execution failed',
+      }
+    } else if (!current.reply && !current.delegation && message.text && message.kind !== 'error') {
+      current.reply = message.text
+    }
+  }
+  return turns.filter((turn) => turn.command.trim().length > 0)
+}
+
+function packetWorkerCall(
+  parsed: ParsedToolCall,
+  reasoning: string,
+  ms: number,
+  usagePromptTokens: number,
+  usageOutputTokens: number,
+  sampler: { temperature: number; maxTokens: number },
+  note: string,
+): WorkerCall {
+  return {
+    name: parsed.name,
+    params: parsed.params,
+    thought: parsed.think ?? reasoning ?? `Worker emitted ${parsed.name} from the Omni directive.`,
+    xml: renderToolCallXml(parsed.name, parsed.params),
+    rawTokens: usageOutputTokens,
+    promptHints: [
+      `Decoded by LFM3-1.7B · ${(ms / 1000).toFixed(1)}s · ${usagePromptTokens} prompt tokens`,
+      `Sent sampler: temperature=${sampler.temperature} · max_tokens=${sampler.maxTokens}`,
+      'Omni directive + full line-numbered note + recent edit turns (design.md §6 packet); worker grounds the span itself',
+    ],
+    toolSchemasInjected: 4,
+    noteView: numberNoteLines(note),
+    sampler,
+  }
+}
+
+/** Rejected-trace record for the Omni-first path (the legacy recordRejectedTrace is supervisor-shaped). */
+function recordOmniRejection(
+  deps: PipelineDeps,
+  ctx: TurnContext,
+  directive: Directive,
+  call: WorkerCall,
+  reason: string,
+  pCorrect: Probability,
+): void {
+  deps.setRejectedTraces((previous) => [
+    ...previous,
+    {
+      at: Date.now(),
+      command: ctx.command,
+      route: { tool: call.name, provenance: 'omni-first pipeline' },
+      spanCandidates: [],
+      grounding: { source: 'worker-self' },
+      workerXml: call.xml,
+      critic: { verdict: 'rejected', reason, pCorrect },
+      directive,
+    },
+  ])
+}
+
+/**
+ * The Omni-first turn (design.md §§2–9), behind OMNI_FIRST. One model is
+ * the interface: Omni answers, clarifies, maps undo/redo, or silently
+ * delegates a typed directive to the 1.7B worker. The worker authors and
+ * grounds its call from the §6 packet; deterministic hard gates run next;
+ * d1's only job is the §7 safety check; a disapproved or unavailable check
+ * becomes a pending edit for the user — never a dead end, never a silent
+ * approval. No stage invents content: there is no template fallback here.
+ */
+async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<void> {
+  const { command, noteAtStart, traceLocal, runtime, liveUsage, publish, finish } = ctx
+  deps.setFlowModel('omni')
+  deps.setStage('routing')
+
+  const frame = await resolveSceneFrame('full').catch(() => null)
+  traceLocal.frameSource = frame?.source ?? 'none'
+
+  const history = buildOmniHistory(deps.messagesRef.current, deps.runsRef.current)
+  // The current command is already in the transcript; history is prior turns.
+  const priorHistory = history.slice(0, -1)
+  const lastRun = deps.runsRef.current[0]
+    ? {
+        command: deps.runsRef.current[0].command,
+        status: deps.runsRef.current[0].status,
+      }
+    : null
+
+  let omni: Awaited<ReturnType<typeof runOmniTurn>>
+  try {
+    omni = await runOmniTurn({
+      command,
+      source: traceLocal.source,
+      history: priorHistory,
+      note: noteAtStart,
+      frame:
+        frame && frame.source !== 'none'
+          ? { source: frame.source as 'live-camera' | 'live-screen' | 'synthetic-slide', dataUrl: frame.dataUrl }
+          : null,
+      lastRun,
+    })
+  } catch (error) {
+    throw new Error(
+      `Omni turn failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+    )
+  }
+  if (!omni) {
+    finish('failed')
+    return
+  }
+  runtime.chat = 'live'
+  traceLocal.timings.route = omni.ms
+  if (omni.promptTokens) {
+    traceLocal.promptTokens = omni.promptTokens
+    liveUsage.omni = omni.promptTokens
+  }
+  publish()
+
+  if (omni.outcome === 'answer' || omni.outcome === 'clarify') {
+    const text = omni.text ?? ''
+    traceLocal.timings.chat = omni.ms
+    deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
+    deps.addMessage({ role: 'assistant', text, runId: traceLocal.id })
+    deps.speakReply(text)
+    finish(omni.outcome === 'answer' ? 'conversational' : 'clarify')
+    return
+  }
+
+  if (omni.outcome === 'action') {
+    deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
+    deps.setStage('executing')
+    const delta = omni.action === 'undo' ? -1 : 1
+    const restored = deps.restoreHistory(deps.historyIndexRef.current + delta)
+    if (!restored.ok) {
+      deps.addMessage({
+        role: 'assistant',
+        kind: 'result',
+        text:
+          omni.action === 'undo'
+            ? 'There is nothing to undo yet — the note is at its first snapshot.'
+            : 'There is nothing to redo. The note is already at the latest snapshot.',
+        runId: traceLocal.id,
+      })
+      finish('conversational')
+      return
+    }
+    traceLocal.execution = {
+      ok: true,
+      message: restored.message,
+      tool: omni.action!,
+      note: restored.note,
+      durationMs: 0,
+      snapshotId: restored.snapshot?.id,
+    }
+    publish()
+    const confirmation =
+      omni.action === 'undo'
+        ? `Reverted to “${restored.snapshot?.label}”.`
+        : `Reapplied “${restored.snapshot?.label}”.`
+    deps.addMessage({ role: 'assistant', kind: 'result', text: confirmation, runId: traceLocal.id })
+    deps.speakReply(confirmation)
+    finish('verified')
+    return
+  }
+
+  // --- delegate: worker authors + grounds from the §6 packet ---------------
+  const directive = omni.directive
+  if (!directive) {
+    throw new Error('Omni delegated without a directive.')
+  }
+  traceLocal.directive = directive
+  publish()
+  deps.setStageStates({ A: 'done', B: 'running', C: 'idle' })
+  deps.setStage('generating')
+  deps.setFlowModel('worker')
+
+  if (!endpointUp(deps.healthRef.current, 'text')) {
+    deps.addMessage({
+      role: 'assistant',
+      kind: 'error',
+      text: 'The worker model (LFM3-1.7B) is offline, so the delegated edit cannot run. Nothing was written to the note.',
+      runId: traceLocal.id,
+    })
+    deps.notify('Worker offline', 'The delegated edit was not run.', 'error')
+    finish('failed')
+    return
+  }
+
+  const packet = buildWorkerPacket(directive, deps.runsRef.current, noteAtStart)
+  const packetInput: PacketWorkerPromptInput = {
+    directive,
+    contextPacket: packet,
+    note: noteAtStart,
+  }
+  const workerStarted = performance.now()
+  let call: WorkerCall | null = null
+  let attemptError = ''
+  let attemptText = ''
+  let attemptedTool: ToolName | null = null
+  let attemptedParsed: ParsedToolCall | null = null
+  for (const sampler of [PACKET_WORKER_SAMPLER.attempt1, PACKET_WORKER_SAMPLER.retry]) {
+    const messages =
+      call === null && attemptText === ''
+        ? buildPacketWorkerMessages(packetInput)
+        : buildWorkerRetryMessages({
+            original: packetInput,
+            attemptText,
+            error: attemptError,
+            attemptedTool,
+            anchorCorrection: anchorCorrectionFor(noteAtStart, attemptedParsed),
+          })
+    const completion = await chatComplete('text', messages, sampler)
+    attemptText = completion.text
+    const xmlInput = /<think>/.test(completion.text)
+      ? completion.text
+      : completion.reasoning
+        ? `<think>${completion.reasoning}</think>\n${completion.text}`
+        : completion.text
+    const parsed = parseToolCallXml(xmlInput)
+    attemptedTool = parsed?.name ?? null
+    attemptedParsed = parsed
+    if (!parsed) {
+      attemptError = 'The reply did not contain one parseable tool call in the repo XML format.'
+      continue
+    }
+    const required = TOOL_BY_NAME[parsed.name].params
+      .filter((param) => param.required)
+      .map((param) => param.name)
+    const missing = required.filter((name) => !(parsed.params[name] ?? '').trim())
+    if (missing.length > 0) {
+      attemptError = `The ${parsed.name} call is missing required parameter(s): ${missing.join(', ')}.`
+      continue
+    }
+    call = packetWorkerCall(
+      parsed,
+      completion.reasoning ?? '',
+      completion.ms,
+      completion.usage.promptTokens,
+      completion.usage.outputTokens,
+      sampler,
+      noteAtStart,
+    )
+    break
+  }
+  traceLocal.timings.generate = Number((performance.now() - workerStarted).toFixed(1))
+
+  if (!call) {
+    deps.setStageStates({ A: 'done', B: 'failed', C: 'idle' })
+    deps.addMessage({
+      role: 'assistant',
+      kind: 'error',
+      text: `The worker could not produce a valid tool call for Omni's directive (${attemptError || 'no parseable call'}). Nothing was written to the note, and no fallback content was substituted.`,
+      runId: traceLocal.id,
+    })
+    deps.notify('Worker call invalid', attemptError || 'No parseable tool call.', 'error')
+    finish('failed')
+    return
+  }
+  traceLocal.call = call
+  traceLocal.workerNoteView = call.noteView
+  publish()
+
+  const delegation: DelegationInfo = {
+    runId: traceLocal.id,
+    tool: call.name,
+    status: 'checking',
+    modelLabel: '1.7B',
+    thought: directive.instruction,
+  }
+  const delegationId = deps.addMessage({
+    role: 'tool',
+    text: '',
+    delegation,
+  })
+
+  // --- hard gates (design.md §8): refusal here is never adjudicable --------
+  deps.setStageStates({ A: 'done', B: 'done', C: 'running' })
+  deps.setStage('verifying')
+  const gates = runHardGates(noteAtStart, call)
+  if (!gates.pass) {
+    const detail = gates.failures.map((failure) => failure.detail).join(' ')
+    deps.patchMessage(delegationId, { delegation: { ...delegation, status: 'rejected' } })
+    recordOmniRejection(deps, ctx, directive, call, `Hard gates failed: ${detail}`, null)
+    deps.addMessage({
+      role: 'assistant',
+      kind: 'error',
+      text: `I stopped before execution. A deterministic hard gate refused this call: ${detail} The note was not touched.`,
+      runId: traceLocal.id,
+    })
+    deps.notify('Hard gate refusal', detail, 'error')
+    finish('rejected')
+    return
+  }
+
+  // Dry-run the engine for the diff the safety check (and any pending card) renders.
+  const preview = executeTool(noteAtStart, call)
+  if (!preview.ok || !preview.diff) {
+    deps.patchMessage(delegationId, { delegation: { ...delegation, status: 'rejected' } })
+    recordOmniRejection(deps, ctx, directive, call, preview.message, null)
+    deps.addMessage({
+      role: 'assistant',
+      kind: 'error',
+      text: `I stopped before writing. ${preview.message} The note was not changed.`,
+      runId: traceLocal.id,
+    })
+    deps.notify('Execution stopped', preview.message, 'error')
+    finish('failed')
+    return
+  }
+
+  // --- d1 safety check (design.md §7): its only job -------------------------
+  deps.setFlowModel('d1')
+  const noteLines = splitLines(noteAtStart)
+  const noteLineCount = noteLines.length - (noteLines[noteLines.length - 1] === '' ? 1 : 0)
+  const userCommands = deps.messagesRef.current.filter((message) => message.role === 'user')
+  const lastUserTurn = userCommands.length >= 2 ? userCommands[userCommands.length - 2].text : undefined
+  const check = await runD1Check({
+    state: buildD1State({
+      directive,
+      command,
+      call: { name: call.name, params: call.params },
+      diff: preview.diff,
+      lastUserTurn,
+      noteLineCount,
+    }),
+    frameDataUrl: frame?.dataUrl ?? null,
+    d1Decide,
+  })
+  traceLocal.d1Check = check
+  traceLocal.timings.critic = check.ms ?? 0
+  runtime.critic = check.verdict === 'unavailable' ? 'fallback' : 'live'
+  publish()
+
+  if (check.verdict !== 'approved') {
+    const pending = createPendingEdit({
+      directive,
+      call,
+      diff: preview.diff,
+      noteHash: noteHash(noteAtStart),
+      d1: {
+        verdict: check.verdict,
+        noul: check.noul,
+        destructiveSafety: check.destructiveSafety,
+        ...(check.reason ? { reason: check.reason } : {}),
+      },
+    })
+    deps.addPendingEdit(pending)
+    deps.patchMessage(delegationId, {
+      delegation: { ...delegation, status: 'pending', confidence: check.noul },
+    })
+    traceLocal.status = 'pending'
+    const held =
+      check.verdict === 'unavailable'
+        ? 'The safety check was unavailable, so this edit is held for your decision rather than decided automatically. It is waiting under Pending edits — the note was not touched.'
+        : 'The safety check disapproved this edit, but it passed every deterministic gate, so it is held for your decision under Pending edits instead of being dropped. The note was not touched.'
+    deps.addMessage({ role: 'assistant', kind: 'notice', text: held, runId: traceLocal.id })
+    deps.notify(
+      'Edit waiting for your decision',
+      check.verdict === 'unavailable' ? 'd1 unavailable; held for adjudication.' : 'd1 disapproved; held for adjudication.',
+      'neutral',
+    )
+    deps.speakReply('That edit needs your call. It is waiting under pending edits.')
+    finish('pending')
+    return
+  }
+
+  // --- approved: execute ------------------------------------------------------
+  deps.setStageStates({ A: 'done', B: 'done', C: 'done' })
+  deps.patchMessage(delegationId, {
+    delegation: { ...delegation, status: 'verified', confidence: check.noul },
+  })
+  deps.setStage('executing')
+  deps.setFlowModel('worker')
+  const execStarted = performance.now()
+  const execution = preview
+  traceLocal.timings.execute = Number((performance.now() - execStarted).toFixed(1))
+  traceLocal.execution = execution
+  const snapshot = deps.commitNote(execution.note, `Omni directive · ${call.name}`, call.name)
+  execution.snapshotId = snapshot.id
+  deps.setDiff(execution.diff ?? null)
+  deps.setSpan(null)
+  deps.patchMessage(delegationId, {
+    delegation: { ...delegation, status: 'executed', confidence: check.noul },
+  })
+  traceLocal.status = 'verified'
+  publish()
+  deps.addMessage({
+    role: 'assistant',
+    kind: 'result',
+    text: execution.message,
+    runId: traceLocal.id,
+  })
+  deps.speakReply(execution.message)
+  finish('verified')
+  deps.scheduleHighlightClear()
+}
+
+/**
+ * Anchor correction for a worker retry: when an edit_text attempt's
+ * `old_text_anchor` doesn't match the note at its own range, hand the retry
+ * the note's actual text there (the E4 anchor near-miss class — the one
+ * class a retry reliably fixes).
+ */
+function anchorCorrectionFor(
+  note: string,
+  parsed: ParsedToolCall | null,
+): { startLine: number; endLine: number; actualText: string } | null {
+  if (!parsed || parsed.name !== 'edit_text') return null
+  const startLine = Number(parsed.params.start_line)
+  const endLine = Number(parsed.params.end_line)
+  if (!Number.isInteger(startLine) || !Number.isInteger(endLine) || startLine < 1 || endLine < startLine) {
+    return null
+  }
+  const actualText = splitLines(note)
+    .slice(startLine - 1, endLine)
+    .join('\n')
+  if (!actualText || actualText === parsed.params.old_text_anchor) return null
+  return { startLine, endLine, actualText }
 }
 
 /** Stage A — d1/heuristic routing plus the deterministic syntax overrides of the live route. */

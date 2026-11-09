@@ -96,7 +96,7 @@ export interface SpanTarget {
  * pre-empts that never need a model call). The trace records it so a run's
  * provenance is auditable.
  */
-export type GroundingSource = 'd1-span' | 'fallback-keyword'
+export type GroundingSource = 'd1-span' | 'fallback-keyword' | 'worker-self' | 'pending-adjudication'
 
 export interface GroundingRecord {
   source: GroundingSource
@@ -241,6 +241,8 @@ export interface Trace {
   bbox?: BBoxTarget
   call?: WorkerCall
   critic?: CriticResult
+  /** The d1 safety-check result (P4+; Omni-first traces only — legacy traces carry `critic`). */
+  d1Check?: D1CheckResult
   execution?: ExecutionResult
   timings: TraceTimings
   status: RunStatus

@@ -4,6 +4,7 @@ import type {
   ContextUsage,
   ExecutionDiff,
   Message,
+  PendingEdit,
   PipelineStage,
   RejectedTraceRecord,
   RuntimeHealth,
@@ -23,6 +24,15 @@ import { loadWorkspaceState, saveWorkspaceState, type PersistedWorkspace } from 
 import { endpointUp, probeRuntime, synthesizeSpeech, transcribeAudio } from '../lib/bridge'
 import { estimateTokens, makeId, sleep } from '../lib/utils'
 import { runPipelineTurn, type PipelineDeps, type RunResultSnapshot } from '../lib/pipeline'
+import {
+  adjudicate,
+  enqueue,
+  fromStorable,
+  toStorable,
+  type PendingAdjudication,
+} from '../lib/pending'
+import { noteHash } from '../lib/context'
+import { executeTool } from '../lib/tools'
 
 const initialNoteTokens = estimateTokens(INITIAL_NOTE)
 const INITIAL_CONTEXT: ContextUsage = {
@@ -77,6 +87,10 @@ export interface WorkspaceApi {
   runs: Trace[]
   selectedTrace: Trace | null
   rejectedTraces: RejectedTraceRecord[]
+  /** Pending edits awaiting (or resolved by) user adjudication, oldest first (design.md §9). */
+  pendingEdits: PendingEdit[]
+  applyPendingEdit: (id: string) => void
+  dismissPendingEdit: (id: string) => void
   traceOpen: boolean
   openTrace: (id?: string) => void
   closeTrace: () => void
@@ -117,6 +131,24 @@ export interface WorkspaceApi {
   runDemo: () => Promise<void>
   runtimeHealth: RuntimeHealth | null
   refreshRuntime: () => Promise<void>
+}
+
+/**
+ * The rejected-traces record for a resolved pending edit (§9.5). Grounding
+ * is honestly marked `pending-adjudication`: the user, not a grounding
+ * pass, made this call.
+ */
+function pendingResolutionRecord(edit: PendingEdit, reason: string): RejectedTraceRecord {
+  return {
+    at: Date.now(),
+    command: edit.directive.instruction,
+    route: { tool: edit.call.name, provenance: 'pending edit adjudication' },
+    spanCandidates: [],
+    grounding: { source: 'pending-adjudication' },
+    workerXml: edit.call.xml,
+    critic: { verdict: 'rejected', reason, pCorrect: edit.d1.noul },
+    directive: edit.directive,
+  }
 }
 
 export function useWorkspace(): WorkspaceApi {
@@ -173,6 +205,12 @@ export function useWorkspace(): WorkspaceApi {
   const [rejectedTraces, setRejectedTraces] = useState<RejectedTraceRecord[]>(
     persisted?.rejectedTraces ?? [],
   )
+  // Reloaded pendings pass through pending.ts's defensive per-entry
+  // validation — a malformed entry drops out instead of bricking the queue.
+  const [pendingEdits, setPendingEdits] = useState<PendingEdit[]>(() =>
+    fromStorable(persisted?.pendingEdits ?? []),
+  )
+  const pendingEditsRef = useRef<PendingEdit[]>(pendingEdits)
 
   const noteRef = useRef(note)
   const historyRef = useRef(history)
@@ -205,13 +243,24 @@ export function useWorkspace(): WorkspaceApi {
   useEffect(() => {
     historyRef.current = history
   }, [history])
+  useEffect(() => {
+    pendingEditsRef.current = pendingEdits
+  }, [pendingEdits])
   // Debounced workspace persistence — best-effort, never breaks the UI.
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      saveWorkspaceState({ note, snapshots: history, messages, runs, rejectedTraces })
+      saveWorkspaceState({
+        note,
+        snapshots: history,
+        messages,
+        runs,
+        rejectedTraces,
+        // D3: only unresolved pendings persist, capped by the store.
+        pendingEdits: toStorable(pendingEdits),
+      })
     }, 500)
     return () => window.clearTimeout(timer)
-  }, [note, history, messages, runs, rejectedTraces])
+  }, [note, history, messages, runs, rejectedTraces, pendingEdits])
   useEffect(() => {
     historyIndexRef.current = historyIndex
   }, [historyIndex])
@@ -347,6 +396,96 @@ export function useWorkspace(): WorkspaceApi {
       note: target.note,
     }
   }, [])
+
+  // --- Pending-edit adjudication (design.md §9) ------------------------------
+  // Adjudication is not a turn: it respects the same busy gate as undo and
+  // never runs the pipeline. The store (lib/pending) decides; this hook
+  // executes an approved call and keeps the records.
+  const addPendingEdit = useCallback((pending: PendingEdit) => {
+    setPendingEdits((previous) => enqueue(previous, pending))
+  }, [])
+
+  const resolvePending = useCallback(
+    (id: string, decision: 'apply' | 'discard') => {
+      const edit = pendingEditsRef.current.find((entry) => entry.id === id)
+      if (!edit || edit.status !== 'pending') return
+      const outcome: PendingAdjudication = adjudicate(edit, decision, noteRef.current, { noteHash })
+      setPendingEdits((previous) =>
+        previous.map((entry) => (entry.id === id ? outcome.edit : entry)),
+      )
+      if (outcome.status === 'applied' && outcome.call) {
+        const execution = executeTool(noteRef.current, outcome.call)
+        if (!execution.ok) {
+          // The store gate-validated the call; the engine refusing anyway is
+          // a drift between the two — surface it honestly, write nothing.
+          setPendingEdits((previous) =>
+            previous.map((entry) =>
+              entry.id === id ? { ...entry, status: 'stale' as const } : entry,
+            ),
+          )
+          setRejectedTraces((records) => [
+            ...records,
+            pendingResolutionRecord(outcome.edit, `Engine refused at execution: ${execution.message}`),
+          ])
+          addMessage({
+            role: 'assistant',
+            kind: 'error',
+            text: `That pending edit passed the gates but the engine refused it: ${execution.message} Nothing was written.`,
+          })
+          return
+        }
+        commitNote(execution.note, `Pending edit approved · ${outcome.call.name}`, outcome.call.name)
+        setDiff(execution.diff ?? null)
+        scheduleHighlightClear()
+        addMessage({
+          role: 'assistant',
+          kind: 'result',
+          text: `Applied the pending ${outcome.call.name} edit you approved.`,
+        })
+        notify('Pending edit applied', execution.message, 'success')
+        return
+      }
+      // stale or discarded: nothing written; the proposal joins the
+      // rejected-traces log (§9.5).
+      setRejectedTraces((records) => [
+        ...records,
+        pendingResolutionRecord(
+          outcome.edit,
+          outcome.status === 'discarded'
+            ? 'Discarded by the user at adjudication (design.md §9).'
+            : outcome.reason,
+        ),
+      ])
+      addMessage({
+        role: 'assistant',
+        kind: 'notice',
+        text:
+          outcome.status === 'stale'
+            ? `That pending edit went stale and was not applied. ${outcome.reason}`
+            : 'Discarded the pending edit. The note was not touched.',
+      })
+      if (outcome.status === 'stale') notify('Pending edit went stale', outcome.reason, 'error')
+    },
+    [addMessage, commitNote, notify, scheduleHighlightClear],
+  )
+
+  const applyPendingEdit = useCallback(
+    (id: string) => {
+      if (busyRef.current) {
+        notify('Worker is busy', 'Wait for the current turn to finish before applying a pending edit.', 'neutral')
+        return
+      }
+      resolvePending(id, 'apply')
+    },
+    [notify, resolvePending],
+  )
+
+  const dismissPendingEdit = useCallback(
+    (id: string) => {
+      resolvePending(id, 'discard')
+    },
+    [resolvePending],
+  )
 
   const undo = useCallback(() => {
     if (busyRef.current) {
@@ -551,6 +690,7 @@ export function useWorkspace(): WorkspaceApi {
     setMessages,
     setContextUsage,
     setRejectedTraces,
+    addPendingEdit,
     addMessage,
     patchMessage,
     restoreHistory,
@@ -766,6 +906,9 @@ export function useWorkspace(): WorkspaceApi {
     runs,
     selectedTrace,
     rejectedTraces,
+    pendingEdits,
+    applyPendingEdit,
+    dismissPendingEdit,
     traceOpen,
     openTrace,
     closeTrace,
