@@ -228,6 +228,8 @@ export interface Trace {
   at: number
   command: string
   source: 'voice' | 'text' | 'demo'
+  /** Omni's typed delegation directive (P2+; absent on legacy/supervisor-first traces). */
+  directive?: Directive
   route?: RouteDecision
   span?: SpanTarget
   /** How the span was resolved (d1 typed question vs deterministic search). */
@@ -451,6 +453,26 @@ export interface Directive {
  * pending edit).
  */
 export type OmniOutcome = 'answer' | 'clarify' | 'delegate' | 'action'
+
+/**
+ * The result of one omni.ts turn (design.md §4). `null` from runOmniTurn means
+ * the turn was aborted (barge-in) — a partial directive must never execute, so
+ * an abort yields no outcome at all. Endpoint failures do NOT return null:
+ * they throw a typed error the pipeline turns into an honest failure message
+ * with the endpoint state shown (design.md §11).
+ */
+export interface OmniTurnResult {
+  outcome: OmniOutcome
+  /** Sanitized visible reply text for answer/clarify; absent for delegate/action. */
+  text?: string
+  /** The validated directive, present iff outcome = delegate. */
+  directive?: Directive
+  /** The harness action, present iff outcome = action. */
+  action?: 'undo' | 'redo'
+  ms: number
+  promptTokens?: number
+  outputTokens?: number
+}
 
 /**
  * One completed edit turn distilled for the worker context packet
