@@ -17,6 +17,9 @@ import {
 import type { Message, Suggestion } from '../types'
 import { cx, formatElapsed } from '../lib/utils'
 import { MessageBubble } from './MessageBubble'
+import { PendingEditCard } from './PendingEditCard'
+import { unresolvedPendings } from '../lib/pending'
+import type { PendingEdit } from '../types'
 
 interface SessionPanelProps {
   messages: Message[]
@@ -36,6 +39,10 @@ interface SessionPanelProps {
   onResetChat: () => void
   onRunDemo: () => void
   onOpenTrace: (runId?: string) => void
+  /** Pending edits awaiting adjudication (design.md §9), rendered above the transcript. */
+  pendingEdits: PendingEdit[]
+  onApplyPending: (id: string) => void
+  onDismissPending: (id: string) => void
   /** Desktop/tablet keeps the composer inside the session card; the phone
    * surface renders the same form as a persistent command bar instead. */
   showComposer?: boolean
@@ -75,6 +82,9 @@ export function SessionPanel({
   onStopSpeech,
   onResetChat,
   onRunDemo,
+  pendingEdits,
+  onApplyPending,
+  onDismissPending,
   onOpenTrace,
   showComposer = true,
 }: SessionPanelProps) {
@@ -96,7 +106,7 @@ export function SessionPanel({
       window.cancelAnimationFrame(frame)
       window.clearTimeout(timer)
     }
-  }, [messages, busy])
+  }, [messages, busy, pendingEdits])
 
   const handleScroll = () => {
     const element = scrollRef.current
@@ -158,6 +168,15 @@ export function SessionPanel({
             recent={index >= messages.length - 2}
             onAction={onSubmit}
             onOpenTrace={onOpenTrace}
+          />
+        ))}
+        {unresolvedPendings(pendingEdits).map((pending) => (
+          <PendingEditCard
+            key={pending.id}
+            pending={pending}
+            busy={busy}
+            onApply={onApplyPending}
+            onDismiss={onDismissPending}
           />
         ))}
       </div>

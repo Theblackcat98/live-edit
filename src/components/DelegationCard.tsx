@@ -1,4 +1,4 @@
-import { ArrowUpRight, Braces, Check, LoaderCircle, X } from 'lucide-react'
+import { ArrowUpRight, Braces, Check, Clock, LoaderCircle, X } from 'lucide-react'
 import type { DelegationInfo } from '../types'
 import { TOOL_LABELS } from '../data/tools'
 import { cx } from '../lib/utils'
@@ -16,7 +16,9 @@ export function DelegationCard({ delegation, onOpenTrace }: DelegationCardProps)
         ? 'Verified by d1'
         : delegation.status === 'executed'
           ? 'Executed'
-          : 'Held by critic'
+          : delegation.status === 'pending'
+            ? 'Waiting for your decision'
+            : 'Held by critic'
 
   return (
     <div className={cx('delegation-card', `is-${delegation.status}`)}>
@@ -33,12 +35,15 @@ export function DelegationCard({ delegation, onOpenTrace }: DelegationCardProps)
               delegation.status === 'executed' && 'is-green',
               delegation.status === 'generating' && 'is-accent',
               delegation.status === 'rejected' && 'is-red',
+              delegation.status === 'pending' && 'is-amber',
             )}
           >
             {delegation.status === 'generating' ? (
               <LoaderCircle size={10} className="spin" />
             ) : delegation.status === 'rejected' ? (
               <X size={10} />
+            ) : delegation.status === 'pending' ? (
+              <Clock size={10} />
             ) : (
               <Check size={10} />
             )}

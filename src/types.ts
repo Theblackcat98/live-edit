@@ -18,8 +18,8 @@ export type RunStatus =
   | 'failed'
   /**
    * The run produced a pending edit (design.md §9) that awaits user
-   * adjudication; the turn is paused, not over. Phase-1 contract only —
-   * nothing produces this status yet.
+   * adjudication; the turn is paused, not over. Produced by the pipeline's
+   * critic-rejection path since Phase 5's machinery landed.
    */
   | 'pending'
 
@@ -96,7 +96,7 @@ export interface SpanTarget {
  * pre-empts that never need a model call). The trace records it so a run's
  * provenance is auditable.
  */
-export type GroundingSource = 'd1-span' | 'fallback-keyword'
+export type GroundingSource = 'd1-span' | 'fallback-keyword' | 'pending-adjudication'
 
 export interface GroundingRecord {
   source: GroundingSource
@@ -265,9 +265,9 @@ export interface DelegationInfo {
   runId: string
   tool: ToolName
   /**
-   * Phase-1 additions: `checking` (hard gates / d1 check in flight) and
-   * `pending` (the edit awaits user adjudication, design.md §9). Nothing
-   * produces them yet — the old pipeline still emits only the original four.
+   * Phase-1 additions: `checking` (hard gates / d1 check in flight; not yet
+   * produced) and `pending` (the edit awaits user adjudication, design.md
+   * §9; produced by the rejection path since Phase 5's machinery landed).
    */
   status: 'generating' | 'checking' | 'pending' | 'verified' | 'executed' | 'rejected'
   /** d1's measured critic score; null/undefined hides the P chip (never invented). */

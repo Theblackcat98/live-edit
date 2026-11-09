@@ -65,6 +65,10 @@ machine-verified here.
       Q1: verify Omni directive emission (native tool call vs. structured
       block) on the local llama.cpp build. Acceptance: design.md §13 battery,
       incl. the README-template case on a non-empty note.
+      *Progress: P0 spikes + P1 landed on main (2026-11-09). Phase 5's
+      pending-edit machinery (lib/pending.ts, storage v2, adjudication card)
+      landed early from the legacy rejection path — see decision D7 in the
+      refactor plan; QA 31–34 and the P4 producer swap remain.*
 - [ ] **LoRA/tool-call SFT pass on rejected traces** (plan.md §7 Phase 5,
       §9.6, §9.8 item 5). The rejected-trace JSONL export already produces the
       training data; run a lightweight LoRA fine-tune of LFM3-1.7B on a single

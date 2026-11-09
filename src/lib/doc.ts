@@ -81,6 +81,22 @@ export function splitLines(note: string): string[] {
   return note.split('\n')
 }
 
+/**
+ * Stable content hash of a note (FNV-1a, hex). Used to detect staleness:
+ * a pending edit (design.md §9) records the hash of the note its call was
+ * authored against, and adjudication compares it against the current note
+ * before the hard gates re-run. Deliberately tiny and deterministic — this
+ * is an equality check, not a security primitive.
+ */
+export function noteHash(note: string): string {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < note.length; index += 1) {
+    hash ^= note.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
 export function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, ' ').trim()
 }

@@ -4,6 +4,7 @@ import type {
   ContextUsage,
   ExecutionDiff,
   Message,
+  PendingEdit,
   PipelineStage,
   RejectedTraceRecord,
   RuntimeHealth,
@@ -23,6 +24,11 @@ import { loadWorkspaceState, saveWorkspaceState, type PersistedWorkspace } from 
 import { endpointUp, probeRuntime, synthesizeSpeech, transcribeAudio } from '../lib/bridge'
 import { estimateTokens, makeId, sleep } from '../lib/utils'
 import { runPipelineTurn, type PipelineDeps, type RunResultSnapshot } from '../lib/pipeline'
+import {
+  applyPendingEdit as applyPendingEditToNote,
+  pendingToRejectedRecord,
+  unresolvedPendings,
+} from '../lib/pending'
 
 const initialNoteTokens = estimateTokens(INITIAL_NOTE)
 const INITIAL_CONTEXT: ContextUsage = {
@@ -77,6 +83,10 @@ export interface WorkspaceApi {
   runs: Trace[]
   selectedTrace: Trace | null
   rejectedTraces: RejectedTraceRecord[]
+  /** Pending edits awaiting (or resolved by) user adjudication, oldest first (design.md §9). */
+  pendingEdits: PendingEdit[]
+  applyPendingEdit: (id: string) => void
+  dismissPendingEdit: (id: string) => void
   traceOpen: boolean
   openTrace: (id?: string) => void
   closeTrace: () => void
@@ -173,6 +183,8 @@ export function useWorkspace(): WorkspaceApi {
   const [rejectedTraces, setRejectedTraces] = useState<RejectedTraceRecord[]>(
     persisted?.rejectedTraces ?? [],
   )
+  const [pendingEdits, setPendingEdits] = useState<PendingEdit[]>(persisted?.pendingEdits ?? [])
+  const pendingEditsRef = useRef<PendingEdit[]>(pendingEdits)
 
   const noteRef = useRef(note)
   const historyRef = useRef(history)
@@ -205,13 +217,16 @@ export function useWorkspace(): WorkspaceApi {
   useEffect(() => {
     historyRef.current = history
   }, [history])
+  useEffect(() => {
+    pendingEditsRef.current = pendingEdits
+  }, [pendingEdits])
   // Debounced workspace persistence — best-effort, never breaks the UI.
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      saveWorkspaceState({ note, snapshots: history, messages, runs, rejectedTraces })
+      saveWorkspaceState({ note, snapshots: history, messages, runs, rejectedTraces, pendingEdits })
     }, 500)
     return () => window.clearTimeout(timer)
-  }, [note, history, messages, runs, rejectedTraces])
+  }, [note, history, messages, runs, rejectedTraces, pendingEdits])
   useEffect(() => {
     historyIndexRef.current = historyIndex
   }, [historyIndex])
@@ -347,6 +362,84 @@ export function useWorkspace(): WorkspaceApi {
       note: target.note,
     }
   }, [])
+
+  // --- Pending-edit adjudication (design.md §9) ------------------------------
+  // Adjudication is not a turn: it respects the same busy gate as undo and
+  // never runs the pipeline. ✓ re-runs the hard gates against the current
+  // note inside lib/pending; a pending edit modifies nothing until then.
+  const addPendingEdit = useCallback((pending: PendingEdit) => {
+    setPendingEdits((previous) => {
+      const next = [...previous, pending]
+      // FIFO cap: past 10 unresolved, the oldest is discarded on the record
+      // rather than silently dropped.
+      const unresolved = unresolvedPendings(next)
+      if (unresolved.length > 10) {
+        const overflow = unresolved[0]
+        setRejectedTraces((records) => [
+          ...records,
+          pendingToRejectedRecord(overflow, 'Pending queue cap reached; superseded by newer edits.'),
+        ])
+        return next.map((entry) =>
+          entry.id === overflow.id ? { ...entry, status: 'discarded' as const } : entry,
+        )
+      }
+      return next
+    })
+  }, [])
+
+  const applyPendingEdit = useCallback(
+    (id: string) => {
+      if (busyRef.current) {
+        notify('Worker is busy', 'Wait for the current turn to finish before applying a pending edit.', 'neutral')
+        return
+      }
+      const pending = pendingEditsRef.current.find((entry) => entry.id === id)
+      if (!pending || pending.status !== 'pending') return
+      const outcome = applyPendingEditToNote(noteRef.current, pending)
+      if (outcome.kind === 'stale') {
+        setPendingEdits((previous) =>
+          previous.map((entry) => (entry.id === id ? { ...entry, status: 'stale' as const } : entry)),
+        )
+        setRejectedTraces((records) => [...records, pendingToRejectedRecord(pending, outcome.reason)])
+        addMessage({
+          role: 'assistant',
+          kind: 'notice',
+          text: `That pending edit went stale and was not applied. ${outcome.reason}`,
+        })
+        notify('Pending edit went stale', outcome.reason, 'error')
+        return
+      }
+      commitNote(outcome.execution.note, 'Pending edit approved', pending.call.name)
+      setDiff(outcome.execution.diff ?? null)
+      scheduleHighlightClear()
+      setPendingEdits((previous) =>
+        previous.map((entry) => (entry.id === id ? { ...entry, status: 'applied' as const } : entry)),
+      )
+      addMessage({
+        role: 'assistant',
+        kind: 'result',
+        text: `Applied the pending ${pending.call.name} edit you approved.`,
+      })
+      notify('Pending edit applied', outcome.execution.message, 'success')
+    },
+    [addMessage, commitNote, notify, scheduleHighlightClear],
+  )
+
+  const dismissPendingEdit = useCallback(
+    (id: string) => {
+      const pending = pendingEditsRef.current.find((entry) => entry.id === id)
+      if (!pending || pending.status !== 'pending') return
+      setPendingEdits((previous) =>
+        previous.map((entry) => (entry.id === id ? { ...entry, status: 'discarded' as const } : entry)),
+      )
+      setRejectedTraces((records) => [
+        ...records,
+        pendingToRejectedRecord(pending, 'Discarded by the user at adjudication.'),
+      ])
+      addMessage({ role: 'assistant', kind: 'notice', text: 'Discarded the pending edit. The note was not touched.' })
+    },
+    [addMessage],
+  )
 
   const undo = useCallback(() => {
     if (busyRef.current) {
@@ -551,6 +644,7 @@ export function useWorkspace(): WorkspaceApi {
     setMessages,
     setContextUsage,
     setRejectedTraces,
+    addPendingEdit,
     addMessage,
     patchMessage,
     restoreHistory,
@@ -653,6 +747,23 @@ export function useWorkspace(): WorkspaceApi {
         'neutral',
       )
       return
+    }
+    // Pending edits were authored against the old note; replacing it
+    // resolves them as discarded on the record rather than leaving cards
+    // that can only ever go stale.
+    const orphaned = unresolvedPendings(pendingEditsRef.current)
+    if (orphaned.length > 0) {
+      setRejectedTraces((records) => [
+        ...records,
+        ...orphaned.map((pending) =>
+          pendingToRejectedRecord(pending, 'Note replaced before adjudication.'),
+        ),
+      ])
+      setPendingEdits((previous) =>
+        previous.map((entry) =>
+          entry.status === 'pending' ? { ...entry, status: 'discarded' as const } : entry,
+        ),
+      )
     }
     commitNote('# Untitled\n\n', 'New note', 'manual')
     setSpan(null)
@@ -766,6 +877,9 @@ export function useWorkspace(): WorkspaceApi {
     runs,
     selectedTrace,
     rejectedTraces,
+    pendingEdits,
+    applyPendingEdit,
+    dismissPendingEdit,
     traceOpen,
     openTrace,
     closeTrace,

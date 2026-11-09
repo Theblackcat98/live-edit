@@ -32,6 +32,7 @@ import type {
   ExecutionDiff,
   FrameSource,
   Message,
+  PendingEdit,
   PipelineStage,
   Probability,
   RejectedTraceRecord,
@@ -69,6 +70,7 @@ import {
 import { buildWorkerCall, buildWorkerMessages, renderToolCallXml } from './worker'
 import { routeFromAnswers } from './route'
 import { executeTool } from './tools'
+import { createPendingEdit, isPendableRejection } from './pending'
 import { parseToolCallXml, type ParsedToolCall } from './xml'
 import { currentSceneSource, resolveSceneFrame } from './frame'
 import {
@@ -151,6 +153,8 @@ export interface PipelineDeps {
   setContextUsage: (update: (previous: ContextUsage) => ContextUsage) => void
   /** Rejected-call records shown in the trace drawer. */
   setRejectedTraces: (update: (previous: RejectedTraceRecord[]) => RejectedTraceRecord[]) => void
+  /** Store a pending edit for user adjudication (design.md §9); the hook owns the queue. */
+  addPendingEdit: (pending: PendingEdit) => void
 
   // --- message and history mutators -------------------------------------------
   /** Append a transcript message; returns its id. */
@@ -1450,6 +1454,44 @@ async function runCriticStage(
   publish()
 
   if (critic.verdict === 'rejected') {
+    // Pending-edit adjudication (design.md §9): a rejection on semantic
+    // grounds alone — every deterministic hard gate passed — is the user's
+    // call to override, not a dead end. The call becomes a stored pending
+    // edit; the rejected-traces record is deferred to adjudication (✓
+    // executes it, ✗ appends the record, drift resolves it as stale).
+    // Hard-gate failures stay refused outright below: never adjudicable.
+    const pending = isPendableRejection(noteAtStart, call, plan.span)
+      ? createPendingEdit(noteAtStart, {
+          command,
+          call,
+          d1: {
+            verdict: 'disapproved',
+            noul: critic.pCorrect,
+            destructiveSafety: null,
+            reason: critic.feedback,
+          },
+        })
+      : null
+    if (pending) {
+      deps.setStageStates({ A: 'done', B: 'done', C: 'failed' })
+      deps.addPendingEdit(pending)
+      deps.patchMessage(delegationId, {
+        delegation: { ...delegation, status: 'pending', confidence: critic.pCorrect },
+      })
+      const held =
+        'The safety check rejected this edit, but it passed every deterministic gate, so I kept it instead of dropping it. It is waiting under Pending edits — apply it or discard it there. The note was not touched.'
+      traceLocal.status = 'pending'
+      deps.addMessage({
+        role: 'assistant',
+        kind: 'notice',
+        text: held,
+        runId: traceLocal.id,
+      })
+      deps.notify('Edit waiting for your decision', 'Passed all hard gates; the semantic check said no.', 'neutral')
+      deps.speakReply('That edit needs your call. It is waiting under pending edits.')
+      finish('pending')
+      return null
+    }
     deps.setStageStates({ A: 'done', B: 'done', C: 'failed' })
     deps.patchMessage(delegationId, {
       delegation: { ...delegation, status: 'rejected' },
