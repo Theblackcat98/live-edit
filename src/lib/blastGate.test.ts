@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { sectionScaleCollapse } from './blastGate'
+import { hasReplacementIntent, sectionScaleCollapse } from './blastGate'
 import { executeTool } from './tools'
 import type { WorkerCall } from '../types'
 
@@ -50,10 +50,11 @@ describe('sectionScaleCollapse', () => {
     expect(sectionScaleCollapse(NOTE, wideExecution.diff!)).not.toBeNull()
   })
 
-  it('exempts an explicit remove_text section delete (Nick, 2026-11-10)', () => {
-    // Case 23's shape: the user asked for the section's removal and the
+  it('exempts a plain-removal remove_text under a remove directive (case 23)', () => {
+    // Case 23's shape: a plain-removal command, a remove directive, the
     // worker grounded it with the remove tool — that executes on d1's
-    // approval; the gate only holds destruction disguised as an edit.
+    // approval; the gate only holds destruction the user did not ask to
+    // delete.
     const c = call('remove_text', {
       start_line: '5',
       end_line: '7',
@@ -62,9 +63,41 @@ describe('sectionScaleCollapse', () => {
     })
     const execution = executeTool(NOTE, c)
     expect(execution.ok).toBe(true)
-    expect(sectionScaleCollapse(NOTE, execution.diff!, 'remove_text')).toBeNull()
+    expect(sectionScaleCollapse(NOTE, execution.diff!, 'remove_text', 'remove', 'remove that section about API keys')).toBeNull()
     // The same diff under an edit tool stays held.
     expect(sectionScaleCollapse(NOTE, execution.diff!, 'edit_text')).not.toBeNull()
+  })
+
+  it('holds a section-scale remove_text whose command asks for a replacement (live 12c/29)', () => {
+    // The observed live shape: Omni tasks "Replace the Risks section with
+    // tiny" as remove, the worker deletes the section (the only
+    // gate-passing shape — no edit passes the retention gates), d1 approves
+    // at noul 0.60. The command names replacement content, so the deletion
+    // is destruction disguised by tool choice: held whatever tool and task.
+    const c = call('remove_text', {
+      start_line: '3',
+      end_line: '7',
+      target_excerpt:
+        '## Risks\n\n- Supply chain slips could delay the launch by a month\n- Key engineer is a single point of failure for deploys\n- Budget approval still pending from finance leadership',
+    })
+    const execution = executeTool(NOTE, c)
+    expect(execution.ok).toBe(true)
+    expect(sectionScaleCollapse(NOTE, execution.diff!, 'remove_text', 'remove', 'Replace the Risks section with tiny')).not.toBeNull()
+    // Also held under a non-remove directive or with no command at all.
+    expect(sectionScaleCollapse(NOTE, execution.diff!, 'remove_text', 'edit', 'Replace the Risks section with tiny')).not.toBeNull()
+    expect(sectionScaleCollapse(NOTE, execution.diff!, 'remove_text')).not.toBeNull()
+  })
+
+  it('reads replacement intent off the command phrasing', () => {
+    expect(hasReplacementIntent('Replace the Risks section with tiny')).toBe(true)
+    expect(hasReplacementIntent('change the Q3 row to $1.45M')).toBe(true)
+    expect(hasReplacementIntent('update the title to Final')).toBe(true)
+    expect(hasReplacementIntent('rename the title to Q3 Review Final')).toBe(true)
+    expect(hasReplacementIntent('rewrite the intro as a summary')).toBe(true)
+    expect(hasReplacementIntent('remove that section about API keys')).toBe(false)
+    expect(hasReplacementIntent('delete the bullet about the audit')).toBe(false)
+    expect(hasReplacementIntent('remove the bullet about Redis')).toBe(false)
+    expect(hasReplacementIntent(undefined)).toBe(false)
   })
 
   it('leaves a partial-section edit alone', () => {
@@ -104,7 +137,8 @@ describe('sectionScaleCollapse', () => {
     const verdict = sectionScaleCollapse(bigNote, diff, 'edit_text')
     expect(verdict).not.toBeNull()
     expect(verdict?.reason).toContain('14 lines')
-    // The same span deleted outright via the remove tool is exempt.
+    // The same span deleted outright via the remove tool under a remove
+    // directive (explicit deletion) stays exempt.
     const rm = call('remove_text', {
       start_line: '3',
       end_line: '16',
@@ -112,7 +146,7 @@ describe('sectionScaleCollapse', () => {
     })
     const rmExecution = executeTool(bigNote, rm)
     expect(rmExecution.ok).toBe(true)
-    expect(sectionScaleCollapse(bigNote, rmExecution.diff!, 'remove_text')).toBeNull()
+    expect(sectionScaleCollapse(bigNote, rmExecution.diff!, 'remove_text', 'remove')).toBeNull()
   })
 
   it('ignores a small removal inside a section', () => {
