@@ -10,7 +10,6 @@ const KNOWN_TOOLS: ToolName[] = [
   'add_text',
   'edit_text',
   'remove_text',
-  'extract_visual_to_note',
 ]
 
 /**

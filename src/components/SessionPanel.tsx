@@ -13,8 +13,6 @@ import {
   Square,
   StopCircle,
   Table2,
-  Video,
-  VideoOff,
 } from 'lucide-react'
 import type { Message, Suggestion } from '../types'
 import { cx, formatElapsed } from '../lib/utils'
@@ -46,9 +44,6 @@ interface SessionPanelProps {
   pendingEdits: PendingEdit[]
   onApplyPending: (id: string) => void
   onDismissPending: (id: string) => void
-  /** Attach scene frames to model turns (Omni mode). */
-  videoOn: boolean
-  onToggleVideo: () => void
   /** Active run mode — decides the composer hint and placeholder honestly. */
   mode: RunMode
   /** Desktop/tablet keeps the composer inside the session card; the phone
@@ -71,13 +66,15 @@ interface SessionComposerProps {
 
 /** Where voice/speech actually go in each mode — never a claim of an unused server. */
 const MODE_HINTS: Record<RunMode, string> = {
-  omni: 'Voice is transcribed by LFM3-Omni-2B on 127.0.0.1:8083',
+  audio: 'Voice is transcribed by LFM3-Audio-2B on 127.0.0.1:8086',
+  omni: 'Voice is transcribed by LFM3-Omni-2B on 127.0.0.1:8083 (legacy)',
   'worker-d1': 'Voice and speech use d1-Omni-2B on 127.0.0.1:8085 · LFM3-1.7B answers chat',
-  lowram: 'Voice needs an Omni server — type instead',
+  lowram: 'Voice needs an audio server — type instead',
 }
 
 const MODE_PLACEHOLDERS: Record<RunMode, string> = {
-  omni: 'Ask Omni to change something…',
+  audio: 'Ask Audio to change something…',
+  omni: 'Ask Omni to change something… (legacy)',
   'worker-d1': 'Ask the 1.7B to change something…',
   lowram: 'Type a command for the 1.7B…',
 }
@@ -111,8 +108,6 @@ export function SessionPanel({
   pendingEdits,
   onApplyPending,
   onDismissPending,
-  videoOn,
-  onToggleVideo,
   mode,
   showComposer = true,
 }: SessionPanelProps) {
@@ -152,28 +147,6 @@ export function SessionPanel({
         </div>
         <span className="session-clock mono">{formatElapsed(elapsedSeconds)}</span>
         <div className="card-header-spacer" />
-        <button
-          type="button"
-          className={cx('button button-quiet session-demo session-video', !videoOn && 'is-off')}
-          onClick={onToggleVideo}
-          aria-pressed={videoOn}
-          aria-label={
-            mode !== 'omni'
-              ? 'Frames toggle — Omni mode only, this mode attaches no frame'
-              : videoOn
-                ? 'Stop attaching frames to model turns'
-                : 'Attach the scene frame to model turns again'
-          }
-          title={
-            mode !== 'omni'
-              ? 'Omni mode only — this mode never attaches frames. The toggle still decides what an Omni turn would send.'
-              : videoOn
-                ? 'Frames are attached to Omni chat turns — click to send none'
-                : 'Frames are not sent to models — click to attach the scene frame again'
-          }
-        >
-          {videoOn ? <Video size={11} /> : <VideoOff size={11} />}
-        </button>
         <button
           type="button"
           className={cx('button button-quiet session-demo', speaking || ttsBusy ? 'is-running' : '')}

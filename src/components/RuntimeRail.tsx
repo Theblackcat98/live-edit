@@ -235,18 +235,7 @@ function RuntimeWiringCard({
     void refreshRuntime().finally(() => setRefreshing(false))
   }
 
-  // Which pixels the models actually got for the selected run. A synthetic
-  // frame after the camera was on is shown as FALLBACK, never as live.
-  const frameSource = trace?.frameSource
-  const frameRow =
-    frameSource === 'live-camera'
-      ? { badge: 'LIVE', tone: 'live', detail: 'device camera · live JPEG' }
-      : frameSource === 'live-screen'
-        ? { badge: 'LIVE', tone: 'live', detail: 'screen share · live JPEG' }
-        : frameSource === 'synthetic-slide'
-          ? { badge: 'FALLBACK', tone: 'fallback', detail: 'synthetic slide · no live capture' }
-          : { badge: '—', tone: 'idle', detail: 'no frame attached this run' }
-
+  // Which endpoints the models actually ran against for the selected run.
   return (
     <section className="rail-card wiring-card">
       <header className="rail-header">
@@ -310,11 +299,6 @@ function RuntimeWiringCard({
             </div>
           )
         })}
-        <div className="wiring-row" title={frameRow.detail}>
-          <span className={cx('wiring-badge', `is-${frameRow.tone}`)}>{frameRow.badge}</span>
-          <span className="wiring-label">Vision frame</span>
-          <span className="wiring-target mono">{frameRow.detail}</span>
-        </div>
       </div>
 
       <div className="wiring-endpoints">
@@ -388,7 +372,6 @@ function SupervisorCard({
 }) {
   const route = trace?.route
   const span = trace?.span
-  const bbox = trace?.bbox
   const critic = trace?.critic
   const actionTone =
     route?.action === 'file_mutation'
@@ -487,7 +470,6 @@ function SupervisorCard({
                 >
                   P {formatP(span.confidence)}
                 </span>
-                {bbox && <span className="chip chip-orange">ROI</span>}
               </div>
               <div className="sup-excerpt">{truncate(span.excerpt, 66)}</div>
               <span className="sup-muted mono">
@@ -499,11 +481,11 @@ function SupervisorCard({
               </span>
             </div>
           ) : stageStates.B === 'running' ? (
-            <span className="sup-running">Extracting span and bbox…</span>
+            <span className="sup-running">Extracting span…</span>
           ) : stageStates.B === 'skipped' ? (
             <span className="sup-muted">No span needed for this turn.</span>
           ) : (
-            <span className="sup-muted">Span &amp; bbox heads idle</span>
+            <span className="sup-muted">Span head idle</span>
           )}
         </Stage>
 
@@ -613,7 +595,7 @@ function ContextCard({ usage, trace }: { usage: ContextUsage; trace: Trace | nul
         })}
       </div>
       <div className="context-foot mono">
-        30s audio ring · 12 keyframes · ToC cached
+        30s audio ring · ToC cached
         {trace?.promptTokens ? ` · ${formatContext(trace.promptTokens)} prompt` : ''}
       </div>
     </section>

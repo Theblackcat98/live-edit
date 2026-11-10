@@ -47,7 +47,5 @@ The Q3 figure is waiting on the final enterprise invoice reconciliation. Finance
 
 export const DEMO_SEQUENCE = [
   { command: 'Update the Q3 revenue row to $1.45M Final', source: 'demo' as const },
-  { command: 'What can you see?', source: 'demo' as const },
-  { command: 'Pull the LTV/CAC formula from the slide into Revenue', source: 'demo' as const },
   { command: 'Remove the bullet about Redis', source: 'demo' as const },
 ]

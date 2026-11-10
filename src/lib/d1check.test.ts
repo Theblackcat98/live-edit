@@ -58,10 +58,9 @@ function decideWith(noul: number, choice: string): D1DecideFn {
 }
 
 const STATE = 'state blob from buildD1State'
-const FRAME = 'data:image/png;base64,AAAA'
 
-async function checkWith(decide: D1DecideFn, frame?: string | null) {
-  return runD1Check({ state: STATE, frameDataUrl: frame, d1Decide: decide })
+async function checkWith(decide: D1DecideFn) {
+  return runD1Check({ state: STATE, d1Decide: decide })
 }
 
 // --- D1_QUESTIONS: byte-identical to the E3 calibration record -------------------
@@ -157,36 +156,17 @@ describe('runD1Check verdict matrix', () => {
 // --- packet forwarding ---------------------------------------------------------------
 
 describe('runD1Check packet forwarding', () => {
-  it('passes state verbatim, the frame as imageDataUrl, and D1_QUESTIONS by reference', async () => {
+  it('passes state verbatim and D1_QUESTIONS by reference, with no attachment key', async () => {
     const decide = vi.fn(async (_payload: Parameters<D1DecideFn>[0]) => ({
       answers: answersOf(0.8, SAFE_CHOICE),
       ms: 12.5,
       usage: { promptTokens: 0, outputTokens: 0 },
     }))
-    await checkWith(decide, FRAME)
+    await checkWith(decide)
     expect(decide).toHaveBeenCalledOnce()
-    const payload = vi.mocked(decide).mock.calls[0][0]
-    expect(payload.state).toBe(STATE)
-    expect(payload.imageDataUrl).toBe(FRAME)
-    expect(payload.questions).toBe(D1_QUESTIONS)
-  })
-
-  it('sends no image when the frame is null or absent', async () => {
-    const withNull = vi.fn(async (_payload: Parameters<D1DecideFn>[0]) => ({
-      answers: answersOf(0.8, SAFE_CHOICE),
-      ms: 1,
-      usage: { promptTokens: 0, outputTokens: 0 },
-    }))
-    await checkWith(withNull, null)
-    expect(vi.mocked(withNull).mock.calls[0][0].imageDataUrl).toBeUndefined()
-
-    const without = vi.fn(async (_payload: Parameters<D1DecideFn>[0]) => ({
-      answers: answersOf(0.8, SAFE_CHOICE),
-      ms: 1,
-      usage: { promptTokens: 0, outputTokens: 0 },
-    }))
-    await runD1Check({ state: STATE, d1Decide: without })
-    expect(vi.mocked(without).mock.calls[0][0].imageDataUrl).toBeUndefined()
+    const payload = vi.mocked(decide).mock.calls[0][0] as Record<string, unknown>
+    expect(payload).toEqual({ state: STATE, questions: D1_QUESTIONS })
+    expect(Object.keys(payload).sort()).toEqual(['questions', 'state'])
   })
 
   it('records timing in ms', async () => {

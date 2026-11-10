@@ -19,7 +19,6 @@ const SECTION_FIVE_EXAMPLE = {
   },
   verbatim: null,
   constraints: ['markdown', 'keep the existing Q3 content intact'],
-  frame_relevant: false,
 }
 
 describe('validateDirective — valid', () => {
@@ -35,7 +34,6 @@ describe('validateDirective — valid', () => {
     })
     expect(result.directive.verbatim).toBeNull()
     expect(result.directive.constraints).toEqual(SECTION_FIVE_EXAMPLE.constraints)
-    expect(result.directive.frame_relevant).toBe(false)
   })
 
   it('accepts the minimal directive: task + instruction', () => {
@@ -74,7 +72,6 @@ describe('validateDirective — valid', () => {
     expect(directive.target).toBeUndefined()
     expect(directive.constraints).toBeUndefined()
     expect(directive.verbatim).toBeUndefined()
-    expect(directive.frame_relevant).toBeUndefined()
   })
 
   it('normalizes an absent target.heading to null and keeps a stated one', () => {
@@ -116,7 +113,7 @@ describe('validateDirective — invalid kinds', () => {
   })
 
   it('rejects a missing or out-of-enum task', () => {
-    for (const task of [undefined, 'update', 'delete', 'EDIT', 7]) {
+    for (const task of [undefined, 'update', 'delete', 'EDIT', 'extract', 7]) {
       const result = validateDirective({ task, instruction: 'A perfectly fine brief.' })
       expect(result.valid, `task=${String(task)}`).toBe(false)
       if (!result.valid) expect(result.error).toMatch(/task must be one of/)
@@ -202,14 +199,6 @@ MIT.`
     }
   })
 
-  it('rejects a non-boolean frame_relevant', () => {
-    for (const frameRelevant of ['yes', 1, null]) {
-      const result = validateDirective({ task: 'extract', instruction: 'Pull the formula off the slide.', frame_relevant: frameRelevant })
-      expect(result.valid, `frame_relevant=${JSON.stringify(frameRelevant)}`).toBe(false)
-      if (!result.valid) expect(result.error).toMatch(/frame_relevant must be a boolean/)
-    }
-  })
-
   it('joins every error when several fields are wrong at once', () => {
     const result = validateDirective({ task: 'swap', instruction: '', constraints: 'none' })
     expect(result.valid).toBe(false)
@@ -223,7 +212,7 @@ MIT.`
 
 describe('buildDirectiveRepairMessage', () => {
   it('carries the schema error verbatim and re-states the brief-not-content rule', () => {
-    const error = 'task must be one of create|insert|edit|remove|extract (got "update")'
+    const error = 'task must be one of create|insert|edit|remove (got "update")'
     const message = buildDirectiveRepairMessage(error)
     expect(message).toContain(error)
     expect(message).toMatch(/Call delegate_edit again/)

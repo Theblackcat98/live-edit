@@ -9,7 +9,6 @@ import contextSource from './context.ts?raw'
 import d1checkSource from './d1check.ts?raw'
 import directiveSource from './directive.ts?raw'
 import docSource from './doc.ts?raw'
-import frameSource from './frame.ts?raw'
 import gatesSource from './gates.ts?raw'
 import omniSource from './omni.ts?raw'
 import pendingSource from './pending.ts?raw'
@@ -34,7 +33,6 @@ describe('runtime honesty (static)', () => {
       d1check: d1checkSource,
       directive: directiveSource,
       doc: docSource,
-      frame: frameSource,
       gates: gatesSource,
       omni: omniSource,
       pending: pendingSource,

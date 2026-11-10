@@ -1,9 +1,9 @@
 #!/bin/bash
-# Stop the three LiquidScribe llama.cpp servers started by start-models.sh.
+# Stop the four LiquidScribe llama.cpp servers started by start-models.sh.
 set -u
 LOGDIR="$HOME/Documents/Models/logs/lfm3"
 fail=0
-for name in text omni d1-omni; do
+for name in text omni d1-omni audio; do
   pidfile="$LOGDIR/$name.pid"
   if [ -f "$pidfile" ]; then
     pid="$(cat "$pidfile")"

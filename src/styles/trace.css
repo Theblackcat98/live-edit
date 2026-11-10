@@ -365,8 +365,7 @@
   gap: 7px;
 }
 
-.trace-span-card,
-.trace-bbox-card {
+.trace-span-card {
   border-radius: var(--radius-chip);
   background: var(--inset);
   box-shadow: 0 0 0 1px var(--line);
@@ -428,50 +427,6 @@
 
 .trace-span-card .trace-reason {
   margin: 5px 8px 6px;
-}
-
-.trace-bbox-card {
-  display: flex;
-  gap: 8px;
-  padding: 7px;
-}
-
-.trace-bbox-preview {
-  width: 116px;
-  flex-shrink: 0;
-  border-radius: var(--radius-chip);
-  overflow: hidden;
-  box-shadow: 0 0 0 1px var(--line);
-}
-
-.trace-bbox-preview .crop-body {
-  height: 64px;
-}
-
-.trace-bbox-meta {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 2px;
-  min-width: 0;
-  color: var(--ink-2);
-  font-size: 9px;
-}
-
-.trace-bbox-title {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--ink-3);
-  font-family: var(--font-mono);
-  font-size: 8.5px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.trace-bbox-conf {
-  color: var(--ink-3);
-  font-size: 8.5px;
 }
 
 /* Worker */

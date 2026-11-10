@@ -65,11 +65,11 @@ function userText(messages: ChatMessage[]): string {
 // --- prompt contract ------------------------------------------------------------
 
 describe('buildWorkerChatMessages', () => {
-  it('puts the four-tool XML catalog in the system prompt with each parameter table', () => {
+  it('puts the three-tool XML catalog in the system prompt with each parameter table', () => {
     const [system] = buildWorkerChatMessages(baseInput())
     expect(system.role).toBe('system')
     const prompt = String(system.content)
-    for (const tool of ['add_text', 'edit_text', 'remove_text', 'extract_visual_to_note']) {
+    for (const tool of ['add_text', 'edit_text', 'remove_text']) {
       expect(prompt).toContain(`<schema function=${tool}>`)
     }
     for (const param of [
@@ -79,8 +79,6 @@ describe('buildWorkerChatMessages', () => {
       'old_text_anchor',
       'new_text',
       'target_excerpt',
-      'visual_format',
-      'extracted_markdown',
     ]) {
       expect(prompt).toContain(param)
     }

@@ -31,6 +31,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { id: 'omni', name: 'LFM3-Omni-2B', role: 'Interface · chat + ASR + TTS', port: 8083, alias: 'lfm3-omni-2b' },
   { id: 'd1omni', name: 'd1-Omni-2B', role: 'Supervisor · route/critic', port: 8085, alias: 'd1-omni-2b' },
   { id: 'text', name: 'LFM3-1.7B', role: 'Worker · tool calls', port: 8080, alias: 'lfm3-1.7b' },
+  { id: 'audio', name: 'LFM3-Audio-2B', role: 'Interface · chat + ASR + TTS', port: 8086, alias: 'lfm3-audio-2b' },
 ]
 
 const DEFAULT_TIMEOUT_MS = 30_000
@@ -139,12 +140,8 @@ function usageOf(payload: unknown): TokenUsage {
 
 // --- chat completions (Omni) --------------------------------------------------
 
-export type ChatContent =
-  | string
-  | Array<
-      | { type: 'text'; text: string }
-      | { type: 'image_url'; image_url: { url: string } }
-    >
+/** Message content is plain text: no attachments travel with any request. */
+export type ChatContent = string
 
 // --- tool calling (OpenAI-style; needs llama.cpp --jinja) ----------------------
 // Additive (P2, omni.ts): the chat calls can carry function definitions and
@@ -459,7 +456,7 @@ export interface TranscriptResult {
 
 export async function transcribeAudio(
   blob: Blob,
-  endpoint: 'omni' | 'd1omni' = 'omni',
+  endpoint: 'omni' | 'd1omni' | 'audio' = 'omni',
 ): Promise<TranscriptResult> {
   const spec = ENDPOINTS.find((candidate) => candidate.id === endpoint)
   if (!spec) throw new BridgeError(`${endpoint} endpoint missing`)
@@ -486,12 +483,12 @@ export async function transcribeAudio(
 /**
  * Model TTS. `endpoint` names the Omni-architecture server that speaks:
  * 'omni' (:8083) in the Omni-first mode, 'd1omni' (:8085) in worker-d1
- * (same Omni architecture). Low-RAM never calls this — the caller uses the
- * browser voice instead.
+ * (same Omni architecture), 'audio' (:8086) in the audio-first mode.
+ * Low-RAM never calls this — the caller uses the browser voice instead.
  */
 export async function synthesizeSpeech(
   text: string,
-  options: { signal?: AbortSignal; endpoint?: 'omni' | 'd1omni' } = {},
+  options: { signal?: AbortSignal; endpoint?: 'omni' | 'd1omni' | 'audio' } = {},
 ): Promise<Blob> {
   const endpoint = options.endpoint ?? 'omni'
   const spec = ENDPOINTS.find((candidate) => candidate.id === endpoint)
@@ -552,7 +549,6 @@ function parseD1Answer(value: unknown): D1Answer | undefined {
 
 export async function d1Decide(payload: {
   state?: string
-  imageDataUrl?: string
   questions: Record<string, D1Question>
   /** Per-call deadline; span grounding uses a tighter budget than routing. */
   timeoutMs?: number
@@ -562,7 +558,6 @@ export async function d1Decide(payload: {
   const started = performance.now()
   const body: Record<string, unknown> = { questions: payload.questions }
   if (payload.state != null && payload.state.length) body.state = payload.state
-  if (payload.imageDataUrl) body.images = [payload.imageDataUrl]
   const result = await fetchJson(`http://127.0.0.1:${spec.port}/v1/systemone`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

@@ -2,7 +2,7 @@
  * Omni turn client (design.md §2/§4, P2): every turn reaches Omni first.
  *
  * One call to {@link runOmniTurn} is one user turn against LFM3-Omni-2B. It
- * builds the conversation (frame per the E2 config, note per design.md §6),
+ * builds the text-only conversation (note per design.md §6),
  * sends it with the two native tool definitions (E1/D4's winning mechanism —
  * native tool calls on the local llama.cpp build, `--jinja`), streams the
  * visible reply, and parses the outcome:
@@ -64,29 +64,30 @@ export const HISTORY_TURN_CHARS = 600
 /**
  * The one bridge capability runOmniTurn needs, as an injectable function so
  * tests (and any future transport) never touch the network. Defaults to the
- * live streamed chat call against the Omni endpoint.
+ * live streamed chat call against the Audio endpoint (LFM3-Audio-2B :8086 —
+ * the default front door; the Omni :8083 path is legacy).
  */
 export type OmniChatFn = (
   messages: ChatMessage[],
   options: ChatStreamOptions,
 ) => Promise<ChatResult>
 
-const defaultChat: OmniChatFn = (messages, options) => chatCompleteStream('omni', messages, options)
+const defaultChat: OmniChatFn = (messages, options) => chatCompleteStream('audio', messages, options)
 
 // --- typed errors (design.md §11: honest failure, endpoint state for the UI) ---
 
 export interface OmniEndpointState {
-  id: 'omni'
+  id: 'omni' | 'audio'
   name: string
   port: number
   url: string
 }
 
 export const OMNI_ENDPOINT: OmniEndpointState = {
-  id: 'omni',
-  name: 'LFM3-Omni-2B',
-  port: 8083,
-  url: 'http://127.0.0.1:8083',
+  id: 'audio',
+  name: 'LFM3-Audio-2B',
+  port: 8086,
+  url: 'http://127.0.0.1:8086',
 }
 
 export type OmniTurnErrorKind =
@@ -139,11 +140,11 @@ export const DELEGATE_EDIT_TOOL: ToolDef = {
       properties: {
         task: {
           type: 'string',
-          enum: ['create', 'insert', 'edit', 'remove', 'extract'],
+          enum: ['create', 'insert', 'edit', 'remove'],
           description:
             'Operation class: edit = change existing content in place; insert = add new content ' +
             'without replacing anything; remove = delete existing content; create = author a new ' +
-            'document or section skeleton; extract = pull content from the attached frame.',
+            'document or section skeleton.',
         },
         instruction: {
           type: 'string',
@@ -174,10 +175,6 @@ export const DELEGATE_EDIT_TOOL: ToolDef = {
           type: ['array', 'null'],
           items: { type: 'string' },
           description: 'Optional requirements, e.g. ["markdown", "keep the existing content intact"].',
-        },
-        frame_relevant: {
-          type: 'boolean',
-          description: 'True only when the task depends on the attached visual frame.',
         },
       },
       required: ['task', 'instruction'],
@@ -219,18 +216,18 @@ export const OMNI_TOOLS: ToolDef[] = [DELEGATE_EDIT_TOOL, HARNESS_ACTION_TOOL]
  * task taxonomy spelled out in the system prompt, the 2B parroted the
  * taxonomy into chat ("I'll delegate the edit to…", a literal "**Task:**"
  * fragment) and treated change requests as conversation topics. So:
- * conversation is framed as the default, change requests as actions, and
+ * conversation is the default, change requests are actions, and
  * the per-task definitions live ONLY in the delegate_edit parameter
  * descriptions — never in prose the model can echo back at the user.
  */
 export const OMNI_SYSTEM_PROMPT = [
-  'You are Omni, the voice of a local note workspace. The user is talking with you — conversation is the default. Each turn may show you the current note and, when an image is attached, the live visual frame (what the user calls "the slide", "the chart" or "the screen").',
-  'Most turns are just conversation: greetings, questions, opinions, hypotheticals, "what does the note say", "what can you see". Answer those in your own words, naturally. Never write note content in chat, not even as a draft.',
+  'You are Omni, the voice of a local note workspace. The user is talking with you — conversation is the default. Each turn may show you the current note.',
+  'Most turns are just conversation: greetings, questions, opinions, hypotheticals, "what does the note say". Answer those in your own words, naturally. Never write note content in chat, not even as a draft.',
   'A request to change the note is not a conversation topic — it is an action. If the user wants the note changed in any way (add, remove, rename, update, fix, rewrite, create), do not discuss it, do not describe doing it, and do not ask for confirmation: call delegate_edit once with a brief for the worker that never sees this conversation. The brief carries EVERYTHING the user specified — sections named, exact new values quoted, tone asked for — with references like "the same for Q4" or "that bullet" resolved by you. Describe what the content should be; never author the content itself. The one exception: when the user dictates or quotes exact words to appear in the note, put those words in verbatim, character for character.',
   'Ask ONE short clarifying question only when a change request is genuinely ambiguous — an unresolved "this", "that number", or an outcome you cannot pin down. A wrong edit is worse than a question; a question about a clear request is worse than acting.',
   'Undo and redo are instant, never a discussion: "undo that", "take that back", "redo it" — call harness_action with that action and nothing else.',
   'Never mention this process or its machinery — no talk of tasks, tools, calls, briefs, or who does the writing. From the user\'s side: they ask, you answer or ask, and when they ask for a change their note simply changes.',
-  'Style: brief and natural, one or two sentences unless more is genuinely needed. Reference the note or the attached frame only when the turn is actually about them; when asked what you can see, describe the attached frame itself.',
+  'Style: brief and natural, one or two sentences unless more is genuinely needed. Reference the note only when the turn is actually about it.',
 ].join('\n')
 
 /** The user-role instruction for the repair-failure clarify follow-up (no tools). */
@@ -242,11 +239,6 @@ export const CLARIFY_FOLLOWUP_INSTRUCTION =
 // --- turn input (the contract the pipeline wires against) ------------------------
 
 export type OmniTurnSource = 'voice' | 'text' | 'demo'
-
-export interface OmniFrameAttachment {
-  source: 'live-camera' | 'live-screen' | 'synthetic-slide'
-  dataUrl: string
-}
 
 /**
  * A past delegation as it persists in history (E1 run-3 policy): the
@@ -284,8 +276,6 @@ export interface OmniTurnInput {
   history: OmniHistoryTurn[]
   /** Current note text; §6 policy below decides how much of it is sent. */
   note: string
-  /** The resolved frame to attach, or null when the turn has none. */
-  frame: OmniFrameAttachment | null
   /** Last completed edit run, for continuity; null when none yet. */
   lastRun: OmniLastRun | null
   /** Barge-in signal: checked before every stage and during streaming. */
@@ -303,14 +293,6 @@ export interface OmniTurnInput {
 }
 
 // --- §6 context policy ------------------------------------------------------------
-
-const FRAME_DESCRIPTIONS: Record<OmniFrameAttachment['source'] | 'none', string> = {
-  'live-camera': 'Attached is the current live frame from the device camera.',
-  'live-screen': 'Attached is the current live frame from the screen share.',
-  'synthetic-slide':
-    'Attached is the synthetic operating-review slide frame (no live capture is attached).',
-  none: 'No frame is attached for this turn.',
-}
 
 /**
  * "About the note" test (shipped NOTE_QUESTION lineage) extended with a
@@ -363,9 +345,8 @@ export function noteContextFor(command: string, note: string): string {
 /**
  * Build the full message array for a turn: system prompt, replayed history
  * (assistant channel = model text and/or tool_calls only; delegation results
- * in the tool role), and the user turn (frame description, note context, last
- * run, command; the frame attached as image_url exactly the way bridge.ts
- * attaches frames).
+ * in the tool role), and the text-only user turn (note context, last run,
+ * command). No attachment of any kind travels with the messages.
  */
 export function buildOmniMessages(input: OmniTurnInput): ChatMessage[] {
   const history = input.history.slice(-HISTORY_TURNS).flatMap((turn, index): ChatMessage[] => {
@@ -389,7 +370,6 @@ export function buildOmniMessages(input: OmniTurnInput): ChatMessage[] {
   })
 
   const textParts = [
-    input.frame ? FRAME_DESCRIPTIONS[input.frame.source] : FRAME_DESCRIPTIONS.none,
     noteContextFor(input.command, input.note),
     input.lastRun
       ? `Last completed run: "${input.lastRun.command}" → ${input.lastRun.status}${
@@ -399,11 +379,11 @@ export function buildOmniMessages(input: OmniTurnInput): ChatMessage[] {
     `User: ${input.command}`,
   ].join('\n\n')
 
-  const content: ChatMessage['content'] = input.frame
-    ? [{ type: 'text', text: textParts }, { type: 'image_url', image_url: { url: input.frame.dataUrl } }]
-    : textParts
-
-  return [{ role: 'system', content: OMNI_SYSTEM_PROMPT }, ...history, { role: 'user', content }]
+  return [
+    { role: 'system', content: OMNI_SYSTEM_PROMPT },
+    ...history,
+    { role: 'user', content: textParts },
+  ]
 }
 
 // --- sanitizer (design.md §10 hygiene, extended to native-tool markers) ------------

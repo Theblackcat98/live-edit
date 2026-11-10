@@ -55,32 +55,6 @@ export const TOOL_DEFS: ToolDefinition[] = [
       },
     ],
   },
-  {
-    name: 'extract_visual_to_note',
-    description:
-      'Convert a visual ROI (table, formula, chart, whiteboard) into structured Markdown and insert it under a heading.',
-    params: [
-      { name: 'file_path', type: 'string', required: true, description: 'Target note path.' },
-      {
-        name: 'visual_format',
-        type: 'enum: markdown_table | mermaid_diagram | latex_block | bullet_summary | verbatim_ocr',
-        required: true,
-        description: 'Requested Markdown representation.',
-      },
-      {
-        name: 'anchor_heading',
-        type: 'string',
-        required: true,
-        description: 'Heading supplied by the supervisor.',
-      },
-      {
-        name: 'extracted_markdown',
-        type: 'string',
-        required: true,
-        description: 'Structured Markdown extracted from the ROI.',
-      },
-    ],
-  },
 ]
 
 export const TOOL_BY_NAME = Object.fromEntries(
@@ -91,5 +65,4 @@ export const TOOL_LABELS: Record<ToolName, string> = {
   add_text: 'Add text',
   edit_text: 'Edit text',
   remove_text: 'Remove text',
-  extract_visual_to_note: 'Extract visual',
 }

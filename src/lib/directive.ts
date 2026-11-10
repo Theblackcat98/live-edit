@@ -24,7 +24,6 @@
  *   string (the user dictated exact words — an empty dictation is a mistake).
  * - `constraints` may be absent or null (normalized to absent); when present
  *   it must be an array of non-empty strings.
- * - `frame_relevant` may be absent; when present it must be a boolean.
  * - **Unknown extra properties are IGNORED, not rejected.** The §5 field set
  *   is the contract to the worker and extras never travel past this
  *   validator; E1 measured 11/11 schema-valid native emissions with no junk
@@ -40,7 +39,7 @@ export type DirectiveValidation =
   | { valid: false; error: string }
 
 /** The §5 closed task enum. */
-export const DIRECTIVE_TASKS = ['create', 'insert', 'edit', 'remove', 'extract'] as const
+export const DIRECTIVE_TASKS = ['create', 'insert', 'edit', 'remove'] as const
 
 export type DirectiveTask = (typeof DIRECTIVE_TASKS)[number]
 
@@ -69,7 +68,7 @@ export function validateDirective(raw: unknown): DirectiveValidation {
 
   if (!isDirectiveTask(raw.task)) {
     errors.push(
-      `task must be one of create|insert|edit|remove|extract (got ${JSON.stringify(raw.task) ?? 'missing'})`,
+      `task must be one of create|insert|edit|remove (got ${JSON.stringify(raw.task) ?? 'missing'})`,
     )
   }
 
@@ -125,13 +124,6 @@ export function validateDirective(raw: unknown): DirectiveValidation {
     constraints = raw.constraints
   }
 
-  let frameRelevant: boolean | undefined
-  if (raw.frame_relevant !== undefined && typeof raw.frame_relevant !== 'boolean') {
-    errors.push('frame_relevant must be a boolean')
-  } else {
-    frameRelevant = raw.frame_relevant
-  }
-
   if (errors.length > 0 || !isDirectiveTask(raw.task) || !instruction) {
     return { valid: false, error: errors.join('; ') || 'the directive is not valid' }
   }
@@ -140,7 +132,6 @@ export function validateDirective(raw: unknown): DirectiveValidation {
   if (target) directive.target = target
   if (verbatim !== undefined) directive.verbatim = verbatim
   if (constraints) directive.constraints = constraints
-  if (frameRelevant !== undefined) directive.frame_relevant = frameRelevant
   return { valid: true, directive }
 }
 

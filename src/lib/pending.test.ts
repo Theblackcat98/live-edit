@@ -28,7 +28,6 @@ function makeDirective(instruction: string): Directive {
     target: { description: 'the Redis cache line under Risks', heading: 'Risks' },
     verbatim: null,
     constraints: ['keep the section structure'],
-    frame_relevant: false,
   }
 }
 

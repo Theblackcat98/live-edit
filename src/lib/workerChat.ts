@@ -81,7 +81,6 @@ const PARAM_DESCRIPTION_FIXES: Record<string, string> = {
   'Target note path.': `the target note: ${NOTE_PATH}`,
   'Line number or exact heading supplied by the supervisor.':
     'line number or exact heading text to anchor the insertion (required for after_line and under_heading)',
-  'Heading supplied by the supervisor.': 'exact heading text to insert the extracted markdown under',
   'Where the content is inserted.':
     "where the content is inserted — under_heading inserts at the END of that heading's section (after its existing content); after_line inserts immediately after line N",
 }
@@ -91,12 +90,10 @@ const TOOL_USE_WHEN: Record<ToolName, string> = {
     'adding NEW lines — a new bullet, paragraph, section, or whole document — without replacing or deleting existing lines',
   edit_text: 'changing text that already exists — fixing a value, rewording a row, renaming a heading',
   remove_text: 'deleting existing lines — a bullet, a table row, or a whole section',
-  extract_visual_to_note:
-    'placing Markdown the user supplied under a heading (there is no camera or screen frame in this mode)',
 }
 
 /**
- * The four-tool catalog in the repo XML contract, one parameter table per
+ * The three-tool catalog in the repo XML contract, one parameter table per
  * tool. Deliberately no filled example calls: the packet prompt's v2 lesson
  * (worker.ts) is that a small model reads complete example calls as its own
  * prior turns and re-deliberates them.
@@ -127,8 +124,7 @@ export function renderWorkerChatToolCatalog(notePath: string = NOTE_PATH): strin
  * The answer-or-call contract. Two legal reply shapes only: plain prose
  * (answer / one clarifying question) or exactly one XML tool call. The note
  * excerpt is authoritative — the 1.7B must never invent note content, and an
- * ambiguous target is a question, not a guess. No frame is claimed: this
- * mode is text-only.
+ * ambiguous target is a question, not a guess. This mode is text-only.
  */
 export const WORKER_CHAT_SYSTEM_PROMPT = [
   'You are the assistant in a local note workspace. The user talks to you, and when they ask for a change you make it yourself with exactly one tool call.',
@@ -150,7 +146,6 @@ export const WORKER_CHAT_SYSTEM_PROMPT = [
   '- If the target is genuinely ambiguous (an unresolved "that", "this part", "the number"), ask ONE short clarifying question instead of guessing. A wrong edit is worse than a question.',
   '- Never copy the user\'s command words into the note; write the note text yourself, matching the note\'s own style.',
   '- Every parameter name belongs to exactly one tool; never mix parameter vocabularies.',
-  '- There is no camera or screen frame in this mode: never claim to see one.',
   '',
   'TOOLS',
   renderWorkerChatToolCatalog(),

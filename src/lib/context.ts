@@ -27,7 +27,7 @@
  * exact state text, so buildD1State copies the spike's section ordering and
  * labels byte-for-byte. context.test.ts asserts byte-identity against the
  * state text recorded in docs/spikes/E3-d1-check.json for one fixture per
- * diff kind (edit / remove / insert-under-heading / extract / prepend).
+ * diff kind (edit / remove / insert-under-heading / prepend).
  */
 
 import type {
@@ -212,16 +212,15 @@ export interface D1StateInput {
 
 /**
  * The fixed preamble, verbatim from the E3 spike (scripts/spike-d1-check.mjs
- * buildState). The frame sentence describes the IMAGE the bridge attaches
- * alongside this blob — the frame itself never enters the state text (the
- * bridge sends `{state, images: [dataUrl], questions}`; P4's d1check passes
- * the resolved frame the same way). Kept byte-identical to E3, including the
- * "synthetic operating-review slide" wording, because the calibrated
- * thresholds are only valid while this packet stays fixed; a live-frame
- * variant would be a calibration-affecting change and is not introduced here.
+ * buildState), with one intentional, text-only change recorded here: E3's
+ * closing sentence announced an attached picture; nothing is attached any
+ * more, so the sentence now says so and d1 judges the text alone. The rest of
+ * the packet (section order, labels, the questions) is unchanged, because the
+ * calibrated thresholds are only valid while this packet stays fixed;
+ * context.test.ts asserts this string byte-for-byte.
  */
 const D1_STATE_PREAMBLE =
-  'Safety check for a proposed note edit. You are given the directive from the interface model, the user command, the worker\'s proposed tool call, and the rendered diff of that call against the current note. The current video frame (a synthetic operating-review slide) is attached.'
+  'Safety check for a proposed note edit. You are given the directive from the interface model, the user command, the worker\'s proposed tool call, and the rendered diff of that call against the current note. No video frame is attached; judge text only.'
 
 /**
  * Content-line count of the seed note — the value the E3 packet reported
@@ -257,7 +256,7 @@ function renderD1Diff(call: D1ProposedCall, diff: ExecutionDiff, noteLineCount: 
       ...diff.before.map((line) => `- ${line}`),
     ].join('\n')
   }
-  // add_text / extract_visual_to_note: the spike's `where` clause. prepend is
+  // add_text: the spike's `where` clause. prepend is
   // fixed text; everything else is an under-heading insert, and the engine's
   // insertUnderHeading always separates the block from the section's last
   // content line with exactly one blank line (tools.ts), so that line is
@@ -286,10 +285,6 @@ function renderD1Diff(call: D1ProposedCall, diff: ExecutionDiff, noteLineCount: 
  * the only conversational input, optional, bounded, and clearly labelled; the
  * E3-calibrated sections keep their exact relative order whether it is
  * present or not.
- *
- * The video frame does NOT go in the blob — the bridge attaches it as an
- * image (`images: [dataUrl]`) next to this state text; the preamble's frame
- * sentence refers to that attachment.
  *
  * Returns the state text only. Token estimates are the caller's concern (the
  * string return has nowhere to report one; every input that can grow is

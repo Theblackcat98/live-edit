@@ -8,7 +8,6 @@ import {
   Clipboard,
   Copy,
   Gauge,
-  Image,
   ScanSearch,
   ShieldCheck,
   Sparkles,
@@ -17,7 +16,6 @@ import {
 import type { CriticCheck, Probability, RejectedTraceRecord, Trace } from '../types'
 import { TOOL_DEFS } from '../data/tools'
 import { cx, formatP, pAdopted, pad, truncate } from '../lib/utils'
-import { SceneCrop } from './SceneCrop'
 import { Download } from 'lucide-react'
 
 interface TraceDrawerProps {
@@ -161,7 +159,6 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, on
       action: trace.route?.action,
       tool: trace.call?.name,
       span: trace.span,
-      bbox: trace.bbox,
       critic: trace.critic
         ? {
             verdict: trace.critic.verdict,
@@ -373,15 +370,6 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, on
                     <div className="trace-query-name mono">task</div>
                     <div className="trace-query-value">
                       <span className="chip chip-accent mono">{trace.directive.task}</span>
-                      <span
-                        className={cx(
-                          'chip mono',
-                          trace.directive.frame_relevant ? 'chip-orange' : 'chip-ghost',
-                        )}
-                        title="whether the worker's task depends on the current video frame"
-                      >
-                        frame {trace.directive.frame_relevant ? 'relevant' : 'not needed'}
-                      </span>
                     </div>
                   </div>
                   <div className="trace-query-row">
@@ -515,51 +503,32 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, on
                     : 'pending'
               }
             >
-              {trace.span || trace.bbox ? (
+              {trace.span ? (
                 <div className="trace-grounding">
-                  {trace.span && (
-                    <div className="trace-span-card">
-                      <div className="trace-span-head">
-                        <span className="chip chip-accent mono">
-                          L{trace.span.startLine}
-                          {trace.span.endLine !== trace.span.startLine ? `–${trace.span.endLine}` : ''}
-                        </span>
-                        <span
-                          className="mono"
-                          title="measured by d1 · heuristic (local) · — unreported"
-                        >
-                          P {formatP(trace.span.confidence)}
-                        </span>
-                        <span className="trace-span-label">target span</span>
-                      </div>
-                      <div className="trace-span-lines">
-                        {trace.span.excerpt.split('\n').map((line, index) => (
-                          <div className="trace-span-line" key={index}>
-                            <span className="mono">{trace.span!.startLine + index}</span>
-                            <code className="mono">{line || ' '}</code>
-                          </div>
-                        ))}
-                      </div>
-                      <p className="trace-reason">{trace.span.reason}</p>
+                  <div className="trace-span-card">
+                    <div className="trace-span-head">
+                      <span className="chip chip-accent mono">
+                        L{trace.span.startLine}
+                        {trace.span.endLine !== trace.span.startLine ? `–${trace.span.endLine}` : ''}
+                      </span>
+                      <span
+                        className="mono"
+                        title="measured by d1 · heuristic (local) · — unreported"
+                      >
+                        P {formatP(trace.span.confidence)}
+                      </span>
+                      <span className="trace-span-label">target span</span>
                     </div>
-                  )}
-                  {trace.bbox && (
-                    <div className="trace-bbox-card">
-                      <div className="trace-bbox-preview">
-                        <SceneCrop region={trace.bbox.region} />
-                      </div>
-                      <div className="trace-bbox-meta">
-                        <div className="trace-bbox-title">
-                          <Image size={11} />
-                          ROI crop
+                    <div className="trace-span-lines">
+                      {trace.span.excerpt.split('\n').map((line, index) => (
+                        <div className="trace-span-line" key={index}>
+                          <span className="mono">{trace.span!.startLine + index}</span>
+                          <code className="mono">{line || ' '}</code>
                         </div>
-                        <div className="mono">{trace.bbox.label}</div>
-                        <div className="trace-bbox-conf mono">
-                          P {trace.bbox.confidence.toFixed(2)} · {trace.bbox.source}
-                        </div>
-                      </div>
+                      ))}
                     </div>
-                  )}
+                    <p className="trace-reason">{trace.span.reason}</p>
+                  </div>
                 </div>
               ) : (
                 <p className="trace-muted">Grounding was skipped for this turn.</p>

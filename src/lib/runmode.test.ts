@@ -32,9 +32,9 @@ afterEach(() => {
 })
 
 describe('run mode catalog', () => {
-  it('has exactly the three modes, defaulting to omni', () => {
-    expect(RUN_MODES.map((mode) => mode.id)).toEqual(['omni', 'worker-d1', 'lowram'])
-    expect(DEFAULT_RUN_MODE).toBe('omni')
+  it('has exactly the four modes, defaulting to audio', () => {
+    expect(RUN_MODES.map((mode) => mode.id)).toEqual(['audio', 'omni', 'worker-d1', 'lowram'])
+    expect(DEFAULT_RUN_MODE).toBe('audio')
   })
 
   it('every mode carries a short label for the segmented control and a description', () => {
@@ -48,7 +48,7 @@ describe('run mode catalog', () => {
 })
 
 describe('persistence', () => {
-  it.each(['omni', 'worker-d1', 'lowram'] as const)('round-trips %s', (mode) => {
+  it.each(['audio', 'omni', 'worker-d1', 'lowram'] as const)('round-trips %s', (mode) => {
     saveRunMode(mode)
     expect(loadRunMode()).toBe(mode)
   })
@@ -65,12 +65,12 @@ describe('persistence', () => {
     ['an unknown value', { [RUN_MODE_STORAGE_KEY]: 'turbo' }],
     ['an empty string', { [RUN_MODE_STORAGE_KEY]: '' }],
     ['a lookalike', { [RUN_MODE_STORAGE_KEY]: 'OMNI' }],
-  ])('loads omni when the stored value is %s', (_label, seed) => {
+  ])('loads audio when the stored value is %s', (_label, seed) => {
     installStorage(seed)
-    expect(loadRunMode()).toBe('omni')
+    expect(loadRunMode()).toBe('audio')
   })
 
-  it('loads omni when the store throws', () => {
+  it('loads audio when the store throws', () => {
     ;(globalThis as unknown as { window: unknown }).window = {
       localStorage: {
         getItem: () => {
@@ -81,16 +81,18 @@ describe('persistence', () => {
         },
       },
     }
-    expect(loadRunMode()).toBe('omni')
+    expect(loadRunMode()).toBe('audio')
     expect(() => saveRunMode('lowram')).not.toThrow()
   })
 })
 
 describe('speech routing per mode', () => {
   it('names the endpoint ASR/TTS must use, or null when no Omni server exists', () => {
+    expect(speechEndpointFor('audio')).toBe('audio')
     expect(speechEndpointFor('omni')).toBe('omni')
     expect(speechEndpointFor('worker-d1')).toBe('d1omni')
     expect(speechEndpointFor('lowram')).toBeNull()
+    expect(speechPortFor('audio')).toBe(8086)
     expect(speechPortFor('omni')).toBe(8083)
     expect(speechPortFor('d1omni')).toBe(8085)
     expect(speechPortFor(null)).toBeNull()
