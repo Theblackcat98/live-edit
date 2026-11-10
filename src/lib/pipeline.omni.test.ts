@@ -144,6 +144,35 @@ describe('buildOmniHistory', () => {
     expect(history[0].reply).toBeUndefined()
   })
 
+  it('pairs the delegation card by runId even when the execution confirmation comes first', () => {
+    // Battery case 21: the execution confirmation ("Inserted 1 line…")
+    // is an assistant message with the run's runId; the delegation card
+    // now carries it too, so the builder pairs them and the confirmation
+    // never leaks in as visible reply history (which taught the front
+    // door plain-text delegation, measured 4/4 server-side).
+    const directive = { task: 'insert' as const, instruction: 'add the Q4 dates' }
+    const history = buildOmniHistory(
+      [
+        msg({ role: 'user', text: 'add the Q4 dates' }),
+        msg({ role: 'assistant', text: 'Inserted 2 lines after line 9.', runId: 'run-1', kind: 'result' }),
+        msg({
+          role: 'tool',
+          text: '',
+          runId: 'run-1',
+          delegation: { runId: 'run-1', tool: 'add_text', status: 'executed', modelLabel: '1.7B' },
+        }),
+      ],
+      [run({ id: 'run-1', directive, status: 'verified' })],
+    )
+    expect(history).toHaveLength(1)
+    expect(history[0].delegation).toEqual({
+      tool: 'delegate_edit',
+      arguments: JSON.stringify(directive),
+      result: 'Executed',
+    })
+    expect(history[0].reply).toBeUndefined()
+  })
+
   it('marks failed delegations and skips error bubbles', () => {
     const history = buildOmniHistory(
       [

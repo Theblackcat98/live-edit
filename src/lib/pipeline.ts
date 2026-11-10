@@ -226,8 +226,7 @@ interface ChatTurn {
 const CHAT_MEMORY_TURNS = 6
 
 /** Workspace-authored replies that are pipeline templates, not conversation. */
-const TEMPLATE_REPLY_KINDS: Array<NonNullable<Message['kind']>> = ['clarify', 'ack']
-
+const TEMPLATE_REPLY_KINDS: Array<NonNullable<Message['kind']>> = ['clarify', 'ack', 'greeting']
 /**
  * Pair each user message with the last assistant reply before the next user
  * message. A trailing user turn (the command being submitted) has no reply yet
@@ -418,6 +417,16 @@ export function buildOmniHistory(messages: Message[], runs: Trace[]): OmniHistor
         result: run.status === 'verified' ? 'Executed' : 'Execution failed',
       }
     } else if (!current.reply && !current.delegation && message.text && message.kind !== 'error') {
+      // Execution/result confirmations belong to a run (runId set) — they
+      // are harness prose, never model-authored chat. Accept one as the
+      // turn's reply only when it carries no run pairing (an unpaired
+      // confirmation has no delegation to hang off, so dropping it would
+      // lose the turn entirely); a run-paired confirmation whose run also
+      // produced a delegation card contributes nothing beyond the tool
+      // record (battery case 21: replaying it visibly taught the front
+      // door plain-text delegation, measured 4/4 server-side).
+      const pairedRun = message.runId ? runsById.get(message.runId) : undefined
+      if (message.role === 'assistant' && message.runId && pairedRun?.directive) continue
       current.reply = message.text
     }
   }
@@ -538,10 +547,19 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
   const history = buildOmniHistory(deps.messagesRef.current, deps.runsRef.current)
   // The current command is already in the transcript; history is prior turns.
   const priorHistory = history.slice(0, -1)
-  const lastRun = deps.runsRef.current[0]
+  // Last-run continuity is edit context for the worker's follow-ups —
+  // conversational/chat turns carry no edit state, and replaying one
+  // ("Last completed run: hey → conversational") teaches the front door
+  // that chat turns are delegations (measured: greeting delegated 3/3
+  // with the line present, answered 3/3 without it). Only verified and
+  // pending runs (real edit attempts) are reported.
+  const lastEditRun = deps.runsRef.current.find(
+    (run) => run.status === 'verified' || run.status === 'pending',
+  )
+  const lastRun = lastEditRun
     ? {
-        command: deps.runsRef.current[0].command,
-        status: deps.runsRef.current[0].status,
+        command: lastEditRun.command,
+        status: lastEditRun.status,
       }
     : null
 
@@ -933,12 +951,14 @@ async function runWorkerChatFirstTurn(
   const history = conversationTurns(deps.messagesRef.current, CHAT_MEMORY_TURNS)
   // The current command is already in the transcript; history is prior turns.
   const priorHistory = history.slice(0, -1)
-  const last = deps.runsRef.current[0]
-  const lastRun = last
+  const lastEdit = deps.runsRef.current.find(
+    (run) => run.status === 'verified' || run.status === 'pending',
+  )
+  const lastRun = lastEdit
     ? {
-        command: last.command,
-        status: last.status,
-        ...(last.execution?.message ? { message: last.execution.message } : {}),
+        command: lastEdit.command,
+        status: lastEdit.status,
+        ...(lastEdit.execution?.message ? { message: lastEdit.execution.message } : {}),
       }
     : null
 
@@ -1181,6 +1201,7 @@ async function verifyAndExecute(
   const delegationId = deps.addMessage({
     role: 'tool',
     text: '',
+    runId: traceLocal.id,
     delegation,
   })
 

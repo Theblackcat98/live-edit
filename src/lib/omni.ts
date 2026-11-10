@@ -366,10 +366,19 @@ export function buildOmniMessages(input: OmniTurnInput): ChatMessage[] {
       }
       return [user]
     }
+    // Assistant channel carries the tool call and nothing else — never
+    // harness text. Two measured shapes: (a) an empty-content echo
+    // teaches confabulated delegations ('hey' → sections-7-9 brief,
+    // 3/3); (b) a VISIBLE execution confirmation replayed as the reply
+    // teaches plain-text delegation ("delegate_edit:\n task: …" as chat
+    // text, no tool_calls entry — battery case 21, 4/4 server-side — and
+    // the turn then fails empty-reply). Plain-text delegation is a
+    // harness/template shape, never model-authored chat. No delegation
+    // history is lost: the user command, tool call and result travel.
     const id = `omni-call-${index}`
     const assistant: ChatMessage = {
       role: 'assistant',
-      content: turn.reply && turn.reply.trim() ? truncate(turn.reply, HISTORY_TURN_CHARS) : '',
+      content: '',
       tool_calls: [
         { id, type: 'function', function: { name: turn.delegation.tool, arguments: turn.delegation.arguments } },
       ],
