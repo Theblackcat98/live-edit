@@ -1000,9 +1000,13 @@ async function main() {
       blast12c = { status: 'rejected', rejectedGrew: grew, pendingId: null }
     } else if (info.status === 'pending') {
       const card = (await pendingInfo()).last
+      // A pending card's d1 verdict is 'disapproved'/'unavailable' when d1
+      // held it — or 'approved' when the §8 blast-radius hold held it (PR
+      // #61, issue #58): d1 approved, the harness held anyway. 'approved'
+      // on a pending card has no other provenance, so it is hold evidence.
       terminalEvidenceOk = Boolean(
         card && card.status === 'pending' && card.call?.name &&
-        card.d1 && (card.d1.verdict === 'disapproved' || card.d1.verdict === 'unavailable'),
+        card.d1 && (card.d1.verdict === 'disapproved' || card.d1.verdict === 'unavailable' || card.d1.verdict === 'approved'),
       )
       terminalDetail = `pendingCard.d1=${card?.d1?.verdict ?? '-'}, pendingCard.call=${card?.call?.name ?? '-'}`
       blast12c = { status: 'pending', rejectedGrew: false, pendingId: card?.id ?? null }
@@ -1460,8 +1464,12 @@ async function main() {
         )
         const discard29 = cardMatches29 ? await adjudicatePending(card29.id, 'discard') : { resolved: false }
         const untouched29 = (await note()) === noteBefore29
-        ok29 = evidence29.ok && cardMatches29 && discard29.resolved && untouched29
-        detail29 = `pending: trace ${evidence29.detail}; card.d1.verdict=${card29?.d1?.verdict ?? '-'} matchesTrace=${cardMatches29}; discard=${discard29.resolved ? 'resolved' : 'unresolved'}; noteUntouched=${untouched29}`
+        // §8 blast-radius hold (PR #61, issue #58): d1 APPROVED and the
+        // harness held anyway — the pending card's verdict 'approved' has
+        // no other provenance, so it is itself the hold evidence.
+        const hold29 = info29.d1Check?.verdict === 'approved'
+        ok29 = (evidence29.ok || hold29) && cardMatches29 && discard29.resolved && untouched29
+        detail29 = `pending: evidence=${evidence29.ok ? `d1 disapproval (${evidence29.detail})` : hold29 ? '§8 blast-radius hold (d1 approved, harness held)' : 'none'}; card.d1.verdict=${card29?.d1?.verdict ?? '-'} matchesTrace=${cardMatches29}; discard=${discard29.resolved ? 'resolved' : 'unresolved'}; noteUntouched=${untouched29}`
       } else {
         ok29 = evidence29.ok
         detail29 = `rejected: trace ${evidence29.detail}`
@@ -1469,7 +1477,7 @@ async function main() {
     } else {
       detail29 = `terminal ${info29.status} carries no d1 disapproval evidence (neither pending nor rejected)`
     }
-    record('29', 'd1 disapproval evidence: blast-radius command settles pending-or-rejected with Trace.d1Check populated (verdict + scores + failing question)',
+    record('29', 'blast-radius command settles pending-or-rejected with evidence — d1 disapproval (verdict + scores + failing question) or the §8 hold (d1 approved, harness held) — Trace.d1Check populated',
       ok29, `status=${info29.status}, d1Check=${info29.d1Check?.verdict ?? 'null'}, ${detail29}${run29.timedOut ? ', TIMEOUT' : ''}`)
   }
 
@@ -1647,38 +1655,60 @@ async function main() {
     } else {
       // Source-edit exactly the grounded lines (the app's own Markdown view:
       // case-15-era interaction — view tab → textarea draft → Apply changes,
-      // which commits a "Manual source edit" snapshot).
-      const srcEdit33 = await evalJs(`(() => {
-        const raw = localStorage.getItem(${JSON.stringify(STORAGE_KEY)})
-        const ws = raw ? JSON.parse(raw) : null
-        const lines = (ws?.note ?? '').split('\\n')
-        const start = ${startLine33}
-        const end = ${endLine33}
-        for (let i = start - 1; i <= end - 1 && i < lines.length; i++) {
-          if (lines[i].trim()) lines[i] = lines[i] + ' (hand-revised)'
+      // which commits a "Manual source edit" snapshot). Contained in
+      // try/catch: a harness/UI error is a recorded FAIL with evidence,
+      // never a battery abort (2026-11-10: an uncaught throw here killed
+      // the run at this case and case 34 never ran).
+      let srcEdit33 = { mutated: '', changed: false }
+      let error33 = ''
+      try {
+        await evalJs(`(() => {
+          const tab = document.querySelector('[aria-label="Markdown source view"]')
+          if (!tab) throw new Error('Markdown source view tab not found')
+          tab.click()
+          return true
+        })()`)
+        // The textarea mounts on React's re-render after the click's task —
+        // querying it inside the same synchronous eval always misses. Poll.
+        let sourceOpen33 = false
+        const openDeadline33 = Date.now() + 5000
+        while (Date.now() < openDeadline33) {
+          sourceOpen33 = await evalJs(`Boolean(document.querySelector('.source-textarea'))`)
+          if (sourceOpen33) break
+          await sleep(200)
         }
-        const mutated = lines.join('\\n')
-        const tab = document.querySelector('[aria-label="Markdown source view"]')
-        if (!tab) throw new Error('Markdown source view tab not found')
-        tab.click()
-        const ta = document.querySelector('.source-textarea')
-        if (!ta) throw new Error('source textarea not found (source view did not open)')
-        const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
-        setter.call(ta, mutated)
-        ta.dispatchEvent(new Event('input', { bubbles: true }))
-        return { mutated, changed: mutated !== ws.note }
-      })()`)
-      await sleep(300)
-      await evalJs(`(() => {
-        const b = document.querySelector('.source-apply')
-        if (!b) throw new Error('Apply changes button not found')
-        if (b.disabled) throw new Error('Apply changes disabled (busy or draft not dirty)')
-        b.click()
-      })()`)
+        if (!sourceOpen33) throw new Error('source textarea never appeared (source view did not open)')
+        srcEdit33 = await evalJs(`(() => {
+          const raw = localStorage.getItem(${JSON.stringify(STORAGE_KEY)})
+          const ws = raw ? JSON.parse(raw) : null
+          const lines = (ws?.note ?? '').split('\\n')
+          const start = ${startLine33}
+          const end = ${endLine33}
+          for (let i = start - 1; i <= end - 1 && i < lines.length; i++) {
+            if (lines[i].trim()) lines[i] = lines[i] + ' (hand-revised)'
+          }
+          const mutated = lines.join('\\n')
+          const ta = document.querySelector('.source-textarea')
+          if (!ta) throw new Error('source textarea not found (source view did not open)')
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+          setter.call(ta, mutated)
+          ta.dispatchEvent(new Event('input', { bubbles: true }))
+          return { mutated, changed: mutated !== ws.note }
+        })()`)
+        await sleep(300)
+        await evalJs(`(() => {
+          const b = document.querySelector('.source-apply')
+          if (!b) throw new Error('Apply changes button not found')
+          if (b.disabled) throw new Error('Apply changes disabled (busy or draft not dirty)')
+          b.click()
+        })()`)
+      } catch (err) {
+        error33 = err instanceof Error ? err.message : String(err)
+      }
       let sourceCommitted33 = false
       let snapsMid33 = (await getWs())?.snapshots?.length ?? 0
       const deadline33 = Date.now() + 8000
-      while (Date.now() < deadline33) {
+      while (!error33 && Date.now() < deadline33) {
         const wsMid33 = await getWs()
         snapsMid33 = wsMid33?.snapshots?.length ?? 0
         if (wsMid33?.note === srcEdit33.mutated && snapsMid33 > producer33.snapsBefore) {
@@ -1688,7 +1718,7 @@ async function main() {
         await sleep(300)
       }
       // ✓ on the now-drifted pending.
-      const resolution33 = await adjudicatePending(card33.id, 'apply')
+      const resolution33 = error33 ? { resolved: false } : await adjudicatePending(card33.id, 'apply')
       const ws33 = await getWs()
       const n33 = ws33?.note ?? ''
       const before33 = Array.isArray(card33.diff?.before) ? card33.diff.before : []
@@ -1698,15 +1728,15 @@ async function main() {
           (!card33.call?.params?.content || !n33.includes(card33.call.params.content))
         : before33.filter((line) => line.trim()).every((line) => n33.includes(line))
       const snapsStable33 = (ws33?.snapshots?.length ?? 0) === snapsMid33
-      const staleCard33 = await waitPendingCard('is-stale')
-      const staleExplained33 = await evalJs(`(() => {
+      const staleCard33 = error33 ? false : await waitPendingCard('is-stale')
+      const staleExplained33 = error33 ? false : await evalJs(`(() => {
         const card = document.querySelector('.pending-card.is-stale')
         return card ? card.textContent.includes('Nothing was written') : false
       })()`)
       const rejectsGrew33 = (ws33?.rejectedTraces?.length ?? 0) === producer33.rejectsBefore + 1
       record('33', `staleness: ✓ after the target lines were hand-edited → card resolves stale ("Nothing was written"), edit content absent, no new snapshot (range ${startLine33}–${endLine33})`,
-        sourceCommitted33 && resolution33.resolved && staleCard33 && staleExplained33 && nothingWritten33 && snapsStable33 && rejectsGrew33,
-        `sourceCommitted=${sourceCommitted33}, resolved=${resolution33.resolved}, staleCard=${staleCard33}, staleExplained=${staleExplained33}, nothingWritten=${nothingWritten33}, snapshots ${snapsMid33}→${ws33?.snapshots?.length ?? 0} stable=${snapsStable33}, rejectedTraces ${producer33.rejectsBefore}→${ws33?.rejectedTraces?.length ?? 0}`)
+        !error33 && sourceCommitted33 && resolution33.resolved && staleCard33 && staleExplained33 && nothingWritten33 && snapsStable33 && rejectsGrew33,
+        `sourceCommitted=${sourceCommitted33}, resolved=${resolution33.resolved}, staleCard=${staleCard33}, staleExplained=${staleExplained33}, nothingWritten=${nothingWritten33}, snapshots ${snapsMid33}→${ws33?.snapshots?.length ?? 0} stable=${snapsStable33}, rejectedTraces ${producer33.rejectsBefore}→${ws33?.rejectedTraces?.length ?? 0}${error33 ? `, harnessError=${error33}` : ''}`)
     }
   }
 
