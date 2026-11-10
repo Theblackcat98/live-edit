@@ -562,6 +562,22 @@ export interface PendingEdit {
   diff: ExecutionDiff
   /** Hash of the note the call was authored against; staleness compares against the current note. */
   noteHash: string
+  /**
+   * Insertion neighbourhood for `add_text` / `extract_visual_to_note`
+   * pendings (battery case 33): those calls carry no line range and the
+   * hard gates have no anchor for them, so this is their staleness anchor —
+   * the authoring note's lines either side of the insertion point
+   * (`startLine` is the diff's, i.e. where the inserted content begins in
+   * the executed note; `precedingLine`/`followingLine` are the authoring
+   * note's lines at that boundary, null at a document edge). Absent on
+   * span-tool pendings (their anchor gate is exact already) and on
+   * pendings persisted before this field existed.
+   */
+  insertion?: {
+    startLine: number
+    precedingLine: string | null
+    followingLine: string | null
+  }
   /** The d1 result that routed this call here. Only disapproved/unavailable can appear. */
   d1: {
     verdict: 'disapproved' | 'unavailable'

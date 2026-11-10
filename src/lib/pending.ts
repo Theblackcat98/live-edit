@@ -37,6 +37,7 @@ import type {
   WorkerSampler,
 } from '../types'
 import { runHardGates } from './gates'
+import { splitLines } from './doc'
 import { isRecord, makeId, readNumber, readString } from './utils'
 
 /** makeId gives `pending-<Date.now base36>-<module counter base36>` — unique per creation, no Math.random (refactor grep gate). */
@@ -64,6 +65,12 @@ export interface PendingEditInput {
    * pending edit); the narrowed type makes an 'approved' verdict unrepresentable.
    */
   d1: PendingEdit['d1']
+  /**
+   * Insertion neighbourhood for add_text / extract pendings (see the
+   * PendingEdit field). The wiring computes it from the authoring note and
+   * the preview diff; span-tool pendings omit it.
+   */
+  insertion?: PendingEdit['insertion']
 }
 
 /**
@@ -107,6 +114,7 @@ export function createPendingEdit(input: PendingEditInput): PendingEdit {
     call: input.call,
     diff: input.diff,
     noteHash: input.noteHash,
+    ...(input.insertion ? { insertion: input.insertion } : {}),
     d1: input.d1,
     status: 'pending',
   }
@@ -148,6 +156,33 @@ export function adjudicate(
   // with no span override — the pending-edit world is worker-grounds-itself,
   // so anchor exactness compares against the note's own lines at the range.
   const gates = runHardGates(currentNote, edit.call)
+
+  // Insertion tools have no gate anchor (bounds/anchor/blast do not apply
+  // to add_text / extract_visual_to_note), so a passing gate run says
+  // nothing about their drift. Their staleness anchor is the recorded
+  // insertion neighbourhood: the authoring note's lines either side of the
+  // insertion point must still sit at the recorded line — if they moved,
+  // the position this insert was written for cannot be trusted.
+  if (
+    gates.pass &&
+    edit.insertion &&
+    (edit.call.name === 'add_text' || edit.call.name === 'extract_visual_to_note')
+  ) {
+    const { startLine, precedingLine, followingLine } = edit.insertion
+    const lines = splitLines(currentNote)
+    const currentPreceding = startLine >= 2 ? (lines[startLine - 2] ?? null) : null
+    const currentFollowing = lines[startLine - 1] ?? null
+    if (currentPreceding !== precedingLine || currentFollowing !== followingLine) {
+      return {
+        status: 'stale',
+        edit: { ...edit, status: 'stale' },
+        reason:
+          `The lines around this edit's insertion point (line ${startLine}) have changed since ` +
+          'it was authored, so the position it was written for cannot be trusted. ' +
+          'Nothing was written; ask Omni to redo the edit against the current note.',
+      }
+    }
+  }
 
   if (gates.pass) {
     return {
@@ -356,6 +391,18 @@ function parseStoredEdit(raw: unknown): PendingEdit | null {
   const d1 = parseD1(raw.d1)
   const noteHash = readString(raw, 'noteHash')
   if (!directive || !call || !diff || !d1 || !noteHash) return null
+  let insertion: PendingEdit['insertion']
+  if (raw.insertion !== undefined) {
+    if (!isRecord(raw.insertion) || !isFiniteNumber(raw.insertion.startLine)) return null
+    const { precedingLine, followingLine } = raw.insertion
+    if (precedingLine !== null && typeof precedingLine !== 'string') return null
+    if (followingLine !== null && typeof followingLine !== 'string') return null
+    insertion = {
+      startLine: raw.insertion.startLine,
+      precedingLine: precedingLine as string | null,
+      followingLine: followingLine as string | null,
+    }
+  }
   return {
     id,
     createdAt,
@@ -363,6 +410,7 @@ function parseStoredEdit(raw: unknown): PendingEdit | null {
     call,
     diff,
     noteHash,
+    ...(insertion ? { insertion } : {}),
     d1,
     status: 'pending',
   }

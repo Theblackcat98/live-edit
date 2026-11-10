@@ -96,6 +96,53 @@ function makePendingEdit(instruction = 'Fix the Redis cache line', call: WorkerC
   })
 }
 
+const ADD_CALL: WorkerCall = {
+  name: 'add_text',
+  params: {
+    file_path: 'notes/meeting.md',
+    position: 'under_heading',
+    anchor: 'Risks',
+    content: '- New risk line',
+  },
+  thought: 'add a risk bullet',
+  xml: renderToolCallXml('add_text', {
+    file_path: 'notes/meeting.md',
+    position: 'under_heading',
+    anchor: 'Risks',
+    content: '- New risk line',
+  }),
+  rawTokens: 32,
+  promptHints: [],
+  toolSchemasInjected: 4,
+  noteView: '',
+}
+
+const ADD_DIFF: ExecutionDiff = {
+  startLine: 4,
+  before: [],
+  after: ['- New risk line'],
+  added: 1,
+  removed: 0,
+}
+
+/** The authoring note's lines either side of ADD_DIFF's insertion point (line 4). */
+const INSERTION = {
+  startLine: 4,
+  precedingLine: '## Risks',
+  followingLine: 'The migration window is tight.',
+}
+
+function makeAddPendingEdit(): PendingEdit {
+  return createPendingEdit({
+    directive: makeDirective('Add a risk bullet'),
+    call: ADD_CALL,
+    diff: ADD_DIFF,
+    noteHash: noteHash(NOTE),
+    d1: D1,
+    insertion: INSERTION,
+  })
+}
+
 // --- createPendingEdit ------------------------------------------------------------
 
 describe('createPendingEdit', () => {
@@ -179,6 +226,36 @@ describe('adjudicate', () => {
     expect(result.edit.status).toBe('discarded')
     expect(result.reason).toContain('rejected-traces')
     expect(edit.status).toBe('pending')
+  })
+
+  it('insertion pending: carries the recorded neighbourhood from creation', () => {
+    const edit = makeAddPendingEdit()
+    expect(edit.insertion).toEqual(INSERTION)
+    expect(makePendingEdit().insertion).toBeUndefined()
+  })
+
+  it('insertion pending: ✓ on the untouched note applies (gates are vacuous, context intact)', () => {
+    const result = adjudicate(makeAddPendingEdit(), 'apply', NOTE, { noteHash })
+    expect(result.status).toBe('applied')
+    expect(result.call?.name).toBe('add_text')
+  })
+
+  it('insertion pending: ✓ after the following line was hand-edited resolves stale (case 33)', () => {
+    const drifted = NOTE.replace(
+      'The migration window is tight.',
+      'The migration window is tight. (hand-revised)',
+    )
+    const result = adjudicate(makeAddPendingEdit(), 'apply', drifted, { noteHash })
+    expect(result.status).toBe('stale')
+    expect(result.call).toBeUndefined()
+    expect(result.reason).toContain('insertion point (line 4)')
+    expect(result.reason).toContain('Nothing was written')
+  })
+
+  it('insertion pending: the neighbourhood survives the persistence round-trip', () => {
+    const edit = makeAddPendingEdit()
+    const [restored] = fromStorable(JSON.parse(JSON.stringify(toStorable([edit]))))
+    expect(restored?.insertion).toEqual(INSERTION)
   })
 })
 

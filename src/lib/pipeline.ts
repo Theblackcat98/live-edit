@@ -1086,11 +1086,27 @@ function holdForUserDecision(
   notifyDetail: string,
 ): void {
   const { traceLocal, finish } = ctx
+  // Insertion calls carry no line range for adjudication to check drift
+  // against, so record the insertion neighbourhood (authoring note lines
+  // either side of the diff's insertion point) as their staleness anchor.
+  const insertion =
+    call.name === 'add_text' || call.name === 'extract_visual_to_note'
+      ? (() => {
+          const lines = splitLines(ctx.noteAtStart)
+          const startLine = diff.startLine
+          return {
+            startLine,
+            precedingLine: startLine >= 2 ? (lines[startLine - 2] ?? null) : null,
+            followingLine: lines[startLine - 1] ?? null,
+          }
+        })()
+      : undefined
   const pending = createPendingEdit({
     directive,
     call,
     diff,
     noteHash: noteHash(ctx.noteAtStart),
+    ...(insertion ? { insertion } : {}),
     d1,
   })
   deps.addPendingEdit(pending)
@@ -1159,7 +1175,11 @@ async function verifyAndExecute(
       runId: traceLocal.id,
     })
     deps.notify('Execution stopped', preview.message, 'error')
-    finish('failed')
+    // A dry-run refusal is a refusal, not a failure: the harness declined
+    // the call before writing (delegation already patched 'rejected', the
+    // rejection already recorded) — the run settles 'rejected' so the
+    // terminal matches the evidence (battery case 12c).
+    finish('rejected')
     return
   }
 
