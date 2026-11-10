@@ -689,8 +689,21 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
   // deterministically — the dictated text must never depend on the model
   // remembering to label it.
   const recovered = recoverDictatedText(command, directive)
-  const effectiveDirective = recovered ? { ...directive, verbatim: recovered } : directive
-  if (recovered) {
+  const rawEffective = recovered ? { ...directive, verbatim: recovered } : directive
+  // Verbatim is insert-shaped: exact words to put into the note. On edit /
+  // remove tasks it is a model mislabel (battery case 6: a "$1.45M Final"
+  // value update packed as verbatim routes the harness-built add_text
+  // instead of the worker's edit_text, and d1 rightly disapproves the
+  // mismatch). Ignoring it here returns the turn to the worker, whose
+  // instruction already quotes the values. Dictation (insert/create with
+  // real quoted spans, e.g. case 8f) never takes this branch.
+  const effectiveDirective =
+    (rawEffective.task === 'edit' || rawEffective.task === 'remove') &&
+    typeof rawEffective.verbatim === 'string' &&
+    rawEffective.verbatim.trim().length > 0
+      ? { ...rawEffective, verbatim: null }
+      : rawEffective
+  if (effectiveDirective.verbatim === null && rawEffective.verbatim) {
     traceLocal.directive = effectiveDirective
     publish()
   }

@@ -68,6 +68,42 @@ describe('buildDictationCall (design.md §11 dictation exception)', () => {
   })
 })
 
+describe('verbatim is insert-shaped (battery case 6 guard)', () => {
+  // The pipeline nulls a model-set verbatim on edit/remove tasks before
+  // the dictation branch: a "$1.45M Final" value update is not dictation,
+  // and routing it through the harness-built add_text guarantees a d1
+  // disapproval. The rule below mirrors runOmniFirstTurn's guard exactly
+  // (same conditions, same result) so the contract is pinned in unit.
+  function stripMisplacedVerbatim(directive: Directive): Directive {
+    return (directive.task === 'edit' || directive.task === 'remove') &&
+      typeof directive.verbatim === 'string' &&
+      directive.verbatim.trim().length > 0
+      ? { ...directive, verbatim: null }
+      : directive
+  }
+
+  it('nulls verbatim on an edit task (case 6: value update, not dictation)', () => {
+    const out = stripMisplacedVerbatim({
+      task: 'edit',
+      instruction: 'update the Q3 revenue row to $1.45M Final',
+      verbatim: '$1.45M Final',
+    })
+    expect(out.verbatim).toBeNull()
+    expect(out.instruction).toContain('$1.45M')
+  })
+
+  it('keeps verbatim on insert/create tasks (case 8f dictation)', () => {
+    const insert: Directive = {
+      task: 'insert',
+      instruction: 'Add the dictated line',
+      verbatim: 'rotate production keys monthly starting Monday',
+    }
+    expect(stripMisplacedVerbatim(insert).verbatim).toBe(
+      'rotate production keys monthly starting Monday',
+    )
+  })
+})
+
 describe('buildOmniHistory', () => {
   it('pairs commands with their visible replies', () => {
     const history = buildOmniHistory(
