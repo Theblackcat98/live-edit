@@ -57,6 +57,7 @@ import {
 } from './worker'
 import { executeTool } from './tools'
 import { sectionScaleCollapse } from './blastGate'
+import { checkExecutionOutcome } from './executionCheck'
 import { detectSnapshotDirective } from './snapshotDirective'
 import { runOmniTurn, type OmniHistoryTurn } from './omni'
 import { runWorkerChatTurn, WORKER_CHAT_SAMPLER, type WorkerChatTurnResult } from './workerChat'
@@ -1266,6 +1267,46 @@ async function verifyAndExecute(
 
   // --- d1 approved: execute (the silent path, guarded by the decision model) --
   const confidence = check?.noul ?? null
+
+  // --- outcome tripwires (battery case 8): 'verified' must mean the result
+  // matches what was asked, at least where that is deterministically
+  // checkable. A no-change execution is reported as-is, never certified; a
+  // content mismatch is a visible failure and the note is NOT committed.
+  const outcome = checkExecutionOutcome(noteAtStart, directive, call, preview)
+  if (outcome.kind === 'missing-content') {
+    deps.patchMessage(delegationId, { delegation: { ...delegation, status: 'rejected' } })
+    recordOmniRejection(
+      deps,
+      ctx,
+      directive,
+      call,
+      `Execution outcome check failed: ${outcome.reason}`,
+      confidence,
+    )
+    deps.addMessage({
+      role: 'assistant',
+      kind: 'error',
+      text: `I stopped before writing. ${outcome.reason} The note was not changed.`,
+      runId: traceLocal.id,
+    })
+    deps.notify('Execution stopped', outcome.reason, 'error')
+    finish('failed')
+    return
+  }
+  if (outcome.kind === 'no-change') {
+    deps.patchMessage(delegationId, {
+      delegation: { ...delegation, status: 'executed', confidence },
+    })
+    deps.addMessage({
+      role: 'assistant',
+      kind: 'result',
+      text: preview.message,
+      runId: traceLocal.id,
+    })
+    finish('conversational')
+    return
+  }
+
   deps.setStageStates({ A: 'done', B: 'done', C: options.d1Check ? 'done' : 'skipped' })
   deps.patchMessage(delegationId, {
     delegation: { ...delegation, status: 'verified', confidence },
