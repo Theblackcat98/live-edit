@@ -482,7 +482,7 @@ export async function transcribeAudio(
 
 /**
  * Model TTS. `endpoint` names the Omni-architecture server that speaks:
- * 'omni' (:8083) in the Omni-first mode, 'd1omni' (:8085) in worker-d1
+ * 'omni' (:8083) in the legacy Omni mode, 'd1omni' (:8085) in worker-d1
  * (same Omni architecture), 'audio' (:8086) in the audio-first mode.
  * Low-RAM never calls this — the caller uses the browser voice instead.
  */

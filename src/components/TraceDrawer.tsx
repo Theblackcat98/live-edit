@@ -360,7 +360,7 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, on
             )}
 
             {trace.directive && (
-              // Omni's typed delegation directive (design.md §5), recorded on
+              // Audio's typed delegation directive (design.md §5), recorded on
               // the trace from P2 on. Legacy supervisor-first traces have no
               // directive field — for them this section simply does not
               // render, leaving the drawer exactly as it was.

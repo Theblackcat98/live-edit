@@ -51,31 +51,29 @@ Tracked as GitHub Issues #7 (real-mic pass) and #8 (real-speaker pass).
 
 ## Next implementation work
 
-- [ ] **Fix the red QA battery** (blocks the design.md §13 acceptance target;
-      this PRE-DATES the run-mode/mic/video drop — a baseline `git archive` of
-      unmodified `HEAD` served by a scratch Vite reproduced the same failure
-      classes). Two concrete causes:
-      (1) **Omni-first decision quality** — Omni sometimes delegates chat
+- [ ] **Fix the red QA battery** (blocks the design.md §13 acceptance target).
+      Two concrete causes:
+      (1) **Audio-first decision quality** — Audio sometimes delegates chat
       turns, answers mutation turns conversationally, or emits directives the
       harness rejects, so cases fail or burn their turn in repair/clarify
       loops.
       (2) **Schema/validator misalignment** — `DELEGATE_EDIT_TOOL` does not
       mark `target.description` as required, while `validateDirective`
-      hard-rejects a target without a non-empty description. Valid-looking Omni
+      hard-rejects a target without a non-empty description. Valid-looking Audio
       output therefore lands in repair/clarify loops. **Fixed 2026-11-09** on
       `fix/no-silent-failures-delete-supervisor`: the schema now requires
       `target.description`; the battery re-run on the workstation is the
       remaining verification for this item.
       Also present: an occasional llama.cpp 500 on tools requests (the known
-      "server-tool-parse" class). The 2026-11-09 after-drop run recorded
-      **Total 45 | PASS 19 | FAIL 26 | KNOWN-BUG 0** (333.0 s); failing cases:
-      2, 3, 5, 6, 7, 8, 8f, 9, 10b, 11, 12, 12b, 12d, 12e, 20, 21, 24, 25, 26,
-      27, 27b, 28, 29, 32, 33, 34. Last fully-green battery: 2026-11-08, 33/33,
+      "server-tool-parse" class). The 2026-11-10 audio-first run recorded
+      **Total 43 | PASS 18 | FAIL 25 | KNOWN-BUG 0** (356.6 s); failing cases:
+      6, 8, 8f, 10b, 11, 12, 12b, 12c, 12d, 16a, 17a, 18, 21, 23, 25, 26,
+      27, 27b, 28, 29, 30, 31, 32, 33, 34. Last fully-green battery: 2026-11-08, 33/33,
       against the then-shipped supervisor-first pipeline — not current
-      evidence. Acceptance: design.md §13 green on the current `omni` default.
-- [ ] **Close out the Omni-first refactor** (docs/design.md; phased plan:
-      docs/architecture-refactor.md). The Omni-first turn loop has landed and is
-      the default `omni` run mode: typed delegation directives (native tool
+      evidence. Acceptance: design.md §13 green on the current `audio` default.
+- [ ] **Close out the Audio-first refactor** (docs/design.md; phased plan:
+      docs/architecture-refactor.md). The Audio-first turn loop has landed and is
+      the default `audio` run mode: typed delegation directives (native tool
       call + one repair retry), the worker packet (directive + last-3-edit
       context packet + full line-numbered note), d1 reduced to the §7 safety
       check, the pending-edit store + ✓ / ✗ adjudication UI, and the
@@ -124,7 +122,7 @@ Tracked as GitHub Issues #7 (real-mic pass) and #8 (real-speaker pass).
       the composer ring/waveform and `data-capturing`; `stopMic` (reset/unmount)
       is the only abandon-without-submit path. Voice onset fires
       `VoiceRecorder.onVoiceStart` once per capture and cuts TTS.
-- `npm run qa` is the 43-assertion Omni-first CDP battery (turns are
+- `npm run qa` is the 43-assertion Audio-first CDP battery (turns are
       text-only: the visual-question case 5 and the slide-extract case 9 are
       gone with the video/frame drop). It needs the dev
       server on :5173 and the trinity up. Warm the dev server with a curl first;

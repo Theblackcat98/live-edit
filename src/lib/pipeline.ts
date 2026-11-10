@@ -2,7 +2,7 @@
  * The turn pipeline. runPipelineTurn is the single entry point for one
  * user turn, dispatched by the run mode captured at turn start:
  *
- *   runOmniFirstTurn      mode `omni`: Omni answers/clarifies/acts, or
+ *   runOmniFirstTurn      modes `audio`/`omni`: Audio (or legacy Omni) answers/clarifies/acts, or
  *                         delegates a typed directive to the 1.7B worker
  *   runWorkerChatFirstTurn modes `worker-d1` / `lowram`: the 1.7B chats
  *                         and authors the tool call itself
@@ -387,7 +387,7 @@ export async function runPipelineTurn(
 }
 
 /**
- * Omni's history (design.md §6), assembled from the transcript and the
+ * Audio's history (design.md §6), assembled from the transcript and the
  * recorded runs: answer turns contribute their visible reply; delegation
  * turns contribute the recorded directive as a tool record — never harness
  * prose, never another turn's internals.
@@ -431,22 +431,22 @@ function packetWorkerCall(
   return {
     name: parsed.name,
     params: parsed.params,
-    thought: parsed.think ?? reasoning ?? `Worker emitted ${parsed.name} from the Omni directive.`,
+    thought: parsed.think ?? reasoning ?? `Worker emitted ${parsed.name} from the Audio directive.`,
     xml: renderToolCallXml(parsed.name, parsed.params),
     rawTokens: usageOutputTokens,
     promptHints: [
       `Decoded by LFM3-1.7B · ${(ms / 1000).toFixed(1)}s · ${usagePromptTokens} prompt tokens`,
       `Sent sampler: temperature=${sampler.temperature} · max_tokens=${sampler.maxTokens}`,
-      'Omni directive + full line-numbered note + recent edit turns (design.md §6 packet); worker grounds the span itself',
+      'Audio directive + full line-numbered note + recent edit turns (design.md §6 packet); worker grounds the span itself',
     ],
-    toolSchemasInjected: 4,
+    toolSchemasInjected: 3,
     noteView: numberNoteLines(note),
     sampler,
   }
 }
 
 /**
- * The dictation exception (design.md §11): when Omni's directive carries
+ * The dictation exception (design.md §11): when Audio's directive carries
  * `verbatim` — exact words the user dictated — the harness builds the
  * add_text call itself. The worker never re-authors dictated text; the
  * call flows through the same gates and d1 check as a worker call.
@@ -488,9 +488,9 @@ function recordOmniRejection(
       route: {
         tool: call.name,
         provenance:
-          ctx.traceLocal.runMode && ctx.traceLocal.runMode !== 'omni'
+          ctx.traceLocal.runMode && ctx.traceLocal.runMode !== 'audio' && ctx.traceLocal.runMode !== 'omni'
             ? 'worker-chat run mode'
-            : 'omni-first pipeline',
+            : 'audio-first pipeline',
       },
       spanCandidates: [],
       grounding: { source: 'worker-self' },
@@ -502,8 +502,8 @@ function recordOmniRejection(
 }
 
 /**
- * The Omni-first turn (design.md §§2–9). One model is
- * the interface: Omni answers, clarifies, maps undo/redo, or silently
+ * The Audio-first turn (design.md §§2–9). One model is
+ * the interface: Audio answers, clarifies, maps undo/redo, or silently
  * delegates a typed directive to the 1.7B worker. The worker authors and
  * grounds its call from the §6 packet; deterministic hard gates run next;
  * d1's only job is the §7 safety check; a disapproved or unavailable check
@@ -527,7 +527,7 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
       }
     : null
 
-  // Provisional streaming bubble: Omni's deltas land here live (battery
+  // Provisional streaming bubble: Audio's deltas land here live (battery
   // case 18); the authoritative text replaces them for answer/clarify, and
   // the bubble is retracted entirely when the turn delegates or acts — the
   // delegation must stay silent in the transcript.
@@ -766,7 +766,7 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
     deps.addMessage({
       role: 'assistant',
       kind: 'error',
-      text: `The worker could not produce a valid tool call for Omni's directive (${attemptError || 'no parseable call'}). Nothing was written to the note, and no fallback content was substituted.`,
+      text: `The worker could not produce a valid tool call for Audio's directive (${attemptError || 'no parseable call'}). Nothing was written to the note, and no fallback content was substituted.`,
       runId: traceLocal.id,
     })
     deps.notify('Worker call invalid', attemptError || 'No parseable tool call.', 'error')
@@ -808,9 +808,9 @@ function workerChatCall(
     promptHints: [
       `Decoded by LFM3-1.7B · ${(ms / 1000).toFixed(1)}s · ${promptTokens} prompt tokens`,
       `Sent sampler: temperature=${WORKER_CHAT_SAMPLER.temperature} · max_tokens=${WORKER_CHAT_SAMPLER.maxTokens}`,
-      'Run-mode chat turn: the 1.7B chose the tool itself from the note context; no Omni directive exists in this mode.',
+      'Run-mode chat turn: the 1.7B chose the tool itself from the note context; no Audio directive exists in this mode.',
     ],
-    toolSchemasInjected: 4,
+    toolSchemasInjected: 3,
     noteView: numberNoteLines(note),
     sampler: { ...WORKER_CHAT_SAMPLER },
   }
@@ -820,7 +820,7 @@ function workerChatCall(
  * The worker-chat turn (run modes `worker-d1` and `lowram`): LFM3-1.7B is
  * the chat model itself and authors the tool call. Undo/redo stay
  * deterministic pipeline directives — snapshot rollback is never a model
- * decision, the same rationale as Omni-first. A prose reply settles the
+ * decision, the same rationale as Audio-first. A prose reply settles the
  * bubble and is spoken; a tool call becomes a Directive synthesized from the
  * command and flows through the shared verifyAndExecute tail: d1's §7
  * safety check in `worker-d1`; in `lowram` there is no d1 call at all —
@@ -838,7 +838,7 @@ async function runWorkerChatFirstTurn(
   deps.setStage('routing')
 
   // Deterministic undo/redo pre-check: same pipeline-directive rationale as
-  // the Omni-first path.
+  // the Audio-first path.
   const snapshotAction = detectSnapshotDirective(command)
   if (snapshotAction) {
     await runSnapshotDirective(deps, ctx, snapshotAction)
@@ -871,7 +871,7 @@ async function runWorkerChatFirstTurn(
       }
     : null
 
-  // Provisional streaming bubble, same discipline as Omni-first: visible
+  // Provisional streaming bubble, same discipline as Audio-first: visible
   // deltas land here live; a call outcome retracts it, an answer settles the
   // authoritative text.
   let streamId: string | null = null
@@ -1031,7 +1031,7 @@ async function runWorkerChatFirstTurn(
 }
 
 /**
- * The shared tail of every Omni-first mutation (worker-authored or
+ * The shared tail of every Audio-first mutation (worker-authored or
  * dictation-built): delegation card, deterministic hard gates, the engine
  * dry-run that renders the diff, the d1 safety check, then execute — or a
  * pending edit when d1 disapproves or is unavailable.
@@ -1246,10 +1246,10 @@ async function verifyAndExecute(
   traceLocal.timings.execute = Number((performance.now() - execStarted).toFixed(1))
   traceLocal.execution = execution
   // Snapshot labels must not claim a model that never ran: mode 1 keeps its
-  // shipped "Omni directive" prefix, worker-chat modes pass their own.
+  // shipped "Audio directive" prefix, worker-chat modes pass their own.
   const snapshot = deps.commitNote(
     execution.note,
-    `${options.snapshotLabel ?? 'Omni directive'} · ${call.name}`,
+    `${options.snapshotLabel ?? 'Audio directive'} · ${call.name}`,
     call.name,
   )
   execution.snapshotId = snapshot.id

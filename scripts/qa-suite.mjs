@@ -335,7 +335,7 @@ async function main() {
    * Chat hygiene: an assistant reply must never surface raw action markup —
    * no `<tool_call`, no `<function=`, and no fenced block that contains either
    * (models sometimes "show their work" in a code fence). Extended for the
-   * Omni-first pipeline (case 25): no delegation tool tokens, no directive
+   * Audio-first pipeline (case 25): no delegation tool tokens, no directive
    * delimiters, no call/arguments JSON fragments, no pipeline stage
    * vocabulary.
    */
@@ -485,14 +485,14 @@ async function main() {
   }
 
   /**
-   * Worker-authoring provenance on an Omni-first run trace — the assertion
+   * Worker-authoring provenance on an Audio-first run trace — the assertion
    * shape architecture-refactor.md §7's gate mandates for the rewritten
    * cases ("traces show directive + worker provenance, no supervisor
    * fields") and design.md §13.8 keeps as the spec. Concretely:
-   * - `directive` present: Omni delegated a typed brief (design.md §5);
+   * - `directive` present: Audio delegated a typed brief (design.md §5);
    * - `call.sampler` present: a live 1.7B decode authored the call — the
    *   deleted template emitter's calls carry no sampler (types.ts WorkerCall);
-   * - `call.toolSchemasInjected === 4`: the full tool catalog traveled with
+   * - `call.toolSchemasInjected === 3`: the full tool catalog traveled with
    *   the prompt (design.md §6), not the supervisor's single-schema handoff;
    * - `route`/`grounding` absent: no supervisor-era RouteDecision and no
    *   d1-span/fallback-keyword grounding record — grounding is the worker's
@@ -502,7 +502,7 @@ async function main() {
     return Boolean(
       run?.directive &&
       run?.call?.sampler &&
-      run?.call?.toolSchemasInjected === 4 &&
+      run?.call?.toolSchemasInjected === 3 &&
       run?.route == null &&
       run?.grounding == null,
     )
@@ -816,7 +816,7 @@ async function main() {
   // assertions." The content bar stays (a real multi-section README, no
   // spoken-command leak — design.md §13.1's shape); the deterministic
   // template synthesizer is deleted (plan §7.3), so the provenance bar moves
-  // to workerAuthored(): Omni directive + live worker call + no supervisor
+  // to workerAuthored(): Audio directive + live worker call + no supervisor
   // fields (route/grounding), with d1's §7 check approving the four-stage
   // chain (plan §15's trace contract).
   await seedWorkspace({ version: 1, note: '', snapshots: [], messages: [], runs: [], rejectedTraces: [] })
@@ -828,7 +828,7 @@ async function main() {
     const n = ws?.note ?? ''
     const junkLeak = /rename the title/i.test(n)
     const authored = workerAuthored(info) && info.directive?.task === 'create'
-    record('12', 'EMPTY DOC + readme template → verified, worker-authored README (Omni directive + live worker call, no supervisor fields)',
+    record('12', 'EMPTY DOC + readme template → verified, worker-authored README (Audio directive + live worker call, no supervisor fields)',
       info.status === 'verified' && authored && n.startsWith('# README') && n.split('\n').length >= 20 && !junkLeak,
       `status=${info.status}, workerAuthored=${authored}, task=${info.directive?.task ?? '-'}, sampler=${info.call?.sampler ? 'live' : '-'}, schemas=${info.call?.toolSchemasInjected ?? '-'}, d1=${info.d1Check?.verdict ?? '-'}, lines=${n.split('\n').length}, startsREADME=${n.startsWith('# README')}, junkLeak=${junkLeak}${run.timedOut ? ', TIMEOUT' : ''}`)
   }
@@ -886,7 +886,7 @@ async function main() {
   // Natural phrasing: the verb is no longer first ("The document is empty
   // now, begin by writing …"). Plan §7's gate rewrites this as a
   // worker-authored template case — same command; the sentence-style phrasing
-  // must still resolve into Omni's create brief and the worker must author
+  // must still resolve into Audio's create brief and the worker must author
   // the README (the template synthesizer this case used to exercise is
   // deleted, plan §7.3). Content bar and junk-leak check stay.
   await seedWorkspace({ version: 1, note: '', snapshots: [], messages: [], runs: [], rejectedTraces: [] })
@@ -897,7 +897,7 @@ async function main() {
     const n = (await getWs())?.note ?? ''
     const junkLeak = /document is empty now/i.test(n)
     const authored = workerAuthored(info) && info.directive?.task === 'create'
-    record('12d', 'EMPTY DOC + sentence-style readme → verified, worker-authored README (Omni directive + live worker call)',
+    record('12d', 'EMPTY DOC + sentence-style readme → verified, worker-authored README (Audio directive + live worker call)',
       info.status === 'verified' && authored && n.startsWith('# README') && n.split('\n').length >= 20 && !junkLeak,
       `status=${info.status}, workerAuthored=${authored}, task=${info.directive?.task ?? '-'}, sampler=${info.call?.sampler ? 'live' : '-'}, schemas=${info.call?.toolSchemasInjected ?? '-'}, d1=${info.d1Check?.verdict ?? '-'}, lines=${n.split('\n').length}, startsREADME=${n.startsWith('# README')}, junkLeak=${junkLeak}${run.timedOut ? ', TIMEOUT' : ''}`)
   }
@@ -930,7 +930,7 @@ async function main() {
   // rejected-traces record; if the worker authors a narrower call that
   // passes the gates, d1's §7 check may disapprove → 'pending' for the user.
   // Either way the note must be byte-unchanged — no destructive call ever
-  // executes — and a refusal must record the Omni-first provenance
+  // executes — and a refusal must record the Audio-first provenance
   // (worker-self grounding + directive) in the rejected-traces log.
   await seedWorkspace(null)
   await waitStorageFlushed()
@@ -950,11 +950,11 @@ async function main() {
     let terminalDetail = ''
     if (info.status === 'rejected') {
       // recordOmniRejection shape (plan §7/§8): worker-self grounding, the
-      // Omni directive, no supervisor critic verdict.
+      // Audio directive, no supervisor critic verdict.
       const rec = ws?.rejectedTraces?.at(-1)
       const provenanceOk = Boolean(
         rec &&
-        rec.route?.provenance === 'omni-first pipeline' &&
+        rec.route?.provenance === 'audio-first pipeline' &&
         rec.grounding?.source === 'worker-self' &&
         rec.directive?.instruction,
       )
@@ -1192,7 +1192,7 @@ async function main() {
   // deleted). The supervisor-era d1 typed span question is deleted (plan
   // §8.2), so grounding provenance moves to the worker (design.md §3: the
   // worker "grounds its own target span (line numbers + exact anchor)") and
-  // the trace must show the four-stage chain — Omni directive → worker call
+  // the trace must show the four-stage chain — Audio directive → worker call
   // → hard gates → d1 check approved (plan §15). Both cases start from the
   // pristine demo note.
   await seedWorkspace(null)
@@ -1234,14 +1234,14 @@ async function main() {
       `status=${info.status}, bulletGone=${bulletGone}, neighboursKept=${neighboursKept}, workerGrounded=${workerGrounded}, task=${info.directive?.task ?? '-'}, span=${info.call?.params?.start_line ?? '-'}-${info.call?.params?.end_line ?? '-'}, tool=${info.call?.name ?? '-'}, sampler=${info.call?.sampler ? 'live' : '-'}, grounding=${JSON.stringify(info.grounding)}, d1=${info.d1Check?.verdict ?? '-'}${run.timedOut ? ', TIMEOUT' : ''}`)
   }
 
-  // --- Group F: P2 gates — delegation hygiene + ambiguous → Omni clarify -
+  // --- Group F: P2 gates — delegation hygiene + ambiguous → Audio clarify -
   // The two architecture-refactor.md §6 P2 gate cases. Case 25 audits the
   // corpus harvested across every group above (it needs no new turns); case
-  // 26 sends the design's ambiguous command and binds the Omni clarify
-  // outcome (plan §6.2 — clarify is Omni's move, made before delegating).
+  // 26 sends the design's ambiguous command and binds the Audio clarify
+  // outcome (plan §6.2 — clarify is Audio's move, made before delegating).
   // Both are authored to the P2 spec; they only bind as model-behaviour
   // gates once the orchestrator wires runOmniTurn in front of the pipeline.
-  say('Group F: delegation hygiene (design.md §13.6), ambiguous → Omni clarify')
+  say('Group F: delegation hygiene (design.md §13.6), ambiguous → Audio clarify')
 
   {
     const violations = []
@@ -1271,7 +1271,7 @@ async function main() {
       (await getWs())?.messages?.filter((m) => m.kind === 'clarify').at(-1)?.text ?? ''
     // The exact wording is model-generated; bind to the shape of a
     // clarifying question about the ambiguous target, not its phrasing.
-    // Design.md §10: clarification is Omni's move, made before delegating —
+    // Design.md §10: clarification is Audio's move, made before delegating —
     // Omni legitimately asks confirm-style questions ("Could you confirm the
     // exact value …?"), which the old which/what/where regex read as no
     // question at all (plan §6.2 gate: the case binds the clarify *outcome*,
@@ -1547,7 +1547,7 @@ async function main() {
     // byte-identical, rejected trace grows"): ✗ writes nothing anywhere —
     // the note stays byte-identical, the snapshot count is unchanged — and
     // appends the proposal to the rejected-traces log (design.md §9, plan
-    // §9.5): an omni-first-shaped RejectedTraceRecord (storage v2) with the
+    // §9.5): an audio-first-shaped RejectedTraceRecord (storage v2) with the
     // directive AND the d1 verdict, labelled by who rejected it
     // ('pending edit adjudication' / grounding 'pending-adjudication').
     const producer32 = await producePendingEdit()

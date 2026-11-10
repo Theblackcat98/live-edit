@@ -186,7 +186,7 @@ export interface D1ProposedCall {
 }
 
 export interface D1StateInput {
-  /** The typed Omni directive (§5), serialized whole as JSON. */
+  /** The typed Audio directive (§5), serialized whole as JSON. */
   directive: Directive
   /** The user's current command — verbatim, never truncated (calibrated). */
   command: string

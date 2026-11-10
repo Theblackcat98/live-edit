@@ -1,4 +1,4 @@
-# LiquidScribe — Corrected Design Spec (Omni-First)
+# LiquidScribe — Corrected Design Spec (Audio-First)
 
 - **Status:** Authoritative design spec, 2026-11-09. Source: the project owner,
   stated in his own words on 2026-11-08/09 after the shipped build was found to
@@ -6,7 +6,7 @@
 - **Supersedes:** the architecture descriptions in `README.md`, `plan.md` §1–§6,
   and the three `docs/live-edit-*.md` diagrams, wherever they conflict. Those
   documents described a **supervisor-first** pipeline (d1-Omni + a deterministic
-  layer route and pre-author content; Omni chats only when nothing is edited).
+  layer route and pre-author content; Audio chats only when nothing is edited).
   That pipeline is what the current code implements — and it is **not** this
   design. `plan.md` §9–§10 and `docs/repository-audit.md` remain valid as
   historical records of the shipped build.
@@ -18,24 +18,30 @@
   `frame_extract` field to the §5 directive schema for `extract` tasks (to be
   mirrored into §5 when Phase 3 lands), and D3 answers Q5 — pending edits
   persist across reloads.
+- **2026-11-10 decision — Audio-first, text-only.** The front-door model is
+  LFM3-Audio-2B (:8086); LFM3-Omni-2B (:8083) is the legacy path. All turns
+  are text-only: no frame is resolved or attached, `extract_visual_to_note`
+  is removed from the tool contract (3 tools), and the d1 packet carries no
+  image. Where this spec says "Omni", read the Audio front door unless a
+  legacy `omni` run mode is named.
 
 ---
 
 ## 1. The idea
 
-The user talks — audio and video — naturally to **one model: LFM3-Omni-2B**.
-Omni is the only model the user ever converses with. It listens, watches,
+The user talks naturally to **one model: LFM3-Audio-2B**.
+Audio is the only model the user ever converses with. It listens,
 answers, and, when the note needs to change, **silently delegates** the work to
 the LFM3-1.7B worker — the way a primary agent spawns a subagent with a tool
 call. The delegation is a typed directive, not a transcript dump.
 
-The **worker authors the edit**: given Omni's directive and a bounded amount of
+The **worker authors the edit**: given Audio's directive and a bounded amount of
 conversational context, it decides what the new text is and emits the tool call
-(`add_text`, `edit_text`, `remove_text`, `extract_visual_to_note`).
+(`add_text`, `edit_text`, `remove_text`).
 
 **d1-Omni-2B is a safety check, and nothing else.** Before a worker tool call
-executes, d1 receives the directive, a bounded context packet, a snippet of the
-current video frame, and the proposed call, and answers one question: is this
+executes, d1 receives the directive, a bounded context packet,
+and the proposed call, and answers one question: is this
 call a correct and safe execution of that directive? Approve → the call
 executes. Disapprove → **the call does not die**: the proposed edit is shown in
 the UI as a diff with the reason, and the **user adjudicates** with a ✓ / ✗.
@@ -50,13 +56,13 @@ part.
 
 ## 2. Principles
 
-1. **Omni-first.** Every turn — chat, command, mixed — goes to Omni first.
+1. **Audio-first.** Every turn — chat, command, mixed — goes to Audio first.
    There is no pre-router in front of it, deterministic or otherwise.
-2. **Delegation is a tool call.** Omni delegates the way agents spawn
+2. **Delegation is a tool call.** Audio delegates the way agents spawn
    subagents: a structured call, intercepted by the harness, never rendered
    as user-visible text and never spoken.
 3. **The worker authors.** Content originates in exactly two places: the user
-   (dictated text) and the worker (generated text). Omni directs; it does not
+   (dictated text) and the worker (generated text). Audio directs; it does not
    write the note. No other component writes prose.
 4. **d1 judges, it does not steer.** d1 does not route, ground, or pick tools.
    It evaluates a finished proposal against the directive. One job, tight
@@ -65,7 +71,7 @@ part.
    with a diff attached. The user can overrule it. Hard physical failures
    (broken anchor, out-of-bounds range) are not overrulable — those calls
    cannot be applied safely by anyone.
-6. **Context flows downhill, distilled.** Omni holds the conversation. Each
+6. **Context flows downhill, distilled.** Audio holds the conversation. Each
    stage below it receives *less raw chat and more structure* than the stage
    above (see §6). Nobody downstream re-reads the whole transcript.
 7. **Runtime honesty (retained from the shipped build).** Every stage records
@@ -77,7 +83,8 @@ part.
 | Actor | Owns | Must never |
 | :-- | :-- | :-- |
 | **User** | Conversation, final adjudication of d1-rejected edits | — |
-| **LFM3-Omni-2B** (:8083) | ASR, TTS, the conversation, the delegate-or-answer decision, the typed directive, clarification questions, completion confirmations | Write note content itself; emit delegation markup as visible/spoken text |
+| **LFM3-Audio-2B** (:8086) | ASR, TTS, the conversation, the delegate-or-answer decision, the typed directive, clarification questions, completion confirmations | Write note content itself; emit delegation markup as visible/spoken text |
+| **LFM3-Omni-2B** (:8083, legacy `omni` run mode) | Same front-door role on the legacy path | Same |
 | **LFM3-1.7B** (:8080) | Authoring edits, choosing the tool, grounding its own target span (line numbers + exact anchor), the XML tool call | Execute anything; see the raw full transcript |
 | **d1-Omni-2B** (:8085) | The approve/disapprove verdict on a proposed call, via zero-output-token typed questions over `/v1/systemone` | Route turns, pick tools, ground spans, author or edit content |
 | **Deterministic harness** | Directive/call parsing and repair, context-packet assembly, hard gates, execution, snapshots, the pending-edit store | Route intent, author content, invent "fallback" prose or templates |
@@ -87,34 +94,34 @@ part.
 
 ```mermaid
 stateDiagram-v2
-    state "Listening — user talking, frame live" as Listening
-    state "Omni turn — hearing, seeing, deciding" as OmniTurn
+    state "Listening — user talking" as Listening
+    state "Audio turn — hearing, deciding" as AudioTurn
     state "Worker authoring — directive + context + note" as WorkerAuthoring
     state "d1 check — approve or disapprove the call" as D1Check
     state "Pending user — diff shown, check or X" as PendingUser
     state "Executing — hard gates, apply, snapshot" as Executing
 
     [*] --> Listening
-    Listening --> OmniTurn: voice (ASR by Omni) or typed turn
-    OmniTurn --> Listening: Omni answers directly, no delegation
-    OmniTurn --> Listening: Omni asks a clarifying question
-    OmniTurn --> WorkerAuthoring: Omni silently delegates (typed directive)
+    Listening --> AudioTurn: voice (ASR by Audio) or typed turn
+    AudioTurn --> Listening: Audio answers directly, no delegation
+    AudioTurn --> Listening: Audio asks a clarifying question
+    AudioTurn --> WorkerAuthoring: Audio silently delegates (typed directive)
     WorkerAuthoring --> D1Check: worker emits a tool call
-    WorkerAuthoring --> Listening: worker cannot form a call — Omni reports it
+    WorkerAuthoring --> Listening: worker cannot form a call — Audio reports it
     D1Check --> Executing: d1 approves
     D1Check --> PendingUser: d1 disapproves — proposal, not a dead end
     D1Check --> PendingUser: d1 unreachable — user decides instead
     PendingUser --> Executing: user taps check (hard gates re-run)
     PendingUser --> Listening: user taps X — proposal discarded, logged
-    Executing --> Listening: snapshot committed, Omni confirms to user
+    Executing --> Listening: snapshot committed, Audio confirms to user
 ```
 
 Step by step:
 
-1. **Input.** Typed text, or a 16 kHz WAV transcribed by Omni
-   (`/v1/audio/transcriptions`), plus the current frame (live camera/screen,
-   or the synthetic slide when no capture is active).
-2. **Omni turn.** Omni receives the conversation, the frame when relevant, and
+1. **Input.** Typed text, or a 16 kHz WAV transcribed by Audio
+   (`/v1/audio/transcriptions`). No frame is resolved or attached — every
+   turn is text-only.
+2. **Audio turn.** Audio receives the conversation and
    the note state per §6. It either answers, asks a clarification, or
    delegates — exactly one of the three.
 3. **Delegation.** The harness intercepts the delegation call, opens a
@@ -122,21 +129,21 @@ Step by step:
    the markup is not), and assembles the worker packet (§6).
 4. **Worker.** The worker reads the directive, the context packet and the
    line-numbered note; authors the content; grounds its own span; emits one
-   XML tool call. Two malformed attempts → the turn fails honestly via Omni;
+   XML tool call. Two malformed attempts → the turn fails honestly via Audio;
    there is no content-authoring fallback.
 5. **d1 check.** The harness runs the hard gates (§8) first — a call that
-   fails them never reaches d1. Then d1 judges the surviving call (§7).
+   fails them never reaches d1. Then d1 judges the surviving call (§7, text-only packet).
 6. **Outcome.** Approved → execute. Disapproved or d1 unreachable → pending
-   edit (§9). Executed edits push a snapshot; Omni receives the execution
+   edit (§9). Executed edits push a snapshot; Audio receives the execution
    result as a system event and confirms in its own words.
-7. **Undo/redo.** Snapshot rollback is a user instruction Omni maps to a
+7. **Undo/redo.** Snapshot rollback is a user instruction Audio maps to a
    harness action, not a worker task; it bypasses worker and d1 entirely
    (retained from the shipped build).
 
-## 5. The directive (Omni → worker)
+## 5. The directive (Audio → worker)
 
 The directive is the contract of the whole design. It is **typed, minimal, and
-context-resolved**: Omni heard the conversation, so references the user made
+context-resolved**: Audio heard the conversation, so references the user made
 ("the same for Q4", "that bullet") are resolved *inside the directive* — the
 worker should rarely need the context packet to know what was meant; the
 packet is corroboration, not the primary channel.
@@ -151,24 +158,23 @@ packet is corroboration, not the primary channel.
   },
   "verbatim": null,            // exact user-dictated text, when the user dictated it; otherwise null
   "constraints": ["markdown", "keep the existing Q3 content intact"],
-  "frame_relevant": false      // whether the worker's task depends on the frame
 }
 ```
 
 Rules:
 
-- `instruction` is a **brief, not the content** — except that Omni must pack
+- `instruction` is a **brief, not the content** — except that Audio must pack
   into it everything the user specified about the content (sections named,
   values given, tone asked for). "Write a README template document" as the
   whole instruction is a malformed directive; the example above is the bar.
 - `verbatim` is the one case where content legitimately travels inside the
   directive: the user dictated exact words. The worker inserts them as-is.
-- Emission mechanism: Omni is served by llama.cpp with tool support
+- Emission mechanism: Audio is served by llama.cpp with tool support
   (`--jinja`); the delegation is a tool/function call in its completion,
   parsed and schema-validated by the harness. Validation failure → one repair
-  retry with the schema error appended → Omni falls back to a clarifying
+  retry with the schema error appended → Audio falls back to a clarifying
   question, never to prose that pretends to be an edit. *(Open question Q1,
-  §14: confirm Omni's tool-call reliability on the local build; if a native
+  §14: confirm Audio's tool-call reliability on the local build; if a native
   tool call proves unreliable, the fallback mechanism is a delimited
   structured block in the completion, intercepted the same way. The contract
   — typed, invisible, validated — is identical either way.)*
@@ -185,9 +191,9 @@ gets both.
 
 | Consumer | Packet | Budget |
 | :-- | :-- | :-- |
-| **Omni** | Rolling conversation (recent turns), the frame on relevant turns, the note: full text when the turn is about the note, outline (title + headings) otherwise | Existing chat discipline; note cap may rise above the shipped 3,600 chars — Omni has the context and prefix caching absorbs repeats (Q3) |
+| **Audio** | Rolling conversation (recent turns), the note: full text when the turn is about the note, outline (title + headings) otherwise | Existing chat discipline; note cap may rise above the shipped 3,600 chars — Audio has the context and prefix caching absorbs repeats (Q3) |
 | **Worker** | The directive + **context packet**: the last **3 completed edit turns**, each as `{user command, directive summary, diff summary}` — no assistant prose, no chat — + the **full line-numbered note** (it authors and grounds; a ±3-line window is a shipped-build defect, §12) | Packet ≤ ~600 tokens; note full at current scale, window-expansion rules only if the note outgrows the worker's context |
-| **d1** | The directive + the user's current command verbatim + the proposed call + its rendered diff + the frame (crop/snippet) + **at most the last user turn** | Tightest packet in the system; d1 is a calibrated decision head and its accuracy degrades on long context — it judges call↔directive fit, not conversation history |
+| **d1** | The directive + the user's current command verbatim + the proposed call + its rendered diff + **at most the last user turn** (no image — text-only) | Tightest packet in the system; d1 is a calibrated decision head and its accuracy degrades on long context — it judges call↔directive fit, not conversation history |
 
 Deterministic assembly: the harness builds these packets from recorded turns
 and diffs (it already records both). Assembly is transformation, not
@@ -240,7 +246,7 @@ Run before d1, and **re-run on user approval** of a pending edit, against the
 
 A hard-gate failure is never shown as a ✓ / ✗ choice. The edit is returned to
 the user as an explanation ("the text this edit was written against has
-changed"), with the option to ask Omni to redo it.
+changed"), with the option to ask Audio to redo it.
 
 ## 9. Pending edits — user adjudication
 
@@ -266,14 +272,14 @@ UI contract:
   in the note. It shows: the diff, the worker's tool, d1's verdict and scores,
   and one line of "what was asked" (the directive's `instruction`).
 - **✓ applies:** hard gates re-run (§8); pass → execute, snapshot, card
-  resolves to *applied*, Omni confirms. Fail → card resolves to *stale* with
+  resolves to *applied*, Audio confirms. Fail → card resolves to *stale* with
   the reason; nothing is written.
 - **✗ discards:** nothing is written; the proposal (directive, call, verdict)
   is appended to the rejected-traces log — the same JSONL the shipped build
   already exports, which is also the future fine-tuning dataset.
 - Pending edits queue in arrival order; a new turn does not silently clear
-  them. Voice adjudication ("yes, apply it" / "no, drop it") is an Omni →
-  harness action on the oldest pending edit, stated explicitly by Omni before
+  them. Voice adjudication ("yes, apply it" / "no, drop it") is an Audio →
+  harness action on the oldest pending edit, stated explicitly by Audio before
   it takes effect.
 - A pending edit is not a snapshot and does not modify the note, the history
   stack, or the undo chain until applied.
@@ -281,27 +287,26 @@ UI contract:
 ## 10. Conversation behaviour
 
 - **Silent delegation.** The user experiences: they ask, a delegation card
-  appears, the note updates, Omni confirms. Omni does not narrate pipeline
+  appears, the note updates, Audio confirms. Audio does not narrate pipeline
   internals, probabilities, or stage names in chat or speech.
-- **Acknowledgements** for slow worker turns are Omni's own ("On it — writing
-  that now" in its voice), generated by Omni, not canned harness strings.
+- **Acknowledgements** for slow worker turns are Audio's own ("On it — writing
+  that now" in its voice), generated by Audio, not canned harness strings.
   (Shipped-build defect: acknowledgements and completion messages are
   templates, §12.)
-- **Clarification** is Omni's move, made *before* delegating, when a directive
+- **Clarification** is Audio's move, made *before* delegating, when a directive
   cannot be formed responsibly — not a harness clarification generated from a
   failed regex plan.
-- **Confirmations** are spoken/shown by Omni from the execution result the
+- **Confirmations** are spoken/shown by Audio from the execution result the
   harness hands back (tool, diff summary, snapshot label) — facts from the
-  harness, words from Omni.
+  harness, words from Audio.
 
 ## 11. Failure and degradation
 
 | Failure | Behaviour |
 | :-- | :-- |
-| Omni down | No conversation, no delegation: the app is its interface. UI shows the endpoint down (Runtime truth). Typed input is held, not "handled" by a fallback brain. ASR/TTS unavailable with it. |
-| Worker down / two malformed calls | Omni tells the user the edit could not be made. No template call is fabricated. The directive is kept in the trace so the turn can be retried. |
+| Audio down | No conversation, no delegation: the app is its interface. UI shows the endpoint down (Runtime truth). Typed input is held, not "handled" by a fallback brain. ASR/TTS unavailable with it. |
+| Worker down / two malformed calls | Audio tells the user the edit could not be made. No template call is fabricated. The directive is kept in the trace so the turn can be retried. |
 | d1 down | Edits route to pending-user (§7). The app keeps working at a lower assurance level, labelled as such. |
-| Frame unavailable | Turns proceed text-only; `frame_relevant` directives note the missing frame in the trace. |
 | Hard-gate failure | Edit returned with explanation; never a ✓ / ✗ (§8). |
 
 The one deterministic construction that survives: **verbatim dictation**. When
@@ -319,16 +324,16 @@ XML contract, bridge endpoints, VAD/ASR capture, UI shell) is retained.
 
 | Shipped behaviour | Location | Required change |
 | :-- | :-- | :-- |
-| d1 + heuristic route **before** Omni; mutation turns never reach Omni | `src/state/useWorkspace.ts` (`submitCommand`) | Omni-first turn loop (§4); routing deleted as a stage |
-| Omni prompt forbids acting and caps it at handoff sentences; 500-token chat budget | `useWorkspace.ts` (`buildChatMessages`) | Prompt rewritten around answer / clarify / delegate; budget and sampling revisited (Q3) |
-| Omni served `--reasoning off --temp 0` | `scripts/start-models.sh` | Serving flags revisited with the prompt work (Q3) |
+| d1 + heuristic route **before** Audio; mutation turns never reach Audio | `src/state/useWorkspace.ts` (`submitCommand`) | Audio-first turn loop (§4); routing deleted as a stage |
+| Audio prompt forbids acting and caps it at handoff sentences; 500-token chat budget | `useWorkspace.ts` (`buildChatMessages`) | Prompt rewritten around answer / clarify / delegate; budget and sampling revisited (Q3) |
+| Audio served `--reasoning off --temp 0` | `scripts/start-models.sh` | Serving flags revisited with the prompt work (Q3) |
 | Regex layer authors content: `extractAddContent`, `semanticAddContent` (3 hardcoded topics), `buildDocumentTemplate` (one skeleton for every document kind, and only on a literally empty note) | `src/lib/supervisor.ts` (`buildPlan`) | Deleted as authors. `buildPlan` ceases to exist; grounding and content move to the worker |
 | Worker told to insert supervisor content **verbatim**, given **1 tool schema** and a **span ±3 lines** note window ("full file withheld") | `src/lib/worker.ts` (`buildWorkerMessages`, `WORKER_SYSTEM_PROMPT`), `supervisor.ts` (`tokenViewForWorker`) | Worker packet per §6: directive + context packet + full line-numbered note + full tool catalog (or d1-free, worker-chosen tool) |
 | Live worker calls that diverge from the supervisor's span/tool are discarded or overwritten by the deterministic template call | `useWorkspace.ts` (worker attempt loop) | Deleted. The worker's call is the proposal; divergence from a harness guess is not an error class |
 | d1 also routes and grounds | `supervisor.ts` (`ROUTE_QUESTIONS`, `resolveGroundingSpan`), `useWorkspace.ts` | d1 reduced to §7's check; routing/grounding questions deleted |
-| Critic packet has no directive, no turns, **no frame** | `useWorkspace.ts` (`buildCriticState`, `CRITIC_QUESTIONS`) | Packet per §6/§7, frame included |
+| Critic packet has no directive, no turns | `useWorkspace.ts` (`buildCriticState`, `CRITIC_QUESTIONS`) | Packet per §6/§7 (text-only) |
 | Critic rejection = dead end, generic message, note untouched | `useWorkspace.ts` (rejection path) | Pending-edit store + adjudication UI (§9) |
-| Acknowledgements / completions are canned templates | `useWorkspace.ts` (`ackFor`, `completionFor`) | Generated by Omni from harness facts (§10) |
+| Acknowledgements / completions are canned templates | `useWorkspace.ts` (`ackFor`, `completionFor`) | Generated by Audio from harness facts (§10) |
 | Blast-radius check exists only in the supervisor critique, not in `executeTool` | `src/lib/supervisor.ts`, `src/lib/tools.ts` | Moved/duplicated into the engine (§8); known hole from the 2026-11-08 audit |
 
 ## 13. Acceptance criteria
@@ -340,7 +345,7 @@ The refactor is done when the QA battery (extended, §13 cases in
    "write a README template document to begin" produces a real multi-section
    README (title + at least the standard sections), authored by the worker —
    the literal phrase "README template document" appears nowhere as inserted
-   content, and the trace shows an Omni directive and a worker call with no
+   content, and the trace shows an Audio directive and a worker call with no
    deterministic content stage.
 2. **Follow-up context.** "Update the Q3 revenue row to $1.45M Final" then
    "do the same for Q4 to $1.5M" — the second edit lands correctly from the
@@ -364,13 +369,13 @@ The refactor is done when the QA battery (extended, §13 cases in
 ## 14. Open questions
 
 - **Q1 — Directive emission.** Native tool calling vs. delimited structured
-  block for Omni's delegation (§5). Decide by experiment on the local
+  block for Audio's delegation (§5). Decide by experiment on the local
   llama.cpp build before the refactor's worker work starts.
 - **Q2 — d1 thresholds.** §7's starting values need calibration runs against
   the battery's destructive cases (the shipped 12c blast-radius case is the
   floor: it must never auto-approve).
-- **Q3 — Omni budget and serving flags.** Chat max-tokens, note cap,
+- **Q3 — Audio budget and serving flags.** Chat max-tokens, note cap,
   temperature, and the `--reasoning off` server flag: tune together, since
-  the delegate-or-answer decision is Omni's core skill in this design.
+  the delegate-or-answer decision is Audio's core skill in this design.
 
 Q4 and Q5 were filed as GitHub Issue #50 on 2026-11-09.

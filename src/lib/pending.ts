@@ -51,7 +51,7 @@ export const MAX_PERSISTED_PENDING_EDITS = 10
 
 /** Everything `createPendingEdit` needs; `d1` is already narrowed to the verdicts that route a call to adjudication. */
 export interface PendingEditInput {
-  /** The Omni directive that produced this proposal (recorded verbatim, §9). */
+  /** The Audio directive that produced this proposal (recorded verbatim, §9). */
   directive: Directive
   /** The parsed worker tool call under adjudication. */
   call: WorkerCall

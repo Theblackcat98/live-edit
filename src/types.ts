@@ -172,7 +172,7 @@ export interface RejectedTraceRecord {
   grounding: { source: GroundingSource; chosenLine?: number; p?: Probability }
   workerXml: string
   critic: { verdict: 'rejected'; reason?: string; pCorrect: Probability }
-  /** The Omni directive that produced the rejected call (P5+; absent on legacy records — §9.2). */
+  /** The Audio directive that produced the rejected call (P5+; absent on legacy records — §9.2). */
   directive?: Directive
   /** The d1 verdict that routed the call here (P5+; absent on legacy records — §9.2). */
   d1?: PendingEdit['d1']

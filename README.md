@@ -1,10 +1,10 @@
 # LiquidScribe
 
-> **Design: [`docs/design.md`](./docs/design.md) (2026-11-09) is the authoritative design spec.**
+> **Design: [`docs/design.md`](./docs/design.md) (2026-11-09, Audio-first per the 2026-11-10 decision) is the authoritative design spec.**
 > It corrects the architecture this README originally described: the intended design is
-> **Omni-first** — Omni converses and silently delegates, the 1.7B worker authors edits, and
+> **Audio-first** — Audio converses and silently delegates, the 1.7B worker authors edits, and
 > d1-Omni is a safety check whose rejections go to the user as pending edits (✓ / ✗). That
-> Omni-first turn loop is implemented and is the default run mode; the earlier supervisor-first
+> Audio-first turn loop is implemented and is the default run mode; the earlier supervisor-first
 > pipeline and its `OMNI_FIRST` flag were deleted (2026-11-09) — there is no legacy path.
 > design.md §13 is still the acceptance target — its QA battery is not yet green (see Verification).
 
@@ -49,11 +49,11 @@ npm run typecheck
 
 ## Runtime honesty
 
-> **Run modes change the roster.** The bullets below describe the default `omni` mode — the
-> Omni-first turn loop from [`docs/design.md`](./docs/design.md): Omni is the front door and
+> **Run modes change the roster.** The bullets below describe the default `audio` mode — the
+> Audio-first turn loop from [`docs/design.md`](./docs/design.md): Audio is the front door and
 > silently delegates, the worker authors and grounds its own call from a typed directive, and
 > d1-Omni only checks the finished proposal (a disapproval or an unavailable check becomes a
-> pending edit). In `worker-d1` the 1.7B also answers chat; in `lowram` d1 and the Omni servers are
+> pending edit). In `worker-d1` the 1.7B also answers chat; in `lowram` d1 and the audio servers are
 > absent entirely. See [Run modes](#run-modes) for the per-mode endpoints.
 
 The app talks to **real local LFM3 servers** (llama.cpp, started by this repo's

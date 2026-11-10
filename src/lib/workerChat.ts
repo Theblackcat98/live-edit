@@ -25,7 +25,7 @@ import { truncate } from './utils'
 
 // --- sampling/serving ----------------------------------------------------------
 
-/** Same robustness rationale as Omni's 0.3 (E2: accuracy flat across 0/0.3/0.7). */
+/** Same robustness rationale as Audio's 0.3 (E2: accuracy flat across 0/0.3/0.7). */
 export const WORKER_CHAT_TEMPERATURE = 0.3
 /**
  * The 1.7B reasons at length in <think> before answering or calling; the
