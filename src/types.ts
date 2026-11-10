@@ -529,9 +529,14 @@ export interface PendingEdit {
     precedingLine: string | null
     followingLine: string | null
   }
-  /** The d1 result that routed this call here. Only disapproved/unavailable can appear. */
+  /**
+   * The d1 result that routed this call here. Normally disapproved or
+   * unavailable; 'approved' appears only for a §8 blast-radius hold
+   * (issue #58), where d1 approved but the edit's class — a section-scale
+   * collapse — never executes silently.
+   */
   d1: {
-    verdict: 'disapproved' | 'unavailable'
+    verdict: 'approved' | 'disapproved' | 'unavailable'
     noul: number | null
     destructiveSafety: 'safe' | 'unintended_data_loss' | null
     reason?: string

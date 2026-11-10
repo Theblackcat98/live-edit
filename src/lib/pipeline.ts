@@ -56,6 +56,9 @@ import {
   type PacketWorkerPromptInput,
 } from './worker'
 import { executeTool } from './tools'
+import { recoverDictatedText } from './dictation'
+import { sectionScaleCollapse } from './blastGate'
+import { checkExecutionOutcome } from './executionCheck'
 import { detectSnapshotDirective } from './snapshotDirective'
 import { runOmniTurn, type OmniHistoryTurn } from './omni'
 import { runWorkerChatTurn, WORKER_CHAT_SAMPLER, type WorkerChatTurnResult } from './workerChat'
@@ -681,14 +684,32 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
   // built by the harness, never authored by the worker. The call still
   // flows through the hard gates and the d1 check like any other; the
   // trace records the provenance honestly (runtime.worker = 'dictation').
-  if (typeof directive.verbatim === 'string' && directive.verbatim.trim().length > 0) {
-    const call = buildDictationCall(directive, noteAtStart)
+  // Backstop (battery case 8f): when the model omits `verbatim` but the
+  // user's own command carries the quoted span, recover it
+  // deterministically — the dictated text must never depend on the model
+  // remembering to label it.
+  const recovered = recoverDictatedText(command, directive)
+  const effectiveDirective = recovered ? { ...directive, verbatim: recovered } : directive
+  if (recovered) {
+    traceLocal.directive = effectiveDirective
+    publish()
+  }
+  if (
+    typeof effectiveDirective.verbatim === 'string' &&
+    effectiveDirective.verbatim.trim().length > 0
+  ) {
+    const call = buildDictationCall(effectiveDirective, noteAtStart)
+    if (recovered) {
+      call.promptHints.push(
+        'Dictation backstop: verbatim recovered from the quoted span in the user command — the model omitted the field (battery case 8f).',
+      )
+    }
     runtime.worker = 'dictation'
     traceLocal.timings.generate = 0
     traceLocal.call = call
     traceLocal.workerNoteView = call.noteView
     publish()
-    await verifyAndExecute(deps, ctx, directive, call)
+    await verifyAndExecute(deps, ctx, effectiveDirective, call)
     return
   }
 
@@ -1247,8 +1268,77 @@ async function verifyAndExecute(
     }
   }
 
+  // --- §8 blast-radius hold (issue #58; battery cases 12c/29): reaching this
+  // point means d1 approved. For a section-scale collapse that approval is
+  // necessary but not sufficient — the class never executes silently, so it
+  // goes to the user with d1's verdict recorded on the card.
+  if (check) {
+    const collapse = sectionScaleCollapse(noteAtStart, preview.diff)
+    if (collapse) {
+      holdForUserDecision(
+        deps,
+        ctx,
+        delegation,
+        delegationId,
+        directive,
+        call,
+        preview.diff,
+        {
+          verdict: check.verdict,
+          noul: check.noul,
+          destructiveSafety: check.destructiveSafety,
+          ...(check.reason ? { reason: check.reason } : {}),
+        },
+        check.noul,
+        `This edit ${collapse.reason}. That class of edit never runs silently (§8), so it is held for your decision under Pending edits — the note was not touched.`,
+        'Blast-radius hold (§8): section-scale collapse held for adjudication despite d1 approval.',
+      )
+      return
+    }
+  }
+
   // --- d1 approved: execute (the silent path, guarded by the decision model) --
   const confidence = check?.noul ?? null
+
+  // --- outcome tripwires (battery case 8): 'verified' must mean the result
+  // matches what was asked, at least where that is deterministically
+  // checkable. A no-change execution is reported as-is, never certified; a
+  // content mismatch is a visible failure and the note is NOT committed.
+  const outcome = checkExecutionOutcome(noteAtStart, directive, call, preview)
+  if (outcome.kind === 'missing-content') {
+    deps.patchMessage(delegationId, { delegation: { ...delegation, status: 'rejected' } })
+    recordOmniRejection(
+      deps,
+      ctx,
+      directive,
+      call,
+      `Execution outcome check failed: ${outcome.reason}`,
+      confidence,
+    )
+    deps.addMessage({
+      role: 'assistant',
+      kind: 'error',
+      text: `I stopped before writing. ${outcome.reason} The note was not changed.`,
+      runId: traceLocal.id,
+    })
+    deps.notify('Execution stopped', outcome.reason, 'error')
+    finish('failed')
+    return
+  }
+  if (outcome.kind === 'no-change') {
+    deps.patchMessage(delegationId, {
+      delegation: { ...delegation, status: 'executed', confidence },
+    })
+    deps.addMessage({
+      role: 'assistant',
+      kind: 'result',
+      text: preview.message,
+      runId: traceLocal.id,
+    })
+    finish('conversational')
+    return
+  }
+
   deps.setStageStates({ A: 'done', B: 'done', C: options.d1Check ? 'done' : 'skipped' })
   deps.patchMessage(delegationId, {
     delegation: { ...delegation, status: 'verified', confidence },

@@ -364,12 +364,20 @@ describe('fromStorable', () => {
       { ...goodPayload, noteHash: '' }, // empty hash
       { ...goodPayload, createdAt: Number.NaN },
       { ...goodPayload, diff: { ...good.diff, before: 'not-an-array' } },
-      { ...goodPayload, d1: { ...good.d1, verdict: 'approved' } }, // approved never routes here
+      { ...goodPayload, d1: { ...good.d1, verdict: 'maybe' } }, // unknown verdict
       goodPayload,
     ])
     expect(results).toHaveLength(1)
     expect(results[0].id).toBe(good.id)
     expect(results[0].directive.instruction).toBe('survivor')
+  })
+
+  it('round-trips a §8 blast-radius hold record (d1 verdict approved)', () => {
+    const edit = makePendingEdit('held')
+    const stored = toStorable([{ ...edit, d1: { ...edit.d1, verdict: 'approved' as const } }])
+    const results = fromStorable(JSON.parse(JSON.stringify(stored)))
+    expect(results).toHaveLength(1)
+    expect(results[0].d1.verdict).toBe('approved')
   })
 
   it('never throws on non-array input and returns an empty queue for an empty array', () => {
