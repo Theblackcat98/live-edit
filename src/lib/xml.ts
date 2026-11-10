@@ -19,16 +19,19 @@ const KNOWN_TOOLS: ToolName[] = [
  */
 export function parseToolCallXml(xml: string): ParsedToolCall | null {
   const think = xml.match(/<think>([\s\S]*?)<\/think>/)?.[1]?.trim()
-  const functionMatch = xml.match(/<function=([a-z_]+)>([\s\S]*?)<\/function>/)
+  const functionMatch = xml.match(/<function=([A-Za-z_]+)>([\s\S]*?)<\/function>/)
   if (!functionMatch) return null
-  const name = functionMatch[1] as ToolName
+  // The 1.7B sometimes shouts the tool name (ADD_TEXT); the contract is
+  // lowercase, so normalize before the known-tool check instead of
+  // failing the turn on casing.
+  const name = functionMatch[1].toLowerCase() as ToolName
   if (!KNOWN_TOOLS.includes(name)) return null
 
   const params: Record<string, string> = {}
-  const parameterRegex = /<parameter=([a-z_]+)>\s*([\s\S]*?)\s*<\/parameter>/g
+  const parameterRegex = /<parameter=([A-Za-z_]+)>\s*([\s\S]*?)\s*<\/parameter>/g
   let parameterMatch: RegExpExecArray | null
   while ((parameterMatch = parameterRegex.exec(functionMatch[2])) !== null) {
-    params[parameterMatch[1]] = parameterMatch[2].trim()
+    params[parameterMatch[1].toLowerCase()] = parameterMatch[2].trim()
   }
   return { name, params, think }
 }
