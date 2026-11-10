@@ -77,6 +77,13 @@ describe('verdict chip (design.md §7/§9)', () => {
     })
   })
 
+  it('labels a §8 blast-radius hold as orange — d1 approved, the harness held it', () => {
+    expect(verdictChip('approved')).toEqual({
+      label: 'd1 approved — held by the §8 blast-radius rule',
+      tone: 'orange',
+    })
+  })
+
   it('reads straight off a §9 pending edit\u2019s d1 record', () => {
     expect(verdictChip(makeEdit().d1.verdict).tone).toBe('red')
   })

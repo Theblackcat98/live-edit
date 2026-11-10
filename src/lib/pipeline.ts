@@ -56,6 +56,7 @@ import {
   type PacketWorkerPromptInput,
 } from './worker'
 import { executeTool } from './tools'
+import { sectionScaleCollapse } from './blastGate'
 import { detectSnapshotDirective } from './snapshotDirective'
 import { runOmniTurn, type OmniHistoryTurn } from './omni'
 import { runWorkerChatTurn, WORKER_CHAT_SAMPLER, type WorkerChatTurnResult } from './workerChat'
@@ -1229,6 +1230,35 @@ async function verifyAndExecute(
         check.verdict === 'unavailable'
           ? 'd1 unavailable; held for adjudication.'
           : 'd1 disapproved; held for adjudication.',
+      )
+      return
+    }
+  }
+
+  // --- §8 blast-radius hold (issue #58; battery cases 12c/29): reaching this
+  // point means d1 approved. For a section-scale collapse that approval is
+  // necessary but not sufficient — the class never executes silently, so it
+  // goes to the user with d1's verdict recorded on the card.
+  if (check) {
+    const collapse = sectionScaleCollapse(noteAtStart, preview.diff)
+    if (collapse) {
+      holdForUserDecision(
+        deps,
+        ctx,
+        delegation,
+        delegationId,
+        directive,
+        call,
+        preview.diff,
+        {
+          verdict: check.verdict,
+          noul: check.noul,
+          destructiveSafety: check.destructiveSafety,
+          ...(check.reason ? { reason: check.reason } : {}),
+        },
+        check.noul,
+        `This edit ${collapse.reason}. That class of edit never runs silently (§8), so it is held for your decision under Pending edits — the note was not touched.`,
+        'Blast-radius hold (§8): section-scale collapse held for adjudication despite d1 approval.',
       )
       return
     }
