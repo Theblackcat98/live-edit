@@ -65,6 +65,37 @@ function aggregateReps(dir, repCount) {
     }
   }
 
+  // Goal pools: the product goal is maximum silent edits and minimum
+  // unnecessary confirmations. Edit-intended cases should end verified
+  // without adjudication (12b's bar also accepts a d1/✓ path); the
+  // confirm-by-design cases are the safety set where pending is correct.
+  const EDIT_INTENDED_CASES = ['6', '7', '8', '8f', '12', '12b', '12d', '12e', '19', '20', '21', '23', '24', '27', '27b', '28']
+  const CONFIRM_BY_DESIGN_CASES = ['12c', '29', '30', '31', '32', '33', '34']
+  const failuresOf = (id) => {
+    const c = byCase.get(id)
+    return c ? { id, runs: c.runs, passes: c.passes, failures: c.runs - c.passes } : { id, runs: 0, passes: 0, failures: 0 }
+  }
+  const failureFrequency = caseIds
+    .map(failuresOf)
+    .filter((x) => x.failures > 0)
+    .sort((a, b) => b.failures - a.failures || (b.failures / b.runs) - (a.failures / a.runs) || String(a.id).localeCompare(String(b.id)))
+  const poolStats = (ids) => {
+    const rows = ids.map(failuresOf).filter((x) => x.runs > 0)
+    const runs = rows.reduce((sum, x) => sum + x.runs, 0)
+    const passes = rows.reduce((sum, x) => sum + x.passes, 0)
+    const failures = rows.filter((x) => x.failures > 0)
+      .sort((a, b) => b.failures - a.failures || String(a.id).localeCompare(String(b.id)))
+    return { rows, runs, passes, failures }
+  }
+  const printPool = (label, ids) => {
+    const s = poolStats(ids)
+    const pct = s.runs ? Math.round((s.passes / s.runs) * 100) : 0
+    console.log(`  ${label}: ${s.passes}/${s.runs} passed (${pct}%)`)
+    if (s.failures.length) {
+      console.log('    failures: ' + s.failures.map((x) => `${x.id} ${x.failures}/${x.runs} failed`).join(', '))
+    }
+  }
+
   // Trace statistics across every harvested turn of every rep.
   const traces = reps.flatMap((rep) => rep?.traces ?? [])
   const count = (arr, key) => {
@@ -90,6 +121,14 @@ function aggregateReps(dir, repCount) {
   }
   console.log('---------------------------------------------------')
   console.log(`Cases: ${stablePass} stable-pass | ${flaky} flaky | ${stableFail} stable-fail`)
+  console.log('\nGoal metrics (case pools):')
+  printPool('edit-intended / silent goal', EDIT_INTENDED_CASES)
+  printPool('confirm-by-design / safety set', CONFIRM_BY_DESIGN_CASES)
+  if (failureFrequency.length) {
+    console.log('  most frequent failures: ' + failureFrequency.map((x) => `${x.id} ${x.failures}/${x.runs} failed`).join(', '))
+  } else {
+    console.log('  most frequent failures: none')
+  }
   console.log('\nTrace statistics (all reps):')
   console.log('  terminal statuses: ' + count(traces, (t) => t.status).map(([k, v]) => `${k}=${v}`).join(', '))
   console.log('  d1 verdicts:       ' + count(traces, (t) => t.d1Verdict).map(([k, v]) => `${k}=${v}`).join(', '))
