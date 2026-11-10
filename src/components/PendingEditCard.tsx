@@ -42,6 +42,11 @@ export interface PendingVerdictChip {
  * the user without the safety model's opinion, and the card says so.
  */
 export function verdictChip(verdict: PendingEdit['d1']['verdict']): PendingVerdictChip {
+  if (verdict === 'approved') {
+    // Reachable only via the §8 blast-radius hold (issue #58): d1 approved,
+    // but a section-scale collapse never executes silently.
+    return { label: 'd1 approved — held by the §8 blast-radius rule', tone: 'orange' }
+  }
   return verdict === 'unavailable'
     ? { label: 'd1 unavailable — your call', tone: 'orange' }
     : { label: 'Disapproved by d1', tone: 'red' }
