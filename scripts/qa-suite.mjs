@@ -589,15 +589,37 @@ async function main() {
   }
 
   /**
-   * Reliable pending-edit producer for cases 29/31–34 (plan §8/§9 gates):
-   * reseed the pristine demo note and send 12c's blast-radius command. The
-   * over-broad call is refused by the hard gates ('rejected' — that terminal
-   * is case 12c's concern) or non-approved by d1 → 'pending'. A 'verified'
-   * terminal here is itself a §8 violation ("case 12c can now end only as
-   * hard-gate refusal or pending — never auto-verified"), and every consuming
-   * case fails on its precondition assertion.
+   * Pending-edit producer for cases 29/31–34 (plan §8/§9 gates), isolated so
+   * one production failure can never again cascade into four precondition
+   * failures that test nothing (the 2026-11-10 run: 31–34 all died on 29/30's
+   * shape). Two independent routes, tried in order:
+   *
+   *  1. Blast-radius command on the pristine demo note. The over-broad call
+   *     is refused by the hard gates ('rejected' — case 12c's concern),
+   *     non-approved by d1 → 'pending', or — with the §8 blast-radius hold
+   *     (issue #58) — held by the harness despite a d1 approval → 'pending'.
+   *  2. Low-RAM hold: boot the app in `lowram` run mode (its own localStorage
+   *     key), where every gate-passing edit is held for adjudication because
+   *     no decision model runs (design: no silent edits without d1). A plain
+   *     add command therefore yields a pending card deterministically,
+   *     independent of any model's verdict. The mode key is restored to
+   *     'audio' before returning; the next case's seed reload boots it.
+   *
+   * A 'verified' terminal on route 1 is itself a §8 violation and is case
+   * 29/12c's evidence — it is NOT hidden here: the fallback keeps 31–34
+   * measuring their own logic, and `via` in the result names the route that
+   * produced (or failed to produce) the card so reports stay honest.
    */
   async function producePendingEdit() {
+    const blast = await produceViaBlastCommand()
+    if (blast.info.status === 'pending' && blast.pending.last?.status === 'pending' && blast.pending.last?.id) {
+      return { ...blast, via: 'blast-radius command' }
+    }
+    const fallback = await produceViaLowramHold()
+    return { ...fallback, via: `lowram hold (blast-radius attempt settled ${blast.info.status})` }
+  }
+
+  async function produceViaBlastCommand() {
     await seedWorkspace(null)
     await waitStorageFlushed()
     const noteBefore = await note()
@@ -607,6 +629,21 @@ async function main() {
     const run = await waitForRun()
     const info = await runsInfo()
     const pending = await pendingInfo()
+    return { run, info, pending, noteBefore, snapsBefore, rejectsBefore }
+  }
+
+  async function produceViaLowramHold() {
+    await evalJs(`localStorage.setItem('liquidscribe.runmode.v1', 'lowram')`)
+    await seedWorkspace(null)
+    await waitStorageFlushed()
+    const noteBefore = await note()
+    const snapsBefore = (await getWs())?.snapshots?.length ?? 0
+    const rejectsBefore = (await getWs())?.rejectedTraces?.length ?? 0
+    await submitCommand('add a line under Security: rotate keys monthly')
+    const run = await waitForRun()
+    const info = await runsInfo()
+    const pending = await pendingInfo()
+    await evalJs(`localStorage.setItem('liquidscribe.runmode.v1', 'audio')`)
     return { run, info, pending, noteBefore, snapsBefore, rejectsBefore }
   }
 
@@ -1514,7 +1551,7 @@ async function main() {
     const precondition31 = producer31.info.status === 'pending' && card31?.status === 'pending' && Boolean(card31?.id)
     if (!precondition31) {
       record('31', 'pending → ✓ applies: edit lands, snapshot pushed, card resolves applied', false,
-        `precondition failed — terminal ${producer31.info.status} (a 'verified' here is itself a §8 violation: blast radius must never auto-verify), card=${card31?.status ?? 'none'}`)
+        `precondition failed — terminal ${producer31.info.status} (a 'verified' here is itself a §8 violation: blast radius must never auto-verify), card=${card31?.status ?? 'none'}, producer=${producer31.via}`)
     } else {
       const verdict31 = card31.d1?.verdict ?? '-'
       const resolution31 = await adjudicatePending(card31.id, 'apply')
@@ -1555,7 +1592,7 @@ async function main() {
     const precondition32 = producer32.info.status === 'pending' && card32?.status === 'pending' && Boolean(card32?.id)
     if (!precondition32) {
       record('32', 'pending → ✗ discards: note byte-identical, no snapshot, rejected-traces record with directive + d1', false,
-        `precondition failed — terminal ${producer32.info.status} (a 'verified' here is itself a §8 violation), card=${card32?.status ?? 'none'}`)
+        `precondition failed — terminal ${producer32.info.status} (a 'verified' here is itself a §8 violation), card=${card32?.status ?? 'none'}, producer=${producer32.via}`)
     } else {
       const resolution32 = await adjudicatePending(card32.id, 'discard')
       const ws32 = await getWs()
@@ -1606,7 +1643,7 @@ async function main() {
       Number.isInteger(startLine33) && Number.isInteger(endLine33) && startLine33 >= 1 && endLine33 >= startLine33
     if (!precondition33 || !rangeOk33) {
       record('33', 'staleness: source-edit the target lines while pending, ✓ → card resolves stale, nothing written', false,
-        `${!precondition33 ? `precondition failed — terminal ${producer33.info.status} (a 'verified' here is itself a §8 violation), card=${card33?.status ?? 'none'}` : ''}${!precondition33 && !rangeOk33 ? '; ' : ''}${!rangeOk33 ? `pending call has no usable grounded range: start_line=${card33?.call?.params?.start_line}, end_line=${card33?.call?.params?.end_line}` : ''}`)
+        `${!precondition33 ? `precondition failed — terminal ${producer33.info.status} (a 'verified' here is itself a §8 violation), card=${card33?.status ?? 'none'}, producer=${producer33.via}` : ''}${!precondition33 && !rangeOk33 ? '; ' : ''}${!rangeOk33 ? `pending call has no usable grounded range: start_line=${card33?.call?.params?.start_line}, end_line=${card33?.call?.params?.end_line}` : ''}`)
     } else {
       // Source-edit exactly the grounded lines (the app's own Markdown view:
       // case-15-era interaction — view tab → textarea draft → Apply changes,
@@ -1686,7 +1723,7 @@ async function main() {
     const precondition34 = producer34.info.status === 'pending' && card34?.status === 'pending' && Boolean(card34?.id)
     if (!precondition34) {
       record('34', 'persistence (D3): reload restores the pending card with its d1 verdict', false,
-        `precondition failed — terminal ${producer34.info.status} (a 'verified' here is itself a §8 violation), card=${card34?.status ?? 'none'}`)
+        `precondition failed — terminal ${producer34.info.status} (a 'verified' here is itself a §8 violation), card=${card34?.status ?? 'none'}, producer=${producer34.via}`)
     } else {
       const verdictBefore34 = card34.d1?.verdict ?? null
       const taskBefore34 = card34.directive?.task ?? null
