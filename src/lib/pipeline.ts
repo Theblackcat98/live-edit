@@ -690,18 +690,24 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
   // remembering to label it.
   const recovered = recoverDictatedText(command, directive)
   const rawEffective = recovered ? { ...directive, verbatim: recovered } : directive
-  // Verbatim is insert-shaped: exact words to put into the note. On edit /
-  // remove tasks it is a model mislabel (battery case 6: a "$1.45M Final"
-  // value update packed as verbatim routes the harness-built add_text
-  // instead of the worker's edit_text, and d1 rightly disapproves the
-  // mismatch). Ignoring it here returns the turn to the worker, whose
-  // instruction already quotes the values. Dictation (insert/create with
-  // real quoted spans, e.g. case 8f) never takes this branch.
+  // Verbatim is insert-shaped: exact words to put into the note. A
+  // MODEL-set verbatim on edit/remove tasks is a mislabel (battery case
+  // 6: a "$1.45M Final" value update packed as verbatim routes the
+  // harness-built add_text instead of the worker's edit_text, and d1
+  // rightly disapproves the mismatch) — null it and return the turn to
+  // the worker, whose instruction already quotes the values. A RECOVERED
+  // verbatim is the harness's own finding from the command's quoted span:
+  // it always routes to the dictation call, whatever the task (battery
+  // case 8f: an add-line command the model tasked as edit still carries
+  // a dictated line — the worker would paraphrase it). Dictation with a
+  // model-set verbatim on insert/create (e.g. 8f's classic shape) flows
+  // through untouched.
   const effectiveDirective =
-    (rawEffective.task === 'edit' || rawEffective.task === 'remove') &&
-    typeof rawEffective.verbatim === 'string' &&
-    rawEffective.verbatim.trim().length > 0
-      ? { ...rawEffective, verbatim: null }
+    !recovered &&
+    (directive.task === 'edit' || directive.task === 'remove') &&
+    typeof directive.verbatim === 'string' &&
+    directive.verbatim.trim().length > 0
+      ? { ...directive, verbatim: null }
       : rawEffective
   if (effectiveDirective.verbatim === null && rawEffective.verbatim) {
     traceLocal.directive = effectiveDirective

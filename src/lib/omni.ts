@@ -50,8 +50,17 @@ import { truncate } from './utils'
 
 /** E2: outcome accuracy identical across 0/0.3/0.7; 0.3 chosen for robustness. */
 export const OMNI_TEMPERATURE = 0.3
-/** E2: one measured truncation at 500 (a create-directive cut mid-JSON) → 700. */
-export const OMNI_MAX_TOKENS = 700
+/**
+ * E2 set 700 from one truncation at 500. Live battery evidence (2026-11-10,
+ * case 8f): streamed tool-call arguments truncate at ~200 chars on :8086
+ * (reasoning build, full seed note in context) — the verbatim-carrying
+ * tail is cut mid-JSON, the call fails validation, and the repair retry's
+ * re-emission drops the quotes. 700 covers the measured E1/E2 zone but not
+ * the audio-server streaming zone; 1,000 clears the longest observed
+ * directive shape (verbatim + target + heading, ~300 chars) with headroom.
+ * Cost: a few dozen extra decode steps on the rare long call only.
+ */
+export const OMNI_MAX_TOKENS = 1000
 /** E2: keep the shipped 3,600-char note cap (cap/full was an honest no-op). */
 export const NOTE_CONTEXT_CAP_CHARS = 3_600
 /** How many prior turns the conversation model sees (shipped chat discipline). */
