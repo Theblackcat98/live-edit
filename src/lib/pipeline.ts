@@ -1273,7 +1273,7 @@ async function verifyAndExecute(
   // necessary but not sufficient — the class never executes silently, so it
   // goes to the user with d1's verdict recorded on the card.
   if (check) {
-    const collapse = sectionScaleCollapse(noteAtStart, preview.diff)
+    const collapse = sectionScaleCollapse(noteAtStart, preview.diff, call.name)
     if (collapse) {
       holdForUserDecision(
         deps,

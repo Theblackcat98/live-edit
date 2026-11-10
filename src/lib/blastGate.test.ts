@@ -50,7 +50,10 @@ describe('sectionScaleCollapse', () => {
     expect(sectionScaleCollapse(NOTE, wideExecution.diff!)).not.toBeNull()
   })
 
-  it('catches a remove_text that deletes a whole section', () => {
+  it('exempts an explicit remove_text section delete (Nick, 2026-11-10)', () => {
+    // Case 23's shape: the user asked for the section's removal and the
+    // worker grounded it with the remove tool — that executes on d1's
+    // approval; the gate only holds destruction disguised as an edit.
     const c = call('remove_text', {
       start_line: '5',
       end_line: '7',
@@ -59,7 +62,9 @@ describe('sectionScaleCollapse', () => {
     })
     const execution = executeTool(NOTE, c)
     expect(execution.ok).toBe(true)
-    expect(sectionScaleCollapse(NOTE, execution.diff!)).not.toBeNull()
+    expect(sectionScaleCollapse(NOTE, execution.diff!, 'remove_text')).toBeNull()
+    // The same diff under an edit tool stays held.
+    expect(sectionScaleCollapse(NOTE, execution.diff!, 'edit_text')).not.toBeNull()
   })
 
   it('leaves a partial-section edit alone', () => {
@@ -88,22 +93,26 @@ describe('sectionScaleCollapse', () => {
     expect(sectionScaleCollapse(NOTE, execution.diff!)).toBeNull()
   })
 
-  it('catches a bulk collapse with no heading involved', () => {
-    // remove_text has no retention rule (only the 50%-of-note cap), so a
-    // 14-line removal inside a 40-line note reaches the gate.
-    const filler = Array.from({ length: 14 }, (_, i) => `- filler line ${i + 1} with some text`).join('\n')
+  it('catches a bulk collapse with no heading involved (edit tool)', () => {
+    const filler = Array.from({ length: 14 }, (_, i) => `- filler line ${i + 1} with some text`)
     const rest = Array.from({ length: 24 }, (_, i) => `- keep line ${i + 1} with some text`).join('\n')
-    const bigNote = ['# Doc', '', filler, '', rest, ''].join('\n')
-    const c = call('remove_text', {
-      start_line: '3',
-      end_line: '16',
-      target_excerpt: filler,
-    })
-    const execution = executeTool(bigNote, c)
-    expect(execution.ok).toBe(true)
-    const verdict = sectionScaleCollapse(bigNote, execution.diff!)
+    const bigNote = ['# Doc', '', filler.join('\n'), '', rest, ''].join('\n')
+    // The diff is constructed directly: the executor's own retention rule
+    // refuses this edit before the gate would see it, but the gate is a
+    // pure function of the diff and must still classify the shape.
+    const diff = { startLine: 3, before: filler, after: ['- summary'], added: 1, removed: 14 }
+    const verdict = sectionScaleCollapse(bigNote, diff, 'edit_text')
     expect(verdict).not.toBeNull()
     expect(verdict?.reason).toContain('14 lines')
+    // The same span deleted outright via the remove tool is exempt.
+    const rm = call('remove_text', {
+      start_line: '3',
+      end_line: '16',
+      target_excerpt: filler.join('\n'),
+    })
+    const rmExecution = executeTool(bigNote, rm)
+    expect(rmExecution.ok).toBe(true)
+    expect(sectionScaleCollapse(bigNote, rmExecution.diff!, 'remove_text')).toBeNull()
   })
 
   it('ignores a small removal inside a section', () => {
