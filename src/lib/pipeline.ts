@@ -995,6 +995,19 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
     const text = omni.text ?? ''
     traceLocal.timings.chat = omni.ms
     deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
+    // No silent failures: a clarify that exists because the delegation
+    // failed validation twice (omni.repair is set only on that path) must
+    // SAY the edit failed — a bare clarifying question would read as if
+    // nothing went wrong and the note was simply not discussed.
+    if (omni.outcome === 'clarify' && omni.repair) {
+      deps.addMessage({
+        role: 'assistant',
+        kind: 'notice',
+        text: `That edit didn't go through — the instruction Omni produced failed validation (${omni.repair.error}). Nothing was changed. The question below is how to retry it.`,
+        runId: traceLocal.id,
+      })
+      deps.notify('Edit failed validation', omni.repair.error, 'error')
+    }
     settleStream(text)
     deps.speakReply(text)
     finish(omni.outcome === 'answer' ? 'conversational' : 'clarify')
@@ -1213,8 +1226,9 @@ function workerChatCall(
  * decision, the same rationale as Omni-first. A prose reply settles the
  * bubble and is spoken; a tool call becomes a Directive synthesized from the
  * command and flows through the shared verifyAndExecute tail: d1's §7
- * safety check in `worker-d1`, no d1 call at all in `lowram` (hard gates +
- * engine dry-run decide).
+ * safety check in `worker-d1`; in `lowram` there is no d1 call at all —
+ * the hard gates run, then the edit is held for the user (no decision
+ * model means no silent execution).
  */
 async function runWorkerChatFirstTurn(
   deps: PipelineDeps,
@@ -1417,9 +1431,9 @@ async function runWorkerChatFirstTurn(
   traceLocal.workerNoteView = call.noteView
   publish()
 
-  // Mode 3 runs no d1: hard gates + the engine dry-run decide, and there is
-  // no pending path (nothing may hold an edit for a decision layer that does
-  // not exist).
+  // Mode 3 runs no d1: verifyAndExecute holds the gate-passing edit for
+  // the user's decision — with no decision model running, nothing may
+  // execute silently.
   await verifyAndExecute(deps, ctx, directive, call, null, {
     d1Check: mode === 'worker-d1',
     snapshotLabel: '1.7B tool call',
@@ -1433,8 +1447,44 @@ async function runWorkerChatFirstTurn(
  * pending edit when d1 disapproves or is unavailable.
  *
  * `options.d1Check: false` is the low-RAM path: the d1 server does not run
- * in that mode, so no check is attempted and no pending edit can be created.
+ * in that mode. Silent edits are the decision model's job — with no
+ * decision model running, nothing may execute silently, so the edit is
+ * held as a pending edit for the user (the user IS the decision layer in
+ * this mode) instead of executing directly.
  */
+
+/** Hold a gate-passing call as a pending edit for the user's decision. */
+function holdForUserDecision(
+  deps: PipelineDeps,
+  ctx: TurnContext,
+  delegation: DelegationInfo,
+  delegationId: string,
+  directive: Directive,
+  call: WorkerCall,
+  diff: ExecutionDiff,
+  d1: PendingEdit['d1'],
+  confidence: number | null,
+  heldText: string,
+  notifyDetail: string,
+): void {
+  const { traceLocal, finish } = ctx
+  const pending = createPendingEdit({
+    directive,
+    call,
+    diff,
+    noteHash: noteHash(ctx.noteAtStart),
+    d1,
+  })
+  deps.addPendingEdit(pending)
+  deps.patchMessage(delegationId, {
+    delegation: { ...delegation, status: 'pending', confidence },
+  })
+  traceLocal.status = 'pending'
+  deps.addMessage({ role: 'assistant', kind: 'notice', text: heldText, runId: traceLocal.id })
+  deps.notify('Edit waiting for your decision', notifyDetail, 'neutral')
+  deps.speakReply('That edit needs your call. It is waiting under pending edits.')
+  finish('pending')
+}
 async function verifyAndExecute(
   deps: PipelineDeps,
   ctx: TurnContext,
@@ -1495,10 +1545,34 @@ async function verifyAndExecute(
     return
   }
 
+  // --- no decision model in this mode: the user decides ---------------------
+  // Low-RAM runs no d1, so there is no security layer that could approve a
+  // silent edit. The gate-passing call is held for the user instead of
+  // executing — visible, adjudicable, never silent in either direction.
+  if (!options.d1Check) {
+    holdForUserDecision(
+      deps,
+      ctx,
+      delegation,
+      delegationId,
+      directive,
+      call,
+      preview.diff,
+      {
+        verdict: 'unavailable',
+        noul: null,
+        destructiveSafety: null,
+        reason:
+          'Low-RAM mode runs no decision model (d1), so no edit executes silently in this mode — this one needs your decision.',
+      },
+      null,
+      'Low-RAM mode runs no safety-check model, so this edit is held for your decision under Pending edits instead of executing on its own. The note was not touched.',
+      'No decision model in low-RAM mode; held for adjudication.',
+    )
+    return
+  }
+
   // --- d1 safety check (design.md §7): its only job -------------------------
-  // Skipped entirely when the mode runs no d1 (low-RAM): the hard gates and
-  // the engine dry-run above are the whole decision, and no pending edit may
-  // be created for a decision layer that does not exist.
   let check: D1CheckResult | null = null
   if (options.d1Check) {
     deps.setFlowModel('d1')
@@ -1525,42 +1599,33 @@ async function verifyAndExecute(
     publish()
 
     if (check.verdict !== 'approved') {
-      const pending = createPendingEdit({
+      holdForUserDecision(
+        deps,
+        ctx,
+        delegation,
+        delegationId,
         directive,
         call,
-        diff: preview.diff,
-        noteHash: noteHash(noteAtStart),
-        d1: {
+        preview.diff,
+        {
           verdict: check.verdict,
           noul: check.noul,
           destructiveSafety: check.destructiveSafety,
           ...(check.reason ? { reason: check.reason } : {}),
         },
-      })
-      deps.addPendingEdit(pending)
-      deps.patchMessage(delegationId, {
-        delegation: { ...delegation, status: 'pending', confidence: check.noul },
-      })
-      traceLocal.status = 'pending'
-      const held =
+        check.noul,
         check.verdict === 'unavailable'
           ? 'The safety check was unavailable, so this edit is held for your decision rather than decided automatically. It is waiting under Pending edits — the note was not touched.'
-          : 'The safety check disapproved this edit, but it passed every deterministic gate, so it is held for your decision under Pending edits instead of being dropped. The note was not touched.'
-      deps.addMessage({ role: 'assistant', kind: 'notice', text: held, runId: traceLocal.id })
-      deps.notify(
-        'Edit waiting for your decision',
+          : 'The safety check disapproved this edit, but it passed every deterministic gate, so it is held for your decision under Pending edits instead of being dropped. The note was not touched.',
         check.verdict === 'unavailable'
           ? 'd1 unavailable; held for adjudication.'
           : 'd1 disapproved; held for adjudication.',
-        'neutral',
       )
-      deps.speakReply('That edit needs your call. It is waiting under pending edits.')
-      finish('pending')
       return
     }
   }
 
-  // --- approved (or no d1 in this mode): execute ------------------------------
+  // --- d1 approved: execute (the silent path, guarded by the decision model) --
   const confidence = check?.noul ?? null
   deps.setStageStates({ A: 'done', B: 'done', C: options.d1Check ? 'done' : 'skipped' })
   deps.patchMessage(delegationId, {

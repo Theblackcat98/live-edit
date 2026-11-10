@@ -159,6 +159,11 @@ export const DELEGATE_EDIT_TOOL: ToolDef = {
             description: { type: 'string', description: 'Where the change belongs.' },
             heading: { type: ['string', 'null'], description: 'Section heading, or null.' },
           },
+          // Aligned with validateDirective (directive.ts): a target that is
+          // present MUST carry a non-empty description — the validator
+          // hard-rejects one without it, so the schema must say so, or
+          // valid-looking calls die in repair/clarify loops.
+          required: ['description'],
           description: 'Optional: where in the note the change belongs. The worker grounds the exact span.',
         },
         verbatim: {

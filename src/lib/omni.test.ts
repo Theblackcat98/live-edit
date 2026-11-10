@@ -569,6 +569,15 @@ describe('OMNI_SYSTEM_PROMPT — the battery gate run 1 contract', () => {
     expect(taskDescription).toMatch(/edit = change existing content in place/)
   })
 
+  it('(a2) the delegate_edit target schema requires description, aligned with validateDirective', () => {
+    const target = (
+      DELEGATE_EDIT_TOOL.function.parameters.properties as {
+        target: { required?: string[] }
+      }
+    ).target
+    expect(target.required).toEqual(['description'])
+  })
+
   it('(b) conversation is the default; a change request is an action, never a chat topic', () => {
     expect(OMNI_SYSTEM_PROMPT).toMatch(/conversation is the default/)
     expect(OMNI_SYSTEM_PROMPT).toMatch(/not a conversation topic — it is an action/)
