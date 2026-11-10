@@ -60,9 +60,10 @@ export interface PendingEditInput {
   /** Hash of the note the call was authored against; staleness compares against the current note. */
   noteHash: string
   /**
-   * The d1 result that routed this call here. Only `disapproved`/`unavailable`
-   * can appear (an approved call executes directly and never becomes a
-   * pending edit); the narrowed type makes an 'approved' verdict unrepresentable.
+   * The d1 result that routed this call here. Normally `disapproved` or
+   * `unavailable` (an approved call executes directly); `approved` appears
+   * only for a §8 blast-radius hold (issue #58), where the harness — not
+   * d1 — routed the call to adjudication.
    */
   d1: PendingEdit['d1']
   /**
@@ -358,7 +359,8 @@ function parseDiff(raw: unknown): ExecutionDiff | null {
 
 function parseD1(raw: unknown): PendingEdit['d1'] | null {
   if (!isRecord(raw)) return null
-  if (raw.verdict !== 'disapproved' && raw.verdict !== 'unavailable') return null
+  if (raw.verdict !== 'approved' && raw.verdict !== 'disapproved' && raw.verdict !== 'unavailable')
+    return null
   if (raw.noul !== null && !isFiniteNumber(raw.noul)) return null
   const safety = raw.destructiveSafety
   if (safety !== null && safety !== 'safe' && safety !== 'unintended_data_loss') return null
