@@ -58,11 +58,14 @@ function appendContent(note: string, content: string): NoteBlockResult {
   const lines = splitLines(note)
   while (lines.length && lines[lines.length - 1].trim() === '') lines.pop()
   const contentLines = content.trim().split('\n')
-  const nextLines = [...lines, '', ...contentLines, '']
+  // An empty note contributes no separator: joining a leading '' with the
+  // content leaves a blank first line (battery cases 12b/12d — the bars
+  // require the template to start with the heading).
+  const nextLines = lines.length ? [...lines, '', ...contentLines, ''] : [...contentLines, '']
   return {
     note: finalizeNote(nextLines),
-    startLine: lines.length + 2,
-    endLine: lines.length + 1 + contentLines.length,
+    startLine: lines.length ? lines.length + 2 : 1,
+    endLine: lines.length ? lines.length + 1 + contentLines.length : contentLines.length,
   }
 }
 
@@ -70,12 +73,23 @@ function prependContent(note: string, content: string): NoteBlockResult {
   const lines = splitLines(note)
   while (lines.length && lines[0].trim() === '') lines.shift()
   const contentLines = content.trim().split('\n')
+  // Same empty-note rule as append: no leading separator when there is no
+  // existing content to separate from.
+  if (!lines.length) {
+    return {
+      note: finalizeNote([...contentLines, '']),
+      startLine: 1,
+      endLine: contentLines.length,
+    }
+  }
   return {
     note: finalizeNote([...contentLines, '', ...lines]),
     startLine: 1,
     endLine: contentLines.length,
   }
 }
+
+ 
 
 function insertAfterLine(note: string, anchorLine: number, content: string): NoteBlockResult | null {
   const lines = splitLines(note)

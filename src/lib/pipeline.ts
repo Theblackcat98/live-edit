@@ -717,7 +717,7 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
   // scaffolding, not content: the worker still authors every word. Only
   // fires on create-task README-template commands without a section
   // already named, so real user briefs are never rewritten.
-  const scaffolded = scaffoldTemplateBrief(command, rawEffective)
+  const scaffolded = scaffoldTemplateBrief(command, rawEffective, noteAtStart)
   const scaffoldNote =
     scaffolded !== rawEffective
       ? 'Template scaffold: the §13.1 section vocabulary appended to the brief (the model echoed the command instead of packing it).'

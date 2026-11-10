@@ -27,6 +27,27 @@ describe('scaffoldTemplateBrief (design.md §13.1)', () => {
     ).toBe(directive)
   })
 
+
+  it('names the Untitled placeholder as replaced when the note holds only it (case 27b)', () => {
+    const out = scaffoldTemplateBrief(
+      'write a README template document to begin',
+      createDirective('Write a README template document to begin'),
+      '# Untitled\n\n',
+    )
+    expect(out.instruction).toContain('"Overview"')
+    expect(out.instruction).toContain('# Untitled')
+    expect(out.instruction).toMatch(/replace/i)
+  })
+
+  it('does not name the placeholder for a non-empty note', () => {
+    const out = scaffoldTemplateBrief(
+      'write a README template document to begin',
+      createDirective('Write a README template document to begin'),
+      '# Q3 Business Review\n\nBody.',
+    )
+    expect(out.instruction).not.toContain('# Untitled')
+  })
+
   it('fires only on create-task README-template commands', () => {
     const bare = createDirective('Write a README template document to begin')
     // Non-create task: untouched.

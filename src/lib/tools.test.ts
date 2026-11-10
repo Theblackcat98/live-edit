@@ -5,7 +5,7 @@ import { lineRangeExcerpt } from './doc'
 import { executeTool } from './tools'
 import { renderToolCallXml } from './worker'
 
-function makeCall(name: 'edit_text' | 'remove_text', params: Record<string, string>): WorkerCall {
+function makeCall(name: 'edit_text' | 'remove_text' | 'add_text', params: Record<string, string>): WorkerCall {
   return {
     name,
     params,
@@ -155,5 +155,40 @@ describe('executeTool: unchanged good paths (regression)', () => {
       target_excerpt: 'whatever',
     })
     expect(executeTool(INITIAL_NOTE, outOfBounds).ok).toBe(false)
+  })
+})
+describe('executeTool: inserts into an empty note start at the first line', () => {
+  // Battery cases 12b/12d: a template authored into an empty document must
+  // start with the heading — the bars require startsWith('# …'). An empty
+  // note contributes no separator blanks: joining ['', '', content] leaves
+  // a leading blank line the bar reads as a miss.
+  function addCall(content: string, position = 'append', anchor?: string) {
+    return makeCall('add_text', {
+      file_path: 'notes/quarterly-review.md',
+      position,
+      ...(anchor ? { anchor } : {}),
+      content,
+    })
+  }
+
+  it('append into an empty note starts with the content', () => {
+    const result = executeTool('', addCall('# Changelog Template\n\n- Version: [TBD]'))
+    expect(result.ok).toBe(true)
+    expect(result.note.startsWith('# Changelog Template')).toBe(true)
+  })
+
+  it('prepend into an empty note starts with the content', () => {
+    const result = executeTool(
+      '',
+      addCall('# README\n\n## Overview\n\nText.', 'prepend'),
+    )
+    expect(result.ok).toBe(true)
+    expect(result.note.startsWith('# README')).toBe(true)
+  })
+
+  it('append into a non-empty note still separates with a blank line', () => {
+    const result = executeTool('Existing line.\n', addCall('- New bullet.'))
+    expect(result.ok).toBe(true)
+    expect(result.note).toContain('Existing line.\n\n- New bullet.')
   })
 })
