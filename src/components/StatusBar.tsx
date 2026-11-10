@@ -6,6 +6,7 @@ interface StatusBarProps {
   stage: PipelineStage
   trace: Trace | null
   micOn: boolean
+  micActive: boolean
   asrBusy: boolean
   runtimeHealth: RuntimeHealth | null
 }
@@ -47,13 +48,20 @@ function formatMs(value: number | undefined): string {
   return value < 10 ? `${value.toFixed(1)} ms` : `${Math.round(value)} ms`
 }
 
-export function StatusBar({ stage, trace, micOn, asrBusy, runtimeHealth }: StatusBarProps) {
+export function StatusBar({ stage, trace, micOn, micActive, asrBusy, runtimeHealth }: StatusBarProps) {
   const active = stage !== 'idle' && stage !== 'complete'
   const upCount = runtimeHealth?.endpoints.filter((endpoint) => endpoint.up).length ?? 0
   const totalEndpoints = runtimeHealth?.endpoints.length ?? 4
   const liveTone =
     !runtimeHealth ? 'statusbar-muted' : upCount === totalEndpoints ? 'is-green' : 'is-orange'
-  const micLabel = asrBusy ? 'Omni · transcribing' : micOn ? 'REC 16 kHz' : 'MIC standby'
+  // Honest three-state: a turn between utterances is not a live capture.
+  const micLabel = asrBusy
+    ? 'Omni · transcribing'
+    : micActive
+      ? 'REC 16 kHz'
+      : micOn
+        ? 'MIC hands-free'
+        : 'MIC standby'
   return (
     <footer className="statusbar">
       <div className="statusbar-left">

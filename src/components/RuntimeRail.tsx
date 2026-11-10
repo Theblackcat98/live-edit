@@ -25,7 +25,9 @@ import type {
   Trace,
 } from '../types'
 import { MODELS, MEMORY_BUDGET_GB, TOTAL_MEMORY_GB } from '../data/models'
+import { runModeInfo, type RunMode } from '../lib/runmode'
 import { cx, formatP, relativeTime, truncate } from '../lib/utils'
+import { ModeSwitch } from './ModeSwitch'
 
 interface RuntimeRailProps {
   activeModel: 'omni' | 'd1' | 'worker' | null
@@ -40,6 +42,10 @@ interface RuntimeRailProps {
   openTrace: () => void
   runtimeHealth: RuntimeHealth | null
   refreshRuntime: () => Promise<void>
+  /** Active run mode, surfaced in the Runtime truth card. */
+  mode: RunMode
+  /** Switches the run mode; the runtime-card control is the phone surface's entry point. */
+  onSetMode: (mode: RunMode) => void
 }
 
 function formatContext(value: number): string {
@@ -209,12 +215,17 @@ function RuntimeWiringCard({
   runtimeHealth,
   refreshRuntime,
   trace,
+  mode,
+  onSetMode,
 }: {
   runtimeHealth: RuntimeHealth | null
   refreshRuntime: () => Promise<void>
   trace: Trace | null
+  mode: RunMode
+  onSetMode: (mode: RunMode) => void
 }) {
   const [refreshing, setRefreshing] = useState(false)
+  const modeInfo = runModeInfo(mode)
   const up = (id: 'omni' | 'd1omni' | 'text'): boolean =>
     runtimeHealth?.endpoints.some((endpoint) => endpoint.id === id && endpoint.up) ?? false
 
@@ -256,6 +267,22 @@ function RuntimeWiringCard({
       </header>
 
       <div className="wiring-rows">
+        <div className="wiring-row" title={modeInfo.description}>
+          <span className="wiring-badge is-engine">MODE</span>
+          <span className="wiring-label">Run mode</span>
+          <span className="wiring-target mono">{modeInfo.label}</span>
+        </div>
+        {/* Phone surface (TopBar's control is hidden there): the same
+            three-state switch, wired to the same setMode. */}
+        <div className="wiring-mode-row">
+          <ModeSwitch
+            mode={mode}
+            onSetMode={onSetMode}
+            testId="mode-switch-runtime"
+            buttonTestIdPrefix="mode-rt"
+            className="runtime-mode-switch"
+          />
+        </div>
         {WIRING_SURFACES.map((surface) => {
           const verdict = wiringVerdict(surface, trace)
           // The health probe is real data, but it is availability — not what
@@ -695,6 +722,8 @@ export function RuntimeRail({
   openTrace,
   runtimeHealth,
   refreshRuntime,
+  mode,
+  onSetMode,
 }: RuntimeRailProps) {
   return (
     <>
@@ -703,6 +732,8 @@ export function RuntimeRail({
         runtimeHealth={runtimeHealth}
         refreshRuntime={refreshRuntime}
         trace={trace}
+        mode={mode}
+        onSetMode={onSetMode}
       />
       <SupervisorCard trace={trace} stageStates={stageStates} openTrace={openTrace} />
       <ContextCard usage={contextUsage} trace={trace} />

@@ -39,6 +39,13 @@ const ASR_MAX_GAIN = 31.6
 export interface VoiceRecorderOptions {
   /** Fired when the recorder auto-stops after trailing silence. */
   onAutoStop?: () => void
+  /**
+   * Fired exactly once per capture, when voice onset latches (`sawVoice`
+   * flips true). Hands-free listening uses it for barge-in: talking over a
+   * spoken reply cuts the playback; the VAD's own stop still decides when
+   * this utterance is over.
+   */
+  onVoiceStart?: () => void
   onError?: (message: string) => void
 }
 
@@ -87,15 +94,24 @@ export class VoiceRecorder {
     this.recordingStartedAt = performance.now()
     this.lastVoiceAt = this.recordingStartedAt
 
-    const AudioContextClass = window.AudioContext
-    this.context = new AudioContextClass()
-    if (this.context.state === 'suspended') await this.context.resume()
-    this.source = this.context.createMediaStreamSource(stream)
-    this.processor = this.context.createScriptProcessor(4096, 1, 1)
-    this.processor.onaudioprocess = (event) => this.ingest(event.inputBuffer.getChannelData(0))
-    this.source.connect(this.processor)
-    // ScriptProcessor only runs when connected to the graph.
-    this.processor.connect(this.context.destination)
+    // If any of the graph setup below throws, the stream obtained above must
+    // not outlive the failed start: a hands-free re-arm discards this
+    // recorder before it ever reaches recorderRef, so nothing else could
+    // stop the track.
+    try {
+      const AudioContextClass = window.AudioContext
+      this.context = new AudioContextClass()
+      if (this.context.state === 'suspended') await this.context.resume()
+      this.source = this.context.createMediaStreamSource(stream)
+      this.processor = this.context.createScriptProcessor(4096, 1, 1)
+      this.processor.onaudioprocess = (event) => this.ingest(event.inputBuffer.getChannelData(0))
+      this.source.connect(this.processor)
+      // ScriptProcessor only runs when connected to the graph.
+      this.processor.connect(this.context.destination)
+    } catch (error) {
+      this.teardown()
+      throw error
+    }
   }
 
   private ingest(input: Float32Array): void {
@@ -137,6 +153,7 @@ export class VoiceRecorder {
       this.aboveGateRun += 1
       if (!this.sawVoice && this.aboveGateRun >= VOICE_ONSET_BLOCKS) {
         this.sawVoice = true
+        this.options.onVoiceStart?.()
       }
       if (this.sawVoice) this.lastVoiceAt = now
     } else {

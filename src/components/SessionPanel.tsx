@@ -13,9 +13,12 @@ import {
   Square,
   StopCircle,
   Table2,
+  Video,
+  VideoOff,
 } from 'lucide-react'
 import type { Message, Suggestion } from '../types'
 import { cx, formatElapsed } from '../lib/utils'
+import type { RunMode } from '../lib/runmode'
 import type { PendingEdit } from '../types'
 import { MessageBubble } from './MessageBubble'
 import { PendingEditCard } from './PendingEditCard'
@@ -25,6 +28,7 @@ interface SessionPanelProps {
   elapsedSeconds: number
   busy: boolean
   micOn: boolean
+  micActive: boolean
   asrBusy: boolean
   demoRunning: boolean
   speaking: boolean
@@ -42,6 +46,11 @@ interface SessionPanelProps {
   pendingEdits: PendingEdit[]
   onApplyPending: (id: string) => void
   onDismissPending: (id: string) => void
+  /** Attach scene frames to model turns (Omni mode). */
+  videoOn: boolean
+  onToggleVideo: () => void
+  /** Active run mode — decides the composer hint and placeholder honestly. */
+  mode: RunMode
   /** Desktop/tablet keeps the composer inside the session card; the phone
    * surface renders the same form as a persistent command bar instead. */
   showComposer?: boolean
@@ -50,11 +59,27 @@ interface SessionPanelProps {
 interface SessionComposerProps {
   busy: boolean
   micOn: boolean
+  micActive: boolean
   asrBusy: boolean
   commandInput: string
   onInputChange: (value: string) => void
   onSubmit: (command: string) => void
   onToggleMic: () => void
+  /** Active run mode (mic availability and placeholder wording). */
+  mode: RunMode
+}
+
+/** Where voice/speech actually go in each mode — never a claim of an unused server. */
+const MODE_HINTS: Record<RunMode, string> = {
+  omni: 'Voice is transcribed by LFM3-Omni-2B on 127.0.0.1:8083',
+  'worker-d1': 'Voice and speech use d1-Omni-2B on 127.0.0.1:8085 · LFM3-1.7B answers chat',
+  lowram: 'Voice needs an Omni server — type instead',
+}
+
+const MODE_PLACEHOLDERS: Record<RunMode, string> = {
+  omni: 'Ask Omni to change something…',
+  'worker-d1': 'Ask the 1.7B to change something…',
+  lowram: 'Type a command for the 1.7B…',
 }
 
 const SUGGESTION_ICONS = {
@@ -69,6 +94,7 @@ export function SessionPanel({
   elapsedSeconds,
   busy,
   micOn,
+  micActive,
   asrBusy,
   demoRunning,
   speaking,
@@ -85,6 +111,9 @@ export function SessionPanel({
   pendingEdits,
   onApplyPending,
   onDismissPending,
+  videoOn,
+  onToggleVideo,
+  mode,
   showComposer = true,
 }: SessionPanelProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -123,6 +152,28 @@ export function SessionPanel({
         </div>
         <span className="session-clock mono">{formatElapsed(elapsedSeconds)}</span>
         <div className="card-header-spacer" />
+        <button
+          type="button"
+          className={cx('button button-quiet session-demo session-video', !videoOn && 'is-off')}
+          onClick={onToggleVideo}
+          aria-pressed={videoOn}
+          aria-label={
+            mode !== 'omni'
+              ? 'Frames toggle — Omni mode only, this mode attaches no frame'
+              : videoOn
+                ? 'Stop attaching frames to model turns'
+                : 'Attach the scene frame to model turns again'
+          }
+          title={
+            mode !== 'omni'
+              ? 'Omni mode only — this mode never attaches frames. The toggle still decides what an Omni turn would send.'
+              : videoOn
+                ? 'Frames are attached to Omni chat turns — click to send none'
+                : 'Frames are not sent to models — click to attach the scene frame again'
+          }
+        >
+          {videoOn ? <Video size={11} /> : <VideoOff size={11} />}
+        </button>
         <button
           type="button"
           className={cx('button button-quiet session-demo', speaking || ttsBusy ? 'is-running' : '')}
@@ -208,16 +259,18 @@ export function SessionPanel({
           <SessionComposer
             busy={busy}
             micOn={micOn}
+            micActive={micActive}
             asrBusy={asrBusy}
             commandInput={commandInput}
             onInputChange={onInputChange}
             onSubmit={onSubmit}
             onToggleMic={onToggleMic}
+            mode={mode}
           />
         )}
 
         <div className="composer-hint">
-          <span>Voice is transcribed by LFM3-Omni-2B on 127.0.0.1:8083</span>
+          <span>{MODE_HINTS[mode]}</span>
           <span className="mono">Enter to send</span>
         </div>
       </div>
@@ -228,15 +281,18 @@ export function SessionPanel({
 export function SessionComposer({
   busy,
   micOn,
+  micActive,
   asrBusy,
   commandInput,
   onInputChange,
   onSubmit,
   onToggleMic,
+  mode,
 }: SessionComposerProps) {
   const isMac =
     typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
   const shortcut = isMac ? '⌘K' : 'Ctrl K'
+  const voiceAvailable = mode !== 'lowram'
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault()
@@ -247,10 +303,16 @@ export function SessionComposer({
 
   return (
     <form
-      className={cx('composer', micOn && 'is-listening', busy && 'is-busy', asrBusy && 'is-transcribing')}
+      className={cx(
+        'composer',
+        micActive && 'is-listening',
+        busy && 'is-busy',
+        asrBusy && 'is-transcribing',
+      )}
       onSubmit={handleSubmit}
       data-testid="composer"
-      data-capturing={micOn ? 'true' : 'false'}
+      data-capturing={micActive ? 'true' : 'false'}
+      data-mic-on={micOn ? 'true' : 'false'}
       data-transcribing={asrBusy ? 'true' : 'false'}
     >
       <button
@@ -258,12 +320,29 @@ export function SessionComposer({
         className={cx('composer-mic', micOn && 'is-active', asrBusy && 'is-busy')}
         onClick={onToggleMic}
         disabled={busy || asrBusy}
-        aria-label={asrBusy ? 'Omni is transcribing' : micOn ? 'Stop and transcribe' : 'Speak a command'}
-        title={asrBusy ? 'LFM3-Omni-2B is transcribing…' : micOn ? 'Stop and transcribe' : 'Speak a command'}
+        aria-pressed={micOn}
+        aria-label={
+          !voiceAvailable
+            ? 'Voice unavailable in low-RAM mode'
+            : asrBusy
+              ? 'Omni is transcribing'
+              : micOn
+                ? 'Turn off hands-free listening'
+                : 'Start hands-free listening'
+        }
+        title={
+          !voiceAvailable
+            ? 'Low-RAM mode runs only LFM3-1.7B — type instead'
+            : asrBusy
+              ? 'LFM3-Omni-2B is transcribing…'
+              : micOn
+                ? 'Hands-free on — each utterance is transcribed; tap to stop listening'
+                : 'Start hands-free listening — every utterance is transcribed until you tap stop'
+        }
         data-testid="composer-mic"
       >
         {asrBusy ? <LoaderCircle size={15} className="spin" /> : micOn ? <Mic size={15} /> : <MicOff size={15} />}
-        {micOn && <span className="composer-mic-ring" aria-hidden="true" />}
+        {micActive && <span className="composer-mic-ring" aria-hidden="true" />}
       </button>
       <input
         id="command-input"
@@ -273,11 +352,13 @@ export function SessionComposer({
         placeholder={
           asrBusy
             ? 'Omni is transcribing your capture…'
-            : micOn
-              ? 'Listening… speak, then pause or tap the mic'
+            : micActive
+              ? 'Listening — speak, then pause. Tap the mic to turn off.'
               : busy
                 ? 'Worker is applying a verified edit…'
-                : 'Ask Omni to change something…'
+                : micOn
+                  ? 'Starting the microphone…'
+                  : MODE_PLACEHOLDERS[mode]
         }
         disabled={busy}
         autoComplete="off"

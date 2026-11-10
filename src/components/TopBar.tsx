@@ -8,7 +8,9 @@ import {
   VolumeX,
 } from 'lucide-react'
 import { LogoMark } from './LogoMark'
+import { ModeSwitch } from './ModeSwitch'
 import { TOTAL_MEMORY_GB } from '../data/models'
+import type { RunMode } from '../lib/runmode'
 import { cx, formatElapsed } from '../lib/utils'
 
 interface TopBarProps {
@@ -18,6 +20,9 @@ interface TopBarProps {
   speakerOn: boolean
   micOn: boolean
   traceAvailable: boolean
+  /** Active run mode (which local models serve chat and edits). */
+  mode: RunMode
+  onSetMode: (mode: RunMode) => void
   onToggleSpeaker: () => void
   onToggleMic: () => void
   onOpenTrace: () => void
@@ -31,6 +36,8 @@ export function TopBar({
   speakerOn,
   micOn,
   traceAvailable,
+  mode,
+  onSetMode,
   onToggleSpeaker,
   onToggleMic,
   onOpenTrace,
@@ -62,6 +69,10 @@ export function TopBar({
 
       <div className="topbar-spacer" />
 
+      <ModeSwitch mode={mode} onSetMode={onSetMode} />
+
+      <div className="topbar-divider" />
+
       <div className="trinity-summary" title="Simulated LFM3 residency · three models sharing a 24-layer tri-hybrid backbone">
         <span className="trinity-pips" aria-hidden="true">
           <span className="trinity-pip pip-green" />
@@ -85,8 +96,21 @@ export function TopBar({
           type="button"
           className={cx('icon-button', micOn && 'is-active')}
           onClick={onToggleMic}
-          aria-label={micOn ? 'Stop voice capture' : 'Start voice capture'}
-          title={micOn ? 'Stop voice capture' : 'Speak a command'}
+          aria-pressed={micOn}
+          aria-label={
+            mode === 'lowram'
+              ? 'Voice unavailable in low-RAM mode'
+              : micOn
+                ? 'Turn off hands-free listening'
+                : 'Start hands-free listening'
+          }
+          title={
+            mode === 'lowram'
+              ? 'Low-RAM mode runs only LFM3-1.7B — type instead'
+              : micOn
+                ? 'Hands-free on — speak naturally; tap to stop listening'
+                : 'Start hands-free listening — every utterance is transcribed until you tap stop'
+          }
         >
           {micOn ? <Mic size={15} /> : <MicOff size={15} />}
         </button>

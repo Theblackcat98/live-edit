@@ -51,6 +51,12 @@
   height: 19px;
 }
 
+/* Video off: the stage still shows its source, but no frame is model-visible. */
+.visual-frames-off {
+  color: var(--ink-3);
+  letter-spacing: 0.01em;
+}
+
 /* ── Camera stage ──────────────────────────────────────────────────────── */
 
 .camera-stage {

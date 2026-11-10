@@ -31,6 +31,18 @@
   box-shadow: none;
 }
 
+/* Frames toggle: off is a muted, honest state — no frame reaches a model.
+   Icon-only (aria-pressed + title carry the state) so four actions still fit
+   beside the session clock at every column width. */
+.session-video {
+  width: 26px;
+  padding: 0;
+}
+
+.session-video.is-off {
+  color: var(--ink-3);
+}
+
 .session-transcript {
   flex: 1;
   min-height: 0;

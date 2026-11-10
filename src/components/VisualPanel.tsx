@@ -25,10 +25,15 @@ const FRAME_INTERVAL_MS = 1000
 interface VisualPanelProps {
   bbox: BBoxTarget | null
   stage: PipelineStage
+  /** Hands-free toggle (may be on while no recorder is live between utterances). */
   micOn: boolean
+  /** True only while a recorder is actually capturing. */
+  micActive: boolean
   speaking: boolean
   getMicLevel: () => number
   elapsedSeconds: number
+  /** False when model turns attach no frame — the stage must say so. */
+  videoOn: boolean
 }
 
 interface RoiRect {
@@ -42,9 +47,11 @@ export function VisualPanel({
   bbox,
   stage,
   micOn,
+  micActive,
   speaking,
   getMicLevel,
   elapsedSeconds,
+  videoOn,
 }: VisualPanelProps) {
   const [source, setSource] = useState<SourceId>('camera')
   const [stream, setStream] = useState<MediaStream | null>(null)
@@ -66,7 +73,7 @@ export function VisualPanel({
     stage === 'generating' ||
     stage === 'verifying' ||
     stage === 'executing'
-  const waveMode: WaveMode = micOn
+  const waveMode: WaveMode = micActive
     ? 'listening'
     : speaking
       ? 'speaking'
@@ -215,9 +222,13 @@ export function VisualPanel({
       setStreamKind(kind)
       setSource(kind)
       setNotice(
-        kind === 'camera'
-          ? 'Camera live. Snapshots now feed routing and vision; stop to fall back to the synthetic slide.'
-          : 'Screen live. Snapshots now feed routing and vision; stop to fall back to the synthetic slide.',
+        !videoOn
+          ? kind === 'camera'
+            ? 'Camera live on this panel only — video is off, so no frame is sent to models.'
+            : 'Screen live on this panel only — video is off, so no frame is sent to models.'
+          : kind === 'camera'
+            ? 'Camera live. Snapshots now feed routing and vision; stop to fall back to the synthetic slide.'
+            : 'Screen live. Snapshots now feed routing and vision; stop to fall back to the synthetic slide.',
       )
       const track = media.getVideoTracks()[0]
       if (track) {
@@ -276,7 +287,16 @@ export function VisualPanel({
           </button>
         </div>
         <div className="card-header-spacer" />
-        <span className="chip chip-ghost">1 fps</span>
+        {videoOn ? (
+          <span className="chip chip-ghost">1 fps</span>
+        ) : (
+          <span
+            className="chip chip-ghost visual-frames-off"
+            title="Video is off: no frame is resolved or attached to model turns."
+          >
+            Not sent to models
+          </span>
+        )}
       </header>
 
       <div
@@ -387,13 +407,21 @@ export function VisualPanel({
           <span
             className={cx(
               'status-dot',
-              micOn && 'is-green is-pulsing',
+              micActive && 'is-green is-pulsing',
               speaking && 'is-accent is-pulsing',
-              !micOn && !speaking && stageActive && 'is-accent is-pulsing',
+              !micActive && !speaking && stageActive && 'is-accent is-pulsing',
             )}
           />
           <span className="stage-wave-mode">
-            {micOn ? 'Listening' : speaking ? 'Omni speaking' : stageActive ? 'Working' : 'Ambient'}
+            {micActive
+              ? 'Listening'
+              : speaking
+                ? 'Omni speaking'
+                : stageActive
+                  ? 'Working'
+                  : micOn
+                    ? 'Hands-free'
+                    : 'Ambient'}
           </span>
           <span className="stage-wave-time mono">{formatElapsed(elapsedSeconds)}</span>
         </div>
@@ -410,7 +438,11 @@ export function VisualPanel({
               : 'Synthetic slide indexed'}
           </span>
           <span className="perception-meta mono">
-            {isLive ? 'LIVE → VISION' : 'SYNTHETIC FALLBACK'}
+            {!videoOn
+              ? 'FRAMES OFF'
+              : isLive
+                ? 'LIVE → VISION'
+                : 'SYNTHETIC FALLBACK'}
           </span>
         </div>
         <div className="perception-status">

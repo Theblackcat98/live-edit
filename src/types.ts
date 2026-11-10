@@ -1,3 +1,5 @@
+import type { RunMode } from './lib/runmode'
+
 export type ToolName =
   | 'add_text'
   | 'edit_text'
@@ -232,6 +234,8 @@ export interface Trace {
   at: number
   command: string
   source: 'voice' | 'text' | 'demo'
+  /** Run mode that served this turn (worker-chat modes only; absent on Omni-first/legacy traces). */
+  runMode?: RunMode
   /** Omni's typed delegation directive (P2+; absent on legacy/supervisor-first traces). */
   directive?: Directive
   route?: RouteDecision
@@ -292,6 +296,8 @@ export interface Message {
   role: 'user' | 'assistant' | 'system' | 'tool'
   text: string
   at: number
+  /** Who authored an assistant bubble (defaults to 'Omni 2B'; worker-chat modes label the 1.7B). */
+  author?: string
   kind?: 'greeting' | 'ack' | 'result' | 'clarify' | 'error' | 'notice'
   source?: 'voice' | 'text' | 'demo'
   durationSec?: number

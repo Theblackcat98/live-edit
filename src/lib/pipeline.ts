@@ -28,6 +28,7 @@ import type {
   BBoxTarget,
   ContextUsage,
   CriticResult,
+  D1CheckResult,
   DelegationInfo,
   Directive,
   ExecutionDiff,
@@ -82,6 +83,8 @@ import { routeFromAnswers } from './route'
 import { executeTool } from './tools'
 import { OMNI_FIRST } from './flags'
 import { runOmniTurn, type OmniHistoryTurn } from './omni'
+import { runWorkerChatTurn, WORKER_CHAT_SAMPLER, type WorkerChatTurnResult } from './workerChat'
+import type { RunMode } from './runmode'
 import { buildD1State, buildWorkerPacket, noteHash } from './context'
 import { runHardGates } from './gates'
 import { runD1Check } from './d1check'
@@ -127,6 +130,18 @@ export interface PipelineDeps {
   messagesRef: { current: Message[] }
   /** Latest runtime health; decides which model paths go live instead of fallback. */
   healthRef: { current: RuntimeHealth | null }
+  /**
+   * Active run mode, kept current by the hook. Read once at turn start: a
+   * switch mid-turn must never change the in-flight turn's models.
+   */
+  modeRef: { current: RunMode }
+  /**
+   * Video toggle, kept current by the hook. When false, a turn resolves no
+   * scene frame at all: Omni/vision calls run text-only and the trace records
+   * `frameSource: 'none'`. Read at each resolution site, so a toggle mid-turn
+   * only affects frames not yet attached.
+   */
+  videoEnabledRef: { current: boolean }
   /** Where the last voice capture was transcribed; recorded on the run's trace. */
   asrSourceRef: { current: RuntimeSource }
   /** Duration of the last voice capture, recorded on the user message. */
@@ -704,8 +719,15 @@ export async function runPipelineTurn(
   const ctx: TurnContext = { command, noteAtStart, traceLocal, runtime, liveUsage, publish, finish }
 
   try {
+    // Captured once at turn start: a mode switch mid-turn must never swap the
+    // models under an in-flight turn.
+    const mode = deps.modeRef.current
     if (OMNI_FIRST) {
-      await runOmniFirstTurn(deps, ctx)
+      if (mode === 'omni') {
+        await runOmniFirstTurn(deps, ctx)
+        return
+      }
+      await runWorkerChatFirstTurn(deps, ctx, mode)
       return
     }
 
@@ -854,7 +876,13 @@ function recordOmniRejection(
     {
       at: Date.now(),
       command: ctx.command,
-      route: { tool: call.name, provenance: 'omni-first pipeline' },
+      route: {
+        tool: call.name,
+        provenance:
+          ctx.traceLocal.runMode && ctx.traceLocal.runMode !== 'omni'
+            ? 'worker-chat run mode'
+            : 'omni-first pipeline',
+      },
       spanCandidates: [],
       grounding: { source: 'worker-self' },
       workerXml: call.xml,
@@ -878,7 +906,13 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
   deps.setFlowModel('omni')
   deps.setStage('routing')
 
-  const frame = await resolveSceneFrame('full').catch(() => null)
+  // Video toggle: OFF means this turn resolves no frame at all — Omni gets a
+  // text-only turn (its prompt says so verbatim), and the d1 check below
+  // receives no image. `resolveSceneFrame` is never called, so nothing is
+  // even rasterized.
+  const frame = deps.videoEnabledRef.current
+    ? await resolveSceneFrame('full').catch(() => null)
+    : null
   traceLocal.frameSource = frame?.source ?? 'none'
 
   const history = buildOmniHistory(deps.messagesRef.current, deps.runsRef.current)
@@ -1136,11 +1170,270 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
   await verifyAndExecute(deps, ctx, directive, call, frame)
 }
 
+/** The directive task that matches a tool the 1.7B already chose (task only). */
+const TASK_FOR_TOOL: Record<ToolName, Directive['task']> = {
+  add_text: 'insert',
+  edit_text: 'edit',
+  remove_text: 'remove',
+  extract_visual_to_note: 'extract',
+}
+
+/** Honest WorkerCall provenance for a live 1.7B chat-turn decode. */
+function workerChatCall(
+  parsed: ParsedToolCall,
+  reasoning: string,
+  ms: number,
+  promptTokens: number,
+  outputTokens: number,
+  note: string,
+): WorkerCall {
+  return {
+    name: parsed.name,
+    params: parsed.params,
+    thought:
+      parsed.think ??
+      (reasoning.trim() || `Worker emitted ${parsed.name} from the chat turn.`),
+    xml: renderToolCallXml(parsed.name, parsed.params),
+    rawTokens: outputTokens,
+    promptHints: [
+      `Decoded by LFM3-1.7B · ${(ms / 1000).toFixed(1)}s · ${promptTokens} prompt tokens`,
+      `Sent sampler: temperature=${WORKER_CHAT_SAMPLER.temperature} · max_tokens=${WORKER_CHAT_SAMPLER.maxTokens}`,
+      'Run-mode chat turn: the 1.7B chose the tool itself from the note context; no Omni directive exists in this mode.',
+    ],
+    toolSchemasInjected: 4,
+    noteView: numberNoteLines(note),
+    sampler: { ...WORKER_CHAT_SAMPLER },
+  }
+}
+
+/**
+ * The worker-chat turn (run modes `worker-d1` and `lowram`): LFM3-1.7B is
+ * the chat model itself and authors the tool call. Undo/redo stay
+ * deterministic pipeline directives — snapshot rollback is never a model
+ * decision, the same rationale as Omni-first. A prose reply settles the
+ * bubble and is spoken; a tool call becomes a Directive synthesized from the
+ * command and flows through the shared verifyAndExecute tail: d1's §7
+ * safety check in `worker-d1`, no d1 call at all in `lowram` (hard gates +
+ * engine dry-run decide).
+ */
+async function runWorkerChatFirstTurn(
+  deps: PipelineDeps,
+  ctx: TurnContext,
+  mode: Exclude<RunMode, 'omni'>,
+): Promise<void> {
+  const { command, noteAtStart, traceLocal, runtime, liveUsage, publish, finish } = ctx
+  traceLocal.runMode = mode
+  deps.setFlowModel('worker')
+  deps.setStage('routing')
+
+  // Deterministic undo/redo pre-check: same pipeline-directive rationale as
+  // the Omni-first path.
+  const pre = routeCommand(command)
+  if (pre.directive) {
+    traceLocal.route = pre
+    publish()
+    await runDirectiveStage(deps, ctx, pre)
+    return
+  }
+
+  // --- worker offline: honest failure, nothing invented ---------------------
+  if (!endpointUp(deps.healthRef.current, 'text')) {
+    deps.addMessage({
+      role: 'assistant',
+      kind: 'error',
+      author: 'harness',
+      text: 'The chat model (LFM3-1.7B) is offline, so this turn cannot run. Nothing was written to the note.',
+      runId: traceLocal.id,
+    })
+    deps.notify('Worker offline', 'LFM3-1.7B is not answering on :8080.', 'error')
+    finish('failed')
+    return
+  }
+
+  // No frame in either mode: the 1.7B is text-only and no Omni model runs to
+  // read one, so claiming a frame here would be a lie in the trace.
+  traceLocal.frameSource = 'none'
+
+  const history = conversationTurns(deps.messagesRef.current, CHAT_MEMORY_TURNS)
+  // The current command is already in the transcript; history is prior turns.
+  const priorHistory = history.slice(0, -1)
+  const last = deps.runsRef.current[0]
+  const lastRun = last
+    ? {
+        command: last.command,
+        status: last.status,
+        ...(last.execution?.message ? { message: last.execution.message } : {}),
+      }
+    : null
+
+  // Provisional streaming bubble, same discipline as Omni-first: visible
+  // deltas land here live; a call outcome retracts it, an answer settles the
+  // authoritative text.
+  let streamId: string | null = null
+  let streamedText = ''
+  const onText = (delta: string) => {
+    streamedText += delta
+    if (!streamId) {
+      streamId = deps.addMessage({
+        role: 'assistant',
+        text: streamedText,
+        streaming: true,
+        author: 'LFM3-1.7B',
+        runId: traceLocal.id,
+      })
+    } else {
+      deps.patchMessage(streamId, { text: streamedText })
+    }
+  }
+  const retractStream = () => {
+    if (streamId) {
+      const id = streamId
+      deps.setMessages((previous) => previous.filter((message) => message.id !== id))
+      streamId = null
+      streamedText = ''
+    }
+  }
+  const settleStream = (text: string) => {
+    if (streamId) {
+      deps.patchMessage(streamId, { text, streaming: false })
+      streamId = null
+    } else {
+      deps.addMessage({ role: 'assistant', text, author: 'LFM3-1.7B', runId: traceLocal.id })
+    }
+  }
+
+  const controller = new AbortController()
+  deps.chatAbortRef.current = controller
+  let turn: WorkerChatTurnResult
+  try {
+    turn = await runWorkerChatTurn({
+      command,
+      history: priorHistory,
+      note: noteAtStart,
+      lastRun,
+      signal: controller.signal,
+      onText,
+    })
+    // One retry on an unusable reply: the rejected text and the exact parse
+    // error are appended (the packet-worker retry pattern), never a guess.
+    if (turn.outcome === 'invalid') {
+      const rejected = turn
+      turn = await runWorkerChatTurn({
+        command,
+        history: priorHistory,
+        note: noteAtStart,
+        lastRun,
+        signal: controller.signal,
+        onText,
+        retry: { attemptText: rejected.raw, error: rejected.error ?? 'no usable reply' },
+      })
+    }
+  } catch (error) {
+    retractStream()
+    if (controller.signal.aborted) {
+      // Barge-in: the next command already owns the session.
+      finish('conversational')
+      return
+    }
+    const detail = error instanceof Error ? error.message : 'unknown error'
+    deps.addMessage({
+      role: 'assistant',
+      kind: 'error',
+      author: 'harness',
+      text: `The 1.7B chat turn failed: ${detail} Nothing was written to the note.`,
+      runId: traceLocal.id,
+    })
+    deps.notify('Chat turn failed', detail, 'error')
+    finish('failed')
+    return
+  } finally {
+    if (deps.chatAbortRef.current === controller) deps.chatAbortRef.current = null
+  }
+
+  // The chat turn is served by the 1.7B itself; routing was the deterministic
+  // undo/redo pre-check above, so no model route call is claimed.
+  runtime.chat = 'live'
+  runtime.route = 'fallback'
+  traceLocal.timings.chat = turn.ms
+  if (turn.promptTokens) {
+    traceLocal.promptTokens = turn.promptTokens
+    liveUsage.worker = turn.promptTokens
+  }
+  if (turn.outputTokens) traceLocal.outputTokens = turn.outputTokens
+  publish()
+
+  if (turn.outcome === 'answer') {
+    const text = turn.text ?? ''
+    deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
+    settleStream(text)
+    deps.speakReply(text)
+    finish('conversational')
+    return
+  }
+
+  if (turn.outcome === 'invalid' || !turn.call) {
+    retractStream()
+    deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
+    deps.addMessage({
+      role: 'assistant',
+      kind: 'error',
+      author: 'harness',
+      text: `The 1.7B could not produce a usable reply after one retry (${
+        turn.error ?? 'no parseable tool call and no visible text'
+      }). Nothing was written to the note, and no fallback content was substituted.`,
+      runId: traceLocal.id,
+    })
+    deps.notify('Chat reply invalid', turn.error ?? 'No usable reply.', 'error')
+    finish('failed')
+    return
+  }
+
+  // --- delegate: synthesize the Directive, then the shared verify tail ------
+  const parsed = turn.call
+  retractStream()
+  // No Omni brief exists in these modes. Only the required fields are filled
+  // (task from the tool the 1.7B already chose, instruction verbatim); the
+  // model grounded the span itself, so no target/verbatim is invented.
+  const directive: Directive = {
+    task: TASK_FOR_TOOL[parsed.name],
+    instruction: command,
+    frame_relevant: false,
+  }
+  traceLocal.directive = directive
+  deps.setStageStates({ A: 'done', B: 'done', C: 'idle' })
+  deps.setStage('generating')
+  deps.setFlowModel('worker')
+  const call = workerChatCall(
+    parsed,
+    turn.think ?? '',
+    turn.ms,
+    turn.promptTokens ?? 0,
+    turn.outputTokens ?? 0,
+    noteAtStart,
+  )
+  runtime.worker = 'live'
+  traceLocal.timings.generate = turn.ms
+  traceLocal.call = call
+  traceLocal.workerNoteView = call.noteView
+  publish()
+
+  // Mode 3 runs no d1: hard gates + the engine dry-run decide, and there is
+  // no pending path (nothing may hold an edit for a decision layer that does
+  // not exist).
+  await verifyAndExecute(deps, ctx, directive, call, null, {
+    d1Check: mode === 'worker-d1',
+    snapshotLabel: '1.7B tool call',
+  })
+}
+
 /**
  * The shared tail of every Omni-first mutation (worker-authored or
  * dictation-built): delegation card, deterministic hard gates, the engine
  * dry-run that renders the diff, the d1 safety check, then execute — or a
  * pending edit when d1 disapproves or is unavailable.
+ *
+ * `options.d1Check: false` is the low-RAM path: the d1 server does not run
+ * in that mode, so no check is attempted and no pending edit can be created.
  */
 async function verifyAndExecute(
   deps: PipelineDeps,
@@ -1148,6 +1441,7 @@ async function verifyAndExecute(
   directive: Directive,
   call: WorkerCall,
   frame: { dataUrl: string; source: string } | null,
+  options: { d1Check: boolean; snapshotLabel?: string } = { d1Check: true },
 ): Promise<void> {
   const { command, noteAtStart, traceLocal, runtime, publish, finish } = ctx
 
@@ -1165,7 +1459,9 @@ async function verifyAndExecute(
   })
 
   // --- hard gates (design.md §8): refusal here is never adjudicable --------
-  deps.setStageStates({ A: 'done', B: 'done', C: 'running' })
+  // Stage C is the d1 check; in low-RAM mode there is no d1, so it is never
+  // marked as having run.
+  deps.setStageStates({ A: 'done', B: 'done', C: options.d1Check ? 'running' : 'skipped' })
   deps.setStage('verifying')
   const gates = runHardGates(noteAtStart, call)
   if (!gates.pass) {
@@ -1200,65 +1496,75 @@ async function verifyAndExecute(
   }
 
   // --- d1 safety check (design.md §7): its only job -------------------------
-  deps.setFlowModel('d1')
-  const noteLines = splitLines(noteAtStart)
-  const noteLineCount = noteLines.length - (noteLines[noteLines.length - 1] === '' ? 1 : 0)
-  const userCommands = deps.messagesRef.current.filter((message) => message.role === 'user')
-  const lastUserTurn = userCommands.length >= 2 ? userCommands[userCommands.length - 2].text : undefined
-  const check = await runD1Check({
-    state: buildD1State({
-      directive,
-      command,
-      call: { name: call.name, params: call.params },
-      diff: preview.diff,
-      lastUserTurn,
-      noteLineCount,
-    }),
-    frameDataUrl: frame?.dataUrl ?? null,
-    d1Decide,
-  })
-  traceLocal.d1Check = check
-  traceLocal.timings.critic = check.ms ?? 0
-  runtime.critic = check.verdict === 'unavailable' ? 'fallback' : 'live'
-  publish()
+  // Skipped entirely when the mode runs no d1 (low-RAM): the hard gates and
+  // the engine dry-run above are the whole decision, and no pending edit may
+  // be created for a decision layer that does not exist.
+  let check: D1CheckResult | null = null
+  if (options.d1Check) {
+    deps.setFlowModel('d1')
+    const noteLines = splitLines(noteAtStart)
+    const noteLineCount = noteLines.length - (noteLines[noteLines.length - 1] === '' ? 1 : 0)
+    const userCommands = deps.messagesRef.current.filter((message) => message.role === 'user')
+    const lastUserTurn =
+      userCommands.length >= 2 ? userCommands[userCommands.length - 2].text : undefined
+    check = await runD1Check({
+      state: buildD1State({
+        directive,
+        command,
+        call: { name: call.name, params: call.params },
+        diff: preview.diff,
+        lastUserTurn,
+        noteLineCount,
+      }),
+      frameDataUrl: frame?.dataUrl ?? null,
+      d1Decide,
+    })
+    traceLocal.d1Check = check
+    traceLocal.timings.critic = check.ms ?? 0
+    runtime.critic = check.verdict === 'unavailable' ? 'fallback' : 'live'
+    publish()
 
-  if (check.verdict !== 'approved') {
-    const pending = createPendingEdit({
-      directive,
-      call,
-      diff: preview.diff,
-      noteHash: noteHash(noteAtStart),
-      d1: {
-        verdict: check.verdict,
-        noul: check.noul,
-        destructiveSafety: check.destructiveSafety,
-        ...(check.reason ? { reason: check.reason } : {}),
-      },
-    })
-    deps.addPendingEdit(pending)
-    deps.patchMessage(delegationId, {
-      delegation: { ...delegation, status: 'pending', confidence: check.noul },
-    })
-    traceLocal.status = 'pending'
-    const held =
-      check.verdict === 'unavailable'
-        ? 'The safety check was unavailable, so this edit is held for your decision rather than decided automatically. It is waiting under Pending edits — the note was not touched.'
-        : 'The safety check disapproved this edit, but it passed every deterministic gate, so it is held for your decision under Pending edits instead of being dropped. The note was not touched.'
-    deps.addMessage({ role: 'assistant', kind: 'notice', text: held, runId: traceLocal.id })
-    deps.notify(
-      'Edit waiting for your decision',
-      check.verdict === 'unavailable' ? 'd1 unavailable; held for adjudication.' : 'd1 disapproved; held for adjudication.',
-      'neutral',
-    )
-    deps.speakReply('That edit needs your call. It is waiting under pending edits.')
-    finish('pending')
-    return
+    if (check.verdict !== 'approved') {
+      const pending = createPendingEdit({
+        directive,
+        call,
+        diff: preview.diff,
+        noteHash: noteHash(noteAtStart),
+        d1: {
+          verdict: check.verdict,
+          noul: check.noul,
+          destructiveSafety: check.destructiveSafety,
+          ...(check.reason ? { reason: check.reason } : {}),
+        },
+      })
+      deps.addPendingEdit(pending)
+      deps.patchMessage(delegationId, {
+        delegation: { ...delegation, status: 'pending', confidence: check.noul },
+      })
+      traceLocal.status = 'pending'
+      const held =
+        check.verdict === 'unavailable'
+          ? 'The safety check was unavailable, so this edit is held for your decision rather than decided automatically. It is waiting under Pending edits — the note was not touched.'
+          : 'The safety check disapproved this edit, but it passed every deterministic gate, so it is held for your decision under Pending edits instead of being dropped. The note was not touched.'
+      deps.addMessage({ role: 'assistant', kind: 'notice', text: held, runId: traceLocal.id })
+      deps.notify(
+        'Edit waiting for your decision',
+        check.verdict === 'unavailable'
+          ? 'd1 unavailable; held for adjudication.'
+          : 'd1 disapproved; held for adjudication.',
+        'neutral',
+      )
+      deps.speakReply('That edit needs your call. It is waiting under pending edits.')
+      finish('pending')
+      return
+    }
   }
 
-  // --- approved: execute ------------------------------------------------------
-  deps.setStageStates({ A: 'done', B: 'done', C: 'done' })
+  // --- approved (or no d1 in this mode): execute ------------------------------
+  const confidence = check?.noul ?? null
+  deps.setStageStates({ A: 'done', B: 'done', C: options.d1Check ? 'done' : 'skipped' })
   deps.patchMessage(delegationId, {
-    delegation: { ...delegation, status: 'verified', confidence: check.noul },
+    delegation: { ...delegation, status: 'verified', confidence },
   })
   deps.setStage('executing')
   deps.setFlowModel('worker')
@@ -1266,12 +1572,18 @@ async function verifyAndExecute(
   const execution = preview
   traceLocal.timings.execute = Number((performance.now() - execStarted).toFixed(1))
   traceLocal.execution = execution
-  const snapshot = deps.commitNote(execution.note, `Omni directive · ${call.name}`, call.name)
+  // Snapshot labels must not claim a model that never ran: mode 1 keeps its
+  // shipped "Omni directive" prefix, worker-chat modes pass their own.
+  const snapshot = deps.commitNote(
+    execution.note,
+    `${options.snapshotLabel ?? 'Omni directive'} · ${call.name}`,
+    call.name,
+  )
   execution.snapshotId = snapshot.id
   deps.setDiff(execution.diff ?? null)
   deps.setSpan(null)
   deps.patchMessage(delegationId, {
-    delegation: { ...delegation, status: 'executed', confidence: check.noul },
+    delegation: { ...delegation, status: 'executed', confidence },
   })
   traceLocal.status = 'verified'
   publish()
@@ -1323,7 +1635,10 @@ async function runRouteStage(deps: PipelineDeps, ctx: TurnContext): Promise<Rout
   if (localPre.directive) route = localPre
   if (!route && endpointUp(deps.healthRef.current, 'd1omni')) {
     try {
-      const frame = await resolveSceneFrame('full').catch(() => null)
+      // Same video toggle as the chat turns: OFF routes text-only.
+      const frame = deps.videoEnabledRef.current
+        ? await resolveSceneFrame('full').catch(() => null)
+        : null
       traceLocal.frameSource = frame?.source ?? 'none'
       const decision = await d1Decide({
         state: [
@@ -1533,7 +1848,10 @@ async function runConversationalStage(deps: PipelineDeps, ctx: TurnContext): Pro
           /\b(see|look|slide|screen|camera|show|image|frame|describe|chart|table|formula|sticky|whiteboard|visual|read)\b/i.test(
             command,
           )
-        const frame = wantsVisual ? await resolveSceneFrame('full') : null
+        const frame =
+          wantsVisual && deps.videoEnabledRef.current
+            ? await resolveSceneFrame('full')
+            : null
         if (frame) traceLocal.frameSource = frame.source
         const completion = await chatCompleteStream(
           'omni',

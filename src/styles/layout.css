@@ -113,6 +113,59 @@
   flex: 1;
 }
 
+/* Run-mode segmented control (3 states). Desktop surface; the phone layout
+   hides it (the mode is there to stay — switching stays available on reload). */
+.mode-switch {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 24px;
+  padding: 2px;
+  border-radius: 9999px;
+  background: var(--inset);
+  box-shadow: 0 0 0 1px var(--line);
+  flex-shrink: 0;
+}
+
+.mode-option {
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.02em;
+  height: 20px;
+  padding: 0 9px;
+  border-radius: 9999px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mode-option:hover {
+  color: var(--ink-2);
+}
+
+.mode-option.is-active {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+.mode-option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The runtime-card instance is the phone surface's control (the TopBar one
+   covers desktop); exactly one is visible per surface — see responsive.css. */
+.runtime-mode-switch {
+  display: none;
+}
+
+.wiring-mode-row {
+  display: none;
+}
+
 .trinity-summary {
   display: flex;
   align-items: center;

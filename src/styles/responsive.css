@@ -29,6 +29,11 @@
     --right-column: 280px;
   }
 
+  /* Four session actions beside the clock need a tighter row here. */
+  .session-header {
+    gap: 6px;
+  }
+
   .note-format-chip {
     display: none;
   }
@@ -55,6 +60,41 @@
 @media (min-width: 821px) and (max-width: 1120px) {
   .workspace-grid {
     grid-template-columns: var(--left-column) minmax(0, 1fr);
+  }
+}
+
+@media (min-width: 821px) and (max-width: 900px) {
+  /* The narrowest desktop column keeps the session actions as icons, like the
+     phone surface; every button keeps its aria-label/title. Scoped above the
+     phone breakpoint so 44px touch targets there are untouched. */
+  .session-header .session-demo {
+    width: 24px;
+    padding: 0;
+    gap: 0;
+    font-size: 0;
+  }
+
+  .session-header .session-demo svg {
+    width: 13px;
+    height: 13px;
+  }
+}
+
+@media (max-width: 780px) {
+  .mode-switch {
+    display: none;
+  }
+
+  /* Inverse of the rule above: the runtime-card switch takes over on the
+     phone surface, where the TopBar control is hidden. */
+  .runtime-mode-switch {
+    display: flex;
+  }
+
+  .wiring-mode-row {
+    display: flex;
+    justify-content: center;
+    padding: 2px 0 6px;
   }
 }
 

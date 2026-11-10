@@ -17,10 +17,14 @@ Landed: streaming chat with multi-turn memory and barge-in, d1 typed grounding
 (structural span extraction, 2026-11-08), persistent workspace, rejected-trace
 JSONL export, camera/screen frames into the bridge, "New note", §10 MVP
 hardening (b1693ab), the phone-width command surface (≤780px Session/Note/
-Runtime tabs + persistent composer), and the floor-adaptive VAD gate
-(2026-11-08). The QA battery is now 33 cases and green with zero console
-errors; `npm run typecheck` and `npm run build` pass. plan.md §9.6 is the
-authoritative build status; the §7 phase list is the original roadmap.
+Runtime tabs + persistent composer), the floor-adaptive VAD gate (2026-11-08),
+the Omni-first pipeline (default `omni` run mode), user-selectable run modes
+(`omni` / `worker-d1` / `lowram`, 2026-11-09), the persistent hands-free mic
+toggle with barge-in, and the session-level Video/VideoOff frame gate
+(2026-11-09). `npm run typecheck`, `npm run build` and `npm test` (290 tests)
+pass. The QA battery is **RED** — see the first item under Next implementation
+work; plan.md §9.6 is the authoritative build status for the pre-run-mode
+pipeline, and the §7 phase list is the original roadmap.
 
 ## Verification (needs a human — real hardware ears/voice)
 
@@ -46,18 +50,36 @@ Tracked as GitHub Issues #7 (real-mic pass) and #8 (real-speaker pass).
 
 ## Next implementation work
 
-- [ ] **Omni-first refactor** (docs/design.md; phased plan:
-      docs/architecture-refactor.md — spikes E1–E4 first, then P1–P6).
-      Replace the supervisor-first
-      pipeline with the corrected design: Omni-first turn loop, typed
-      delegation directives, worker packet (directive + last-3-edit-turns
+- [ ] **Fix the red QA battery** (blocks the design.md §13 acceptance target;
+      this PRE-DATES the run-mode/mic/video drop — a baseline `git archive` of
+      unmodified `HEAD` served by a scratch Vite reproduced the same failure
+      classes). Two concrete causes:
+      (1) **Omni-first decision quality** — Omni sometimes delegates chat
+      turns, answers mutation turns conversationally, or emits directives the
+      harness rejects, so cases fail or burn their turn in repair/clarify
+      loops.
+      (2) **Schema/validator misalignment** — `DELEGATE_EDIT_TOOL` does not
+      mark `target.description` as required, while `validateDirective`
+      hard-rejects a target without a non-empty description. Valid-looking Omni
+      output therefore lands in repair/clarify loops. Suggested direction:
+      align the tool schema's required fields with `validateDirective` (or
+      accept heading-only targets), then re-run the battery.
+      Also present: an occasional llama.cpp 500 on tools requests (the known
+      "server-tool-parse" class). The 2026-11-09 after-drop run recorded
+      **Total 45 | PASS 19 | FAIL 26 | KNOWN-BUG 0** (333.0 s); failing cases:
+      2, 3, 5, 6, 7, 8, 8f, 9, 10b, 11, 12, 12b, 12d, 12e, 20, 21, 24, 25, 26,
+      27, 27b, 28, 29, 32, 33, 34. Last fully-green battery: 2026-11-08, 33/33,
+      against the then-shipped supervisor-first pipeline — not current
+      evidence. Acceptance: design.md §13 green on the current `omni` default.
+- [ ] **Close out the Omni-first refactor** (docs/design.md; phased plan:
+      docs/architecture-refactor.md). The Omni-first turn loop has landed and is
+      the default `omni` run mode: typed delegation directives (native tool
+      call + one repair retry), the worker packet (directive + last-3-edit
       context packet + full line-numbered note), d1 reduced to the §7 safety
-      check (directive + command + call/diff + frame packet), pending-edit
-      store + ✓ / ✗ adjudication UI, deterministic layer demoted to hard
-      gates only (no content authoring, no routing). First step is design.md
-      Q1: verify Omni directive emission (native tool call vs. structured
-      block) on the local llama.cpp build. Acceptance: design.md §13 battery,
-      incl. the README-template case on a non-empty note.
+      check, the pending-edit store + ✓ / ✗ adjudication UI, and the
+      deterministic layer demoted to hard gates. What remains is acceptance:
+      the §13 battery is red (see the first item), and once it is green the
+      legacy supervisor-first path behind `OMNI_FIRST = false` can be deleted.
 - [ ] **LoRA/tool-call SFT pass on rejected traces** (plan.md §7 Phase 5,
       §9.6, §9.8 item 5). The rejected-trace JSONL export already produces the
       training data; run a lightweight LoRA fine-tune of LFM3-1.7B on a single
@@ -72,9 +94,34 @@ Tracked as GitHub Issues #7 (real-mic pass) and #8 (real-speaker pass).
       omni :8083 and d1-omni :8085 (pid files in
       `~/Documents/Models/logs/lfm3/`); `scripts/stop-models.sh` stops them.
       There is no :8081 server or probe any more.
-- `npm run qa` is the 33-case CDP battery. It needs the dev server on :5173 and
-      the trinity up. Warm the dev server with a curl first; a cold Vite
-      dependency optimization can lose the suite's first navigation race.
+- **Run modes** (2026-11-09): `omni` (default; Omni :8083 chat/ASR/TTS, 1.7B
+      :8080 authors tool calls, d1-Omni :8085 safety check → pending edit on
+      disapproval), `worker-d1` (1.7B :8080 chats and authors XML tool calls;
+      d1-Omni :8085 decides edit safety: approve → execute, disapprove/
+      unavailable → pending edit; ASR/TTS ride :8085; Omni out of the loop),
+      `lowram` (LFM3-1.7B only; hard gates + engine dry-run execute directly,
+      no d1 and no pending path; mic disabled, browser TTS). Switch in the
+      TopBar on desktop or the **Runtime truth card** on the phone surface
+      (≤780px, where the TopBar control is hidden). Persisted under localStorage
+      `liquidscribe.runmode.v1`; captured at turn start and busy-guarded.
+- **Hands-free mic**: `micOn` is the persistent toggle, not one capture. ON
+      listens continuously; each VAD-segmented utterance is transcribed over the
+      mode's Omni-architecture endpoint and submitted, then capture re-arms
+      (guards re-checked). OFF finishes and submits the in-flight capture and
+      never restarts. `micActive` (not `micOn`) is the live recorder that drives
+      the composer ring/waveform and `data-capturing`; `stopMic` (reset/unmount)
+      is the only abandon-without-submit path. Voice onset fires
+      `VoiceRecorder.onVoiceStart` once per capture and cuts TTS.
+- **Video toggle**: SessionPanel header Video/VideoOff button (session-level,
+      default on, not persisted). OFF resolves no frame at all
+      (`frameSource: 'none'`); the Visual panel shows "Not sent to models".
+      `extract_visual_to_note`'s own crop use is not gated. No effect in
+      `worker-d1`/`lowram` — the 1.7B is text-only.
+- `npm run qa` is the 45-assertion Omni-first CDP battery. It needs the dev
+      server on :5173 and the trinity up. Warm the dev server with a curl first;
+      a cold Vite dependency optimization can lose the suite's first navigation
+      race. See the red-battery item under Next implementation work for the
+      current known failures.
 - `scripts/hardware-voice-check.mjs` automates the two hardware passes over
       real mic/speakers (no fake media; `--skip-mic` / `--skip-speaker` split;
       artifacts in `/tmp/lscribe-voice/`).

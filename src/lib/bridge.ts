@@ -457,9 +457,12 @@ export interface TranscriptResult {
   usage: TokenUsage
 }
 
-export async function transcribeAudio(blob: Blob): Promise<TranscriptResult> {
-  const spec = ENDPOINTS.find((candidate) => candidate.id === 'omni')
-  if (!spec) throw new BridgeError('Omni endpoint missing')
+export async function transcribeAudio(
+  blob: Blob,
+  endpoint: 'omni' | 'd1omni' = 'omni',
+): Promise<TranscriptResult> {
+  const spec = ENDPOINTS.find((candidate) => candidate.id === endpoint)
+  if (!spec) throw new BridgeError(`${endpoint} endpoint missing`)
   const started = performance.now()
   const form = new FormData()
   form.append('file', blob, 'capture.wav')
@@ -480,12 +483,19 @@ export async function transcribeAudio(blob: Blob): Promise<TranscriptResult> {
 
 // --- TTS (Omni) --------------------------------------------------------------
 
+/**
+ * Model TTS. `endpoint` names the Omni-architecture server that speaks:
+ * 'omni' (:8083) in the Omni-first mode, 'd1omni' (:8085) in worker-d1
+ * (same Omni architecture). Low-RAM never calls this — the caller uses the
+ * browser voice instead.
+ */
 export async function synthesizeSpeech(
   text: string,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; endpoint?: 'omni' | 'd1omni' } = {},
 ): Promise<Blob> {
-  const spec = ENDPOINTS.find((candidate) => candidate.id === 'omni')
-  if (!spec) throw new BridgeError('Omni endpoint missing')
+  const endpoint = options.endpoint ?? 'omni'
+  const spec = ENDPOINTS.find((candidate) => candidate.id === endpoint)
+  if (!spec) throw new BridgeError(`${endpoint} endpoint missing`)
   const response = await fetch(`http://127.0.0.1:${spec.port}/tts`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

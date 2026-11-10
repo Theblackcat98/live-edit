@@ -124,6 +124,8 @@ export default function App() {
         speakerOn={workspace.speakerOn}
         micOn={workspace.micOn}
         traceAvailable={Boolean(workspace.trace)}
+        mode={workspace.mode}
+        onSetMode={workspace.setMode}
         onToggleSpeaker={workspace.toggleSpeaker}
         onToggleMic={workspace.toggleMic}
         onOpenTrace={() => handleOpenTrace()}
@@ -163,15 +165,18 @@ export default function App() {
             bbox={workspace.bbox}
             stage={workspace.stage}
             micOn={workspace.micOn}
+            micActive={workspace.micActive}
             speaking={workspace.speaking}
             getMicLevel={workspace.getMicLevel}
             elapsedSeconds={workspace.elapsedSeconds}
+            videoOn={workspace.videoOn}
           />
           <SessionPanel
             messages={workspace.messages}
             elapsedSeconds={workspace.elapsedSeconds}
             busy={workspace.busy}
             micOn={workspace.micOn}
+            micActive={workspace.micActive}
             asrBusy={workspace.asrBusy}
             demoRunning={workspace.demoRunning}
             speaking={workspace.speaking}
@@ -188,6 +193,9 @@ export default function App() {
             pendingEdits={workspace.pendingEdits}
             onApplyPending={workspace.applyPendingEdit}
             onDismissPending={workspace.dismissPendingEdit}
+            videoOn={workspace.videoOn}
+            onToggleVideo={workspace.toggleVideo}
+            mode={workspace.mode}
             showComposer={!isPhone}
           />
         </div>
@@ -230,6 +238,8 @@ export default function App() {
             openTrace={() => handleOpenTrace()}
             runtimeHealth={workspace.runtimeHealth}
             refreshRuntime={workspace.refreshRuntime}
+            mode={workspace.mode}
+            onSetMode={workspace.setMode}
           />
         </div>
 
@@ -238,11 +248,13 @@ export default function App() {
             <SessionComposer
               busy={workspace.busy}
               micOn={workspace.micOn}
+              micActive={workspace.micActive}
               asrBusy={workspace.asrBusy}
               commandInput={workspace.commandInput}
               onInputChange={workspace.setCommandInput}
               onSubmit={handleSubmit}
               onToggleMic={workspace.toggleMic}
+              mode={workspace.mode}
             />
           </div>
         )}
@@ -252,6 +264,7 @@ export default function App() {
         stage={workspace.stage}
         trace={workspace.trace}
         micOn={workspace.micOn}
+        micActive={workspace.micActive}
         asrBusy={workspace.asrBusy}
         runtimeHealth={workspace.runtimeHealth}
       />
