@@ -124,6 +124,23 @@ describe('sanitizeOmniText', () => {
     expect(sanitizeOmniText(benign)).toBe(benign)
   })
 
+  it('strips plain-text tool-call renditions (battery case 25 leak shape)', () => {
+    const leak = 'delegate_edit:\n task: remove\n instruction: remove the bullet about Redis'
+    expect(sanitizeOmniText(leak)).toBe('')
+    const wrapped = 'On it.\ndelegate_edit:\n task: remove\n instruction: remove the bullet about Redis\nDone.'
+    expect(sanitizeOmniText(wrapped)).toBe('On it.\nDone.')
+    const action = 'harness_action:\n action: redo'
+    expect(sanitizeOmniText(action)).toBe('')
+  })
+
+  it('keeps prose that merely mentions a tool name mid-sentence', () => {
+    const prose = 'You could delegate_edit that by hand, or just ask me to redo it.'
+    expect(sanitizeOmniText(prose)).toBe(prose)
+    const fieldy = 'Remember:\n task: finish the write-up by Friday'
+    // A lone field-shaped line with no tool header above it is prose, kept.
+    expect(sanitizeOmniText(fieldy)).toBe(fieldy)
+  })
+
   it('strips ACTION signal lines (the textual undo marker this design replaces)', () => {
     expect(sanitizeOmniText('ACTION undo')).toBe('')
     expect(sanitizeOmniText('ACTION: redo')).toBe('')
