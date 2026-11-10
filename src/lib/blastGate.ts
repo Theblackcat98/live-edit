@@ -22,8 +22,23 @@ export interface CollapseVerdict {
  * is held for the user's ✓/✗ even when d1 approved. A hold is not a
  * refusal — the user can still apply it — it only removes the silence.
  * Small or content-preserving edits are untouched by this gate.
+ *
+ * Narrowing (Nick's call, 2026-11-10, after battery case 23): the
+ * forbidden class is destruction disguised as an edit — a section
+ * replaced by a stub under an edit tool. An outright deletion is a
+ * different shape: the user asked for a removal in plain words and the
+ * worker grounded it with the remove tool. `remove_text` calls are
+ * therefore exempt from this gate and execute on d1's approval like any
+ * other edit (the executor's own removal caps still bound them). An
+ * edit-tool call that empties a section stays held — that is the
+ * disguised shape, whatever the command said.
  */
-export function sectionScaleCollapse(note: string, diff: ExecutionDiff): CollapseVerdict | null {
+export function sectionScaleCollapse(
+  note: string,
+  diff: ExecutionDiff,
+  tool?: string,
+): CollapseVerdict | null {
+  if (tool === 'remove_text') return null
   if (diff.removed < 2) return null
   const beforeChars = diff.before.join('\n').length
   if (beforeChars === 0) return null
