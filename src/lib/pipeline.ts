@@ -56,6 +56,7 @@ import {
   type PacketWorkerPromptInput,
 } from './worker'
 import { executeTool } from './tools'
+import { recoverDictatedText } from './dictation'
 import { detectSnapshotDirective } from './snapshotDirective'
 import { runOmniTurn, type OmniHistoryTurn } from './omni'
 import { runWorkerChatTurn, WORKER_CHAT_SAMPLER, type WorkerChatTurnResult } from './workerChat'
@@ -668,14 +669,32 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
   // built by the harness, never authored by the worker. The call still
   // flows through the hard gates and the d1 check like any other; the
   // trace records the provenance honestly (runtime.worker = 'dictation').
-  if (typeof directive.verbatim === 'string' && directive.verbatim.trim().length > 0) {
-    const call = buildDictationCall(directive, noteAtStart)
+  // Backstop (battery case 8f): when the model omits `verbatim` but the
+  // user's own command carries the quoted span, recover it
+  // deterministically — the dictated text must never depend on the model
+  // remembering to label it.
+  const recovered = recoverDictatedText(command, directive)
+  const effectiveDirective = recovered ? { ...directive, verbatim: recovered } : directive
+  if (recovered) {
+    traceLocal.directive = effectiveDirective
+    publish()
+  }
+  if (
+    typeof effectiveDirective.verbatim === 'string' &&
+    effectiveDirective.verbatim.trim().length > 0
+  ) {
+    const call = buildDictationCall(effectiveDirective, noteAtStart)
+    if (recovered) {
+      call.promptHints.push(
+        'Dictation backstop: verbatim recovered from the quoted span in the user command — the model omitted the field (battery case 8f).',
+      )
+    }
     runtime.worker = 'dictation'
     traceLocal.timings.generate = 0
     traceLocal.call = call
     traceLocal.workerNoteView = call.noteView
     publish()
-    await verifyAndExecute(deps, ctx, directive, call)
+    await verifyAndExecute(deps, ctx, effectiveDirective, call)
     return
   }
 
