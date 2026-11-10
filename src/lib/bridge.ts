@@ -510,7 +510,7 @@ export async function synthesizeSpeech(
   return blob
 }
 
-// --- d1 systemone (supervisor) ----------------------------------------------
+// --- d1 systemone (decision model) -------------------------------------------
 
 export type D1Question =
   | { type: 'choice'; instructions: string; criteria: Record<string, string> }

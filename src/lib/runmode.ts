@@ -2,7 +2,7 @@
  * User-selectable run modes: which local model(s) serve the chat and the
  * edit pipeline.
  *
- * - `omni`      the shipped Omni-first pipeline (flags.ts `OMNI_FIRST`):
+ * - `omni`      the Omni-first pipeline:
  *               LFM3-Omni-2B (:8083) is the chat/ASR/TTS front door, the
  *               1.7B (:8080) authors tool calls, d1-Omni (:8085) is the §7
  *               safety check.
@@ -12,9 +12,11 @@
  *               out of the loop; ASR/TTS ride the d1-Omni endpoint because
  *               it is the same Omni architecture.
  * - `lowram`    just the 1.7B. No d1 anywhere: tool calls pass the
- *               deterministic hard gates and execute directly. Mic ASR is
- *               impossible without an Omni-arch server, so it is honestly
- *               disabled; TTS uses the browser voice only.
+ *               deterministic hard gates and are then held as pending
+ *               edits for the user — with no decision model running,
+ *               nothing executes silently. Mic ASR is impossible without
+ *               an Omni-arch server, so it is honestly disabled; TTS uses
+ *               the browser voice only.
  *
  * Persistence is best-effort and defensive, mirroring storage.ts: an absent,
  * corrupt or unknown value loads as the default (`omni`). The mode lives
@@ -55,7 +57,7 @@ export const RUN_MODES: RunModeInfo[] = [
     label: '1.7B',
     short: '1.7B',
     description:
-      'Low-RAM: only LFM3-1.7B (:8080). Tool calls pass the hard gates and execute; no d1. ' +
+      'Low-RAM: only LFM3-1.7B (:8080). Tool calls pass the hard gates and are held for your approval; no d1. ' +
       'Mic ASR is off — type instead; speech uses the browser voice.',
   },
 ]

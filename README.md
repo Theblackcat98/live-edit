@@ -4,9 +4,9 @@
 > It corrects the architecture this README originally described: the intended design is
 > **Omni-first** — Omni converses and silently delegates, the 1.7B worker authors edits, and
 > d1-Omni is a safety check whose rejections go to the user as pending edits (✓ / ✗). That
-> Omni-first turn loop is implemented and is the default run mode (`flags.ts` `OMNI_FIRST`); the
-> earlier supervisor-first pipeline survives only as the legacy path behind the flag. design.md §13 is
-> still the acceptance target — its QA battery is not yet green (see Verification).
+> Omni-first turn loop is implemented and is the default run mode; the earlier supervisor-first
+> pipeline and its `OMNI_FIRST` flag were deleted (2026-11-09) — there is no legacy path.
+> design.md §13 is still the acceptance target — its QA battery is not yet green (see Verification).
 
 A local-first multimodal note workspace built around the LFM3 model trinity — **Omni 2B** as the
 only model the user talks to (conversation, ASR/TTS, and silent delegation), **LFM3-1.7B** as the
@@ -134,8 +134,8 @@ Use the **Demo** button in the Live session header to run a four-command guided 
 src/
   components/   visual stage, session, note workspace, supervisor rail, trace drawer
   data/         seed note, synthetic scene, model roster, tool catalog
-  lib/          run modes, worker XML/chat, tool engine, markdown parser, speech,
-                supervisor heuristics (legacy layer — see docs/design.md §12)
+  lib/          run modes, Omni/worker turns, tool engine, markdown parser, speech,
+                hard gates, d1 check, pending-edit store
   state/        orchestrator hook, history stack, context accounting
   styles/       design tokens + application styles
 ```
@@ -160,7 +160,7 @@ notice naming the mode and its endpoints.
 | --- | --- | --- | --- |
 | `omni` (default) | `LFM3-Omni-2B` :8083 | `LFM3-1.7B` :8080 authors from Omni's typed directive | `d1-Omni-2B` :8085 checks; disapproval or unavailability → pending edit. ASR/TTS :8083. |
 | `worker-d1` | `LFM3-1.7B` :8080 | the same 1.7B authors (XML protocol) | d1-Omni decides edit safety: approve → execute; disapprove or unavailable → pending edit. ASR/TTS ride :8085. |
-| `lowram` | `LFM3-1.7B` :8080 only | the 1.7B; deterministic hard gates + engine dry-run, no pending path | no d1. Mic disabled ("Voice needs an Omni server"); TTS uses the browser voice. |
+| `lowram` | `LFM3-1.7B` :8080 only | the 1.7B; deterministic hard gates + engine dry-run, then held as a pending edit | no d1 — with no decision model running, no edit executes silently, so the user approves each one. Mic disabled ("Voice needs an Omni server"); TTS uses the browser voice. |
 
 - `omni` is byte-equivalent prior behaviour: the Omni-first turn loop already on
   `main`, unchanged by the mode switch.
@@ -169,7 +169,8 @@ notice naming the mode and its endpoints.
   carry the `LFM3-1.7B` author label. Omni is out of the loop, but ASR/TTS use
   :8085 because d1-Omni is the same Omni architecture.
 - `lowram` never contacts d1 or Omni: a tool call that passes the hard gates and
-  the engine dry-run executes directly. The 1.7B is text-only, so `worker-d1`
+  the engine dry-run is held as a pending edit for the user's ✓ / ✗ — silent
+  execution is the decision model's job, and this mode runs none. The 1.7B is text-only, so `worker-d1`
   and `lowram` attach no frame in either Video-toggle position.
 
 ## Limits

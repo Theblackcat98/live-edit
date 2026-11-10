@@ -1,45 +1,38 @@
 /**
- * The turn pipeline — the stage sequence formerly inlined in
- * useWorkspace.submitCommand, relocated verbatim (plan §5 step 4: a pure
- * move with zero behaviour change — same order, strings, trace fields,
- * provenance labels, state-update timing and error paths).
+ * The turn pipeline. runPipelineTurn is the single entry point for one
+ * user turn, dispatched by the run mode captured at turn start:
  *
- * One turn is an explicit sequence of named stages, in the original order:
+ *   runOmniFirstTurn      mode `omni`: Omni answers/clarifies/acts, or
+ *                         delegates a typed directive to the 1.7B worker
+ *   runWorkerChatFirstTurn modes `worker-d1` / `lowram`: the 1.7B chats
+ *                         and authors the tool call itself
  *
- *   runRouteStage           directive pre-check, d1/heuristic routing,
- *                           syntax overrides of the live route
- *   runDirectiveStage       undo/redo snapshot short-circuits
- *   runConversationalStage  Omni chat branch (streamed, template fallback)
- *   runClarificationStage   ambiguous-request clarification
- *   runGroundingStage       deterministic buildPlan, d1 span grounding,
- *                           canned ack
- *   runWorkerStage          worker attempt loop, template fallback,
- *                           supervisor span-overwrite
- *   runCriticStage          local critique + d1 semantic overlay
- *   runExecutionStage       execution, snapshot commit, canned completion
+ * Both mutation paths share verifyAndExecute: deterministic hard gates,
+ * the engine dry-run diff, then the d1 decision model — approved edits
+ * execute silently; disapproved/unavailable (and every edit in lowram,
+ * which runs no decision model) become pending edits for the user.
+ * Undo/redo are deterministic snapshot directives (snapshotDirective.ts),
+ * never model decisions.
  *
- * runPipelineTurn is the single entry point for one user turn; the hook
- * supplies every session capability it uses through PipelineDeps and keeps
- * only session state (note/messages/history, persistence, voice, TTS, demo
- * mode, toasts) for itself.
+ * The hook supplies every session capability through PipelineDeps and
+ * keeps only session state (note/messages/history, persistence, voice,
+ * TTS, demo mode, toasts) for itself. The supervisor-first pipeline that
+ * used to live here was deleted with supervisor.ts — no heuristic router,
+ * no template authoring, no canned replies remain in the turn path.
  */
 
 import type {
   BBoxTarget,
   ContextUsage,
-  CriticResult,
   D1CheckResult,
   DelegationInfo,
   Directive,
   ExecutionDiff,
-  FrameSource,
   Message,
   PendingEdit,
   PipelineStage,
   Probability,
   RejectedTraceRecord,
-  ResolvedFrame,
-  RouteDecision,
   RunStatus,
   RuntimeHealth,
   RuntimeSource,
@@ -52,36 +45,19 @@ import type {
   Trace,
   TraceRuntime,
   WorkerCall,
-  WorkerSampler,
 } from '../types'
-import { NOTE_PATH, NOTE_TITLE } from '../data/note'
+import { NOTE_PATH } from '../data/note'
 import { TOOL_BY_NAME } from '../data/tools'
 import {
-  buildClarification,
-  buildPlan,
-  conversationalReply,
-  critique,
-  isVagueMutation,
-  resolveGroundingSpan,
-  ROUTE_QUESTIONS,
-  routeCommand,
-  tokenViewForWorker,
-  type GroundingResolution,
-  type SupervisorPlan,
-} from './supervisor'
-import {
   buildPacketWorkerMessages,
-  buildWorkerCall,
-  buildWorkerMessages,
   buildWorkerRetryMessages,
   numberNoteLines,
   renderToolCallXml,
   PACKET_WORKER_SAMPLER,
   type PacketWorkerPromptInput,
 } from './worker'
-import { routeFromAnswers } from './route'
 import { executeTool } from './tools'
-import { OMNI_FIRST } from './flags'
+import { detectSnapshotDirective } from './snapshotDirective'
 import { runOmniTurn, type OmniHistoryTurn } from './omni'
 import { runWorkerChatTurn, WORKER_CHAT_SAMPLER, type WorkerChatTurnResult } from './workerChat'
 import type { RunMode } from './runmode'
@@ -90,16 +66,13 @@ import { runHardGates } from './gates'
 import { runD1Check } from './d1check'
 import { createPendingEdit } from './pending'
 import { parseToolCallXml, type ParsedToolCall } from './xml'
-import { currentSceneSource, resolveSceneFrame } from './frame'
+import { resolveSceneFrame } from './frame'
 import {
   chatComplete,
-  chatCompleteStream,
   d1Decide,
   endpointUp,
-  type ChatMessage,
-  type ChatOptions,
 } from './bridge'
-import { clamp, estimateTokens, makeId, pAdopted, pFloor, sleep, truncate } from './utils'
+import { estimateTokens, makeId } from './utils'
 import { splitLines } from './doc'
 import type { VoiceRecorder } from './speech'
 
@@ -228,20 +201,6 @@ interface TurnContext {
   finish: (status: RunStatus) => void
 }
 
-/** What the grounding stage established for the rest of a mutation turn. */
-interface GroundedTurn {
-  effectiveRoute: RouteDecision
-  plan: SupervisorPlan
-  grounding: GroundingResolution
-}
-
-/** What the worker stage produced for the critic and execution stages. */
-interface WorkerOutcome {
-  call: WorkerCall
-  delegation: DelegationInfo
-  delegationId: string
-}
-
 function makeTrace(command: string, source: 'text' | 'voice' | 'demo', note: string): Trace {
   return {
     id: makeId('run'),
@@ -255,107 +214,6 @@ function makeTrace(command: string, source: 'text' | 'voice' | 'demo', note: str
     noteTokensAtStart: estimateTokens(note),
     workerNoteView: '',
   }
-}
-
-function ackFor(tool?: ToolName): string {
-  switch (tool) {
-    case 'edit_text':
-      return "On it. I'm locking the target span before the worker writes."
-    case 'remove_text':
-      return "Before I remove anything, I'm checking the span and the blast radius."
-    case 'add_text':
-      return "On it. I'm pinning the insertion point against the note outline."
-    case 'extract_visual_to_note':
-      return "Got it. I'll crop the slide region and bring it into the note."
-    default:
-      return 'Working on it.'
-  }
-}
-
-function snapshotExcerpt(value: string): string {
-  return value
-    .replace(/^\s*[-*•–—]\s+/, '')
-    .replace(/^\|+\s*/, '')
-    .replace(/\s*\|+\s*$/, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-function snapshotLabel(tool: ToolName, plan: ReturnType<typeof buildPlan>): string {
-  if (tool === 'edit_text') {
-    return `Edit · ${truncate(snapshotExcerpt(plan.span?.excerpt ?? 'span'), 32)}`
-  }
-  if (tool === 'remove_text') {
-    return `Remove · ${truncate(snapshotExcerpt(plan.span?.excerpt ?? 'span'), 30)}`
-  }
-  if (tool === 'add_text') return `Add · ${plan.addAnchor ?? 'document tail'}`
-  return `Extract · ${plan.bbox?.label ?? 'visual ROI'}`
-}
-
-function humanizeEditValue(value: string): string {
-  if (value.trim().startsWith('|')) {
-    const cells = value
-      .trim()
-      .replace(/^\|/, '')
-      .replace(/\|$/, '')
-      .split('|')
-      .map((cell) => cell.trim())
-      .filter(Boolean)
-    return cells.join(' · ')
-  }
-  return value
-}
-
-function completionFor(
-  tool: ToolName,
-  plan: ReturnType<typeof buildPlan>,
-  executionMessage: string,
-): string {
-  if (tool === 'edit_text') {
-    return `Done. ${executionMessage} ${
-      plan.newText ? `The target now reads “${truncate(humanizeEditValue(plan.newText), 90)}”. ` : ''
-    }The snapshot is in the history rail.`
-  }
-  if (tool === 'remove_text') {
-    return `Removed. ${executionMessage} I kept the surrounding structure intact; snapshot rollback is one word away.`
-  }
-  if (tool === 'add_text') {
-    return `Added. ${executionMessage} The insertion stayed inside the supervisor's anchor.`
-  }
-  return `Done — I pulled the ${plan.bbox?.label ?? 'visual region'} from the camera frame and inserted it under “${plan.anchorHeading}”. The source visual was not modified.`
-}
-
-function contextAfterMutation(
-  previous: ContextUsage,
-  noteAfter: string,
-  command: string,
-  plan: SupervisorPlan,
-  call: WorkerCall,
-  liveUsage: Partial<ContextUsage>,
-): ContextUsage {
-  return {
-    omni:
-      liveUsage.omni ??
-      clamp(previous.omni + 150 + Math.round(estimateTokens(command) / 2), 1200, 30000),
-    d1: liveUsage.d1 ?? clamp(5200 + estimateTokens(noteAfter) + 900, 4500, 120000),
-    worker:
-      liveUsage.worker ??
-      clamp(
-        1400 + call.rawTokens * 2 + estimateTokens(plan.span?.excerpt ?? '') + (plan.bbox ? 900 : 0),
-        1800,
-        120000,
-      ),
-  }
-}
-
-// --- native bridge glue -------------------------------------------------------
-
-const CRITIC_QUESTIONS = {
-  sound: {
-    type: 'noul' as const,
-    instructions:
-      'Is the proposed tool call correct and safe to execute on the grounded span? The replacement must preserve the note structure and the anchor must match the current lines.',
-  },
 }
 
 /**
@@ -399,217 +257,6 @@ function conversationTurns(messages: Message[], limit: number): ChatTurn[] {
     })
   }
   return turns.slice(-limit)
-}
-
-const FRAME_DESCRIPTIONS: Record<FrameSource, string> = {
-  'live-camera': 'Attached is the current live frame from the device camera.',
-  'live-screen': 'Attached is the current live frame from the screen share.',
-  'synthetic-slide':
-    'Attached is the synthetic operating-review slide frame (no live capture is attached).',
-  none: 'No frame is attached for this turn.',
-}
-
-/**
- * Turns actually about the document get its full text; small talk does not.
- * A 3,600-character dump on every turn dilutes a 2B model's attention and
- * biases it into describing the note unasked.
- */
-const NOTE_QUESTION =
-  /\b(note|notes|document|doc|section|table|heading|paragraph|bullet|line|lines|read it|what does it say|content|says|text)\b/i
-
-/** Title plus the first H2 headings as a one-line outline, no full dump. */
-function noteOutline(note: string): string {
-  const headings: string[] = []
-  for (const line of note.split(/\r?\n/)) {
-    const match = /^##\s+(.+?)\s*$/.exec(line)
-    if (!match) continue
-    headings.push(match[1])
-    if (headings.length >= 8) break
-  }
-  return headings.length > 0 ? `${NOTE_TITLE} · ${headings.join(' · ')}` : NOTE_TITLE
-}
-
-/**
- * Omni has no tools, but a 2B model still improvises tool-call text on edit
- * requests. Strip those artifacts before the reply is shown or spoken; an
- * all-artifact reply becomes empty and falls through to the template.
- */
-function sanitizeOmniText(text: string): string {
-  let clean = text.replace(/```[^\n]*\n[\s\S]*?```/g, (block) =>
-    /tool_call|function=/i.test(block) ? ' ' : block,
-  )
-  // Unterminated fence at the end of a truncated stream.
-  clean = clean.replace(/```[^\n]*\n[\s\S]*$/g, (block) =>
-    /tool_call|function=/i.test(block) ? ' ' : block,
-  )
-  clean = clean.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, ' ')
-  clean = clean.replace(/<tool_call>[\s\S]*$/i, ' ')
-  clean = clean.replace(/<function=[\s\S]*?<\/function>/gi, ' ')
-  clean = clean.replace(/<function=[^>]*>/gi, ' ')
-  return clean.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim()
-}
-
-function buildChatMessages(
-  command: string,
-  note: string,
-  lastRun: { command: string; status: string; executionMessage?: string } | null,
-  turns: ChatTurn[],
-  frame: ResolvedFrame | null,
-): ChatMessage[] {
-  const system = [
-    'You are Omni — the conversational interface of a local multimodal note workspace.',
-    'You have no tools. You cannot edit files, read tool output or run anything: a separate worker pipeline performs every file edit.',
-    'Never emit XML, JSON or code blocks as actions. A <tool_call>, a <function=…> fragment, or a fenced block is never an action here — the UI strips it as noise. Do not use them.',
-    'If the user asks for a note change, reply in ONE short sentence acknowledging that the edit pipeline takes it from here, e.g. "On it — the edit pipeline will handle that." Never promise details you cannot know (exact text, line numbers, results) and never claim something was already edited.',
-    'Style: brief and natural, one or two sentences unless more is genuinely needed.',
-    'Greetings, thanks and small talk: answer like a person — "Hey!", "Anytime." — and do NOT describe the note, the frame, or any statuses unless the user explicitly asks about them.',
-    'Reference the note or the attached frame only when the question is actually about them. When asked what you can see, describe the attached frame itself — camera or screen captures are real scenes, not documents.',
-  ].join(' ')
-
-  const textParts = [
-    frame ? FRAME_DESCRIPTIONS[frame.source] : FRAME_DESCRIPTIONS.none,
-    NOTE_QUESTION.test(command)
-      ? `Current note (${NOTE_PATH}):\n${truncate(note, 3600)}`
-      : `Current note (${NOTE_PATH}) outline: ${noteOutline(note)}`,
-    lastRun
-      ? `Last completed run: "${lastRun.command}" → ${lastRun.status}${
-          lastRun.executionMessage ? ` (${lastRun.executionMessage})` : ''
-        }`
-      : 'No edits have been committed yet this session.',
-    `User: ${command}`,
-  ].join('\n\n')
-
-  const content: ChatMessage['content'] = frame
-    ? [
-        { type: 'text', text: textParts },
-        { type: 'image_url', image_url: { url: frame.dataUrl } },
-      ]
-    : textParts
-  return [
-    { role: 'system', content: system },
-    ...turns.flatMap((turn): ChatMessage[] => {
-      const user: ChatMessage = { role: 'user', content: truncate(turn.command, 600) }
-      if (!turn.reply) return [user]
-      return [user, { role: 'assistant', content: truncate(turn.reply, 600) }]
-    }),
-    { role: 'user', content },
-  ]
-}
-
-function buildCriticState(
-  command: string,
-  plan: SupervisorPlan,
-  call: WorkerCall,
-  note: string,
-): string {
-  const lines: string[] = [`User command: ${command}`]
-  if (plan.span) {
-    lines.push(
-      `Grounded span: lines ${plan.span.startLine}–${plan.span.endLine} · confidence ${
-        plan.span.confidence === null ? 'unreported' : plan.span.confidence.toFixed(2)
-      }`,
-      `Current span text: "${plan.span.excerpt}"`,
-    )
-  }
-  if (plan.bbox) lines.push(`ROI: ${plan.bbox.label} · confidence ${plan.bbox.confidence.toFixed(2)}`)
-  lines.push(
-    'Proposed tool call:',
-    JSON.stringify({ name: call.name, arguments: call.params }, null, 2),
-  )
-  // An erased document has no text to quote; say so rather than leaving an
-  // empty "Note around the span:" block that reads as a missing-anchor fault.
-  lines.push(
-    note.trim()
-      ? `Note around the span:\n${truncate(note, 1800)}`
-      : 'The note is currently empty; the proposed call adds new content without replacing or deleting anything.\nNote around the span: (empty document — 0 lines)',
-  )
-  return lines.join('\n')
-}
-
-function liveWorkerCall(
-  parsed: ParsedToolCall,
-  reasoning: string,
-  rawText: string,
-  ms: number,
-  usagePromptTokens: number,
-  usageOutputTokens: number,
-  plan: SupervisorPlan,
-  note: string,
-  sampler: WorkerSampler,
-): WorkerCall {
-  const promptHints: string[] = [
-    `Decoded by LFM3-1.7B · ${(ms / 1000).toFixed(1)}s · ${usagePromptTokens} prompt tokens`,
-    `Sent sampler: temperature=${sampler.temperature} · max_tokens=${sampler.maxTokens}`,
-  ]
-  if (plan.span) {
-    promptHints.push(
-      `Target span: lines ${plan.span.startLine}–${plan.span.endLine} · P=${
-        plan.span.confidence === null ? 'unreported' : plan.span.confidence.toFixed(2)
-      }`,
-      `Exact anchor: ${truncate(plan.span.excerpt, 80)}`,
-    )
-  }
-  if (plan.bbox) {
-    promptHints.push(`ROI crop: ${plan.bbox.label} · P=${plan.bbox.confidence.toFixed(2)}`)
-  }
-  if (plan.anchorHeading) promptHints.push(`Anchor heading: ${plan.anchorHeading}`)
-  promptHints.push('Line-numbered note window injected; full file withheld')
-
-  return {
-    name: parsed.name,
-    params: parsed.params,
-    thought: parsed.think ?? reasoning ?? `Worker emitted ${parsed.name} from the grounded hints.`,
-    xml: renderToolCallXml(parsed.name, parsed.params),
-    rawTokens: usageOutputTokens || estimateTokens(rawText),
-    promptHints,
-    toolSchemasInjected: 1,
-    noteView: tokenViewForWorker(note, plan.span, null),
-    sampler,
-  }
-}
-
-/**
- * Any rejection layer — critic verdict or engine-level refusal — lands
- * in rejectedTraces so the drawer/export shows every stopped call, not
- * only the ones the critic caught (audit TD-44).
- */
-function recordRejectedTrace(
-  deps: PipelineDeps,
-  ctx: TurnContext,
-  grounded: GroundedTurn,
-  produced: WorkerOutcome,
-  reason: string | undefined,
-  pCorrect: Probability,
-): void {
-  const { command, traceLocal } = ctx
-  const { effectiveRoute, grounding } = grounded
-  const { call } = produced
-  deps.setRejectedTraces((previous) => [
-    ...previous,
-    {
-      at: Date.now(),
-      command,
-      route: {
-        tool: effectiveRoute.primaryTool,
-        provenance:
-          traceLocal.runtime?.route === 'live'
-            ? 'd1-Omni · /v1/systemone'
-            : 'local heuristics',
-      },
-      spanCandidates: grounding.candidates.map((candidate) => ({
-        startLine: candidate.startLine,
-        endLine: candidate.endLine,
-        excerpt: candidate.excerpt,
-      })),
-      grounding: {
-        source: grounding.source,
-        chosenLine: grounding.span?.startLine,
-        p: grounding.p,
-      },
-      workerXml: call.xml,
-      critic: { verdict: 'rejected', reason, pCorrect },
-    },
-  ])
 }
 
 /**
@@ -722,39 +369,12 @@ export async function runPipelineTurn(
     // Captured once at turn start: a mode switch mid-turn must never swap the
     // models under an in-flight turn.
     const mode = deps.modeRef.current
-    if (OMNI_FIRST) {
-      if (mode === 'omni') {
-        await runOmniFirstTurn(deps, ctx)
-        return
-      }
-      await runWorkerChatFirstTurn(deps, ctx, mode)
+    if (mode === 'omni') {
+      await runOmniFirstTurn(deps, ctx)
       return
     }
-
-    await sleep(220)
-
-    const route = await runRouteStage(deps, ctx)
-    if (route?.directive) {
-      await runDirectiveStage(deps, ctx, route)
-      return
-    }
-    if (route?.action === 'conversational_only') {
-      await runConversationalStage(deps, ctx)
-      return
-    }
-    if (route?.action === 'ambiguous_request') {
-      await runClarificationStage(deps, ctx, route)
-      return
-    }
-    if (!route || !route.primaryTool) {
-      throw new Error('Supervisor returned no tool for a mutation turn.')
-    }
-    const grounded = await runGroundingStage(deps, ctx, route)
-    if (!grounded) return
-    const produced = await runWorkerStage(deps, ctx, grounded)
-    const critic = await runCriticStage(deps, ctx, grounded, produced)
-    if (!critic) return
-    await runExecutionStage(deps, ctx, grounded, produced, critic)
+    await runWorkerChatFirstTurn(deps, ctx, mode)
+    return
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown orchestrator failure.'
     if (!closed) {
@@ -862,7 +482,7 @@ export function buildDictationCall(directive: Directive, note: string): WorkerCa
   }
 }
 
-/** Rejected-trace record for the Omni-first path (the legacy recordRejectedTrace is supervisor-shaped). */
+/** Rejected-trace record for a worker-authored call the harness refused. */
 function recordOmniRejection(
   deps: PipelineDeps,
   ctx: TurnContext,
@@ -893,7 +513,7 @@ function recordOmniRejection(
 }
 
 /**
- * The Omni-first turn (design.md §§2–9), behind OMNI_FIRST. One model is
+ * The Omni-first turn (design.md §§2–9). One model is
  * the interface: Omni answers, clarifies, maps undo/redo, or silently
  * delegates a typed directive to the 1.7B worker. The worker authors and
  * grounds its call from the §6 packet; deterministic hard gates run next;
@@ -995,6 +615,19 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
     const text = omni.text ?? ''
     traceLocal.timings.chat = omni.ms
     deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
+    // No silent failures: a clarify that exists because the delegation
+    // failed validation twice (omni.repair is set only on that path) must
+    // SAY the edit failed — a bare clarifying question would read as if
+    // nothing went wrong and the note was simply not discussed.
+    if (omni.outcome === 'clarify' && omni.repair) {
+      deps.addMessage({
+        role: 'assistant',
+        kind: 'notice',
+        text: `That edit didn't go through — the instruction Omni produced failed validation (${omni.repair.error}). Nothing was changed. The question below is how to retry it.`,
+        runId: traceLocal.id,
+      })
+      deps.notify('Edit failed validation', omni.repair.error, 'error')
+    }
     settleStream(text)
     deps.speakReply(text)
     finish(omni.outcome === 'answer' ? 'conversational' : 'clarify')
@@ -1213,8 +846,9 @@ function workerChatCall(
  * decision, the same rationale as Omni-first. A prose reply settles the
  * bubble and is spoken; a tool call becomes a Directive synthesized from the
  * command and flows through the shared verifyAndExecute tail: d1's §7
- * safety check in `worker-d1`, no d1 call at all in `lowram` (hard gates +
- * engine dry-run decide).
+ * safety check in `worker-d1`; in `lowram` there is no d1 call at all —
+ * the hard gates run, then the edit is held for the user (no decision
+ * model means no silent execution).
  */
 async function runWorkerChatFirstTurn(
   deps: PipelineDeps,
@@ -1228,11 +862,9 @@ async function runWorkerChatFirstTurn(
 
   // Deterministic undo/redo pre-check: same pipeline-directive rationale as
   // the Omni-first path.
-  const pre = routeCommand(command)
-  if (pre.directive) {
-    traceLocal.route = pre
-    publish()
-    await runDirectiveStage(deps, ctx, pre)
+  const snapshotAction = detectSnapshotDirective(command)
+  if (snapshotAction) {
+    await runSnapshotDirective(deps, ctx, snapshotAction)
     return
   }
 
@@ -1417,9 +1049,9 @@ async function runWorkerChatFirstTurn(
   traceLocal.workerNoteView = call.noteView
   publish()
 
-  // Mode 3 runs no d1: hard gates + the engine dry-run decide, and there is
-  // no pending path (nothing may hold an edit for a decision layer that does
-  // not exist).
+  // Mode 3 runs no d1: verifyAndExecute holds the gate-passing edit for
+  // the user's decision — with no decision model running, nothing may
+  // execute silently.
   await verifyAndExecute(deps, ctx, directive, call, null, {
     d1Check: mode === 'worker-d1',
     snapshotLabel: '1.7B tool call',
@@ -1433,8 +1065,44 @@ async function runWorkerChatFirstTurn(
  * pending edit when d1 disapproves or is unavailable.
  *
  * `options.d1Check: false` is the low-RAM path: the d1 server does not run
- * in that mode, so no check is attempted and no pending edit can be created.
+ * in that mode. Silent edits are the decision model's job — with no
+ * decision model running, nothing may execute silently, so the edit is
+ * held as a pending edit for the user (the user IS the decision layer in
+ * this mode) instead of executing directly.
  */
+
+/** Hold a gate-passing call as a pending edit for the user's decision. */
+function holdForUserDecision(
+  deps: PipelineDeps,
+  ctx: TurnContext,
+  delegation: DelegationInfo,
+  delegationId: string,
+  directive: Directive,
+  call: WorkerCall,
+  diff: ExecutionDiff,
+  d1: PendingEdit['d1'],
+  confidence: number | null,
+  heldText: string,
+  notifyDetail: string,
+): void {
+  const { traceLocal, finish } = ctx
+  const pending = createPendingEdit({
+    directive,
+    call,
+    diff,
+    noteHash: noteHash(ctx.noteAtStart),
+    d1,
+  })
+  deps.addPendingEdit(pending)
+  deps.patchMessage(delegationId, {
+    delegation: { ...delegation, status: 'pending', confidence },
+  })
+  traceLocal.status = 'pending'
+  deps.addMessage({ role: 'assistant', kind: 'notice', text: heldText, runId: traceLocal.id })
+  deps.notify('Edit waiting for your decision', notifyDetail, 'neutral')
+  deps.speakReply('That edit needs your call. It is waiting under pending edits.')
+  finish('pending')
+}
 async function verifyAndExecute(
   deps: PipelineDeps,
   ctx: TurnContext,
@@ -1495,10 +1163,34 @@ async function verifyAndExecute(
     return
   }
 
+  // --- no decision model in this mode: the user decides ---------------------
+  // Low-RAM runs no d1, so there is no security layer that could approve a
+  // silent edit. The gate-passing call is held for the user instead of
+  // executing — visible, adjudicable, never silent in either direction.
+  if (!options.d1Check) {
+    holdForUserDecision(
+      deps,
+      ctx,
+      delegation,
+      delegationId,
+      directive,
+      call,
+      preview.diff,
+      {
+        verdict: 'unavailable',
+        noul: null,
+        destructiveSafety: null,
+        reason:
+          'Low-RAM mode runs no decision model (d1), so no edit executes silently in this mode — this one needs your decision.',
+      },
+      null,
+      'Low-RAM mode runs no safety-check model, so this edit is held for your decision under Pending edits instead of executing on its own. The note was not touched.',
+      'No decision model in low-RAM mode; held for adjudication.',
+    )
+    return
+  }
+
   // --- d1 safety check (design.md §7): its only job -------------------------
-  // Skipped entirely when the mode runs no d1 (low-RAM): the hard gates and
-  // the engine dry-run above are the whole decision, and no pending edit may
-  // be created for a decision layer that does not exist.
   let check: D1CheckResult | null = null
   if (options.d1Check) {
     deps.setFlowModel('d1')
@@ -1525,42 +1217,33 @@ async function verifyAndExecute(
     publish()
 
     if (check.verdict !== 'approved') {
-      const pending = createPendingEdit({
+      holdForUserDecision(
+        deps,
+        ctx,
+        delegation,
+        delegationId,
         directive,
         call,
-        diff: preview.diff,
-        noteHash: noteHash(noteAtStart),
-        d1: {
+        preview.diff,
+        {
           verdict: check.verdict,
           noul: check.noul,
           destructiveSafety: check.destructiveSafety,
           ...(check.reason ? { reason: check.reason } : {}),
         },
-      })
-      deps.addPendingEdit(pending)
-      deps.patchMessage(delegationId, {
-        delegation: { ...delegation, status: 'pending', confidence: check.noul },
-      })
-      traceLocal.status = 'pending'
-      const held =
+        check.noul,
         check.verdict === 'unavailable'
           ? 'The safety check was unavailable, so this edit is held for your decision rather than decided automatically. It is waiting under Pending edits — the note was not touched.'
-          : 'The safety check disapproved this edit, but it passed every deterministic gate, so it is held for your decision under Pending edits instead of being dropped. The note was not touched.'
-      deps.addMessage({ role: 'assistant', kind: 'notice', text: held, runId: traceLocal.id })
-      deps.notify(
-        'Edit waiting for your decision',
+          : 'The safety check disapproved this edit, but it passed every deterministic gate, so it is held for your decision under Pending edits instead of being dropped. The note was not touched.',
         check.verdict === 'unavailable'
           ? 'd1 unavailable; held for adjudication.'
           : 'd1 disapproved; held for adjudication.',
-        'neutral',
       )
-      deps.speakReply('That edit needs your call. It is waiting under pending edits.')
-      finish('pending')
       return
     }
   }
 
-  // --- approved (or no d1 in this mode): execute ------------------------------
+  // --- d1 approved: execute (the silent path, guarded by the decision model) --
   const confidence = check?.noul ?? null
   deps.setStageStates({ A: 'done', B: 'done', C: options.d1Check ? 'done' : 'skipped' })
   deps.patchMessage(delegationId, {
@@ -1621,835 +1304,53 @@ function anchorCorrectionFor(
   return { startLine, endLine, actualText }
 }
 
-/** Stage A — d1/heuristic routing plus the deterministic syntax overrides of the live route. */
-async function runRouteStage(deps: PipelineDeps, ctx: TurnContext): Promise<RouteDecision | null> {
-  const { command, noteAtStart, traceLocal, runtime, liveUsage, publish } = ctx
-  // --- A · route ------------------------------------------------------
-  // Undo/redo are pipeline directives, not model decisions: snapshot
-  // rollback must win even when d1-Omni is live, or a small model reads
-  // "undo that" as a file mutation and the run grounds against nothing.
-  // Live path: d1-Omni-2B classifies the command over /v1/systemone in one
-  // forward pass (watching the current frame). Fallback: local heuristics.
-  let route: RouteDecision | null = null
-  const localPre = routeCommand(command)
-  if (localPre.directive) route = localPre
-  if (!route && endpointUp(deps.healthRef.current, 'd1omni')) {
-    try {
-      // Same video toggle as the chat turns: OFF routes text-only.
-      const frame = deps.videoEnabledRef.current
-        ? await resolveSceneFrame('full').catch(() => null)
-        : null
-      traceLocal.frameSource = frame?.source ?? 'none'
-      const decision = await d1Decide({
-        state: [
-          `User command: ${command}`,
-          `Note (${NOTE_PATH}):\n${truncate(noteAtStart, 2400)}`,
-        ].join('\n'),
-        imageDataUrl: frame?.dataUrl,
-        questions: ROUTE_QUESTIONS,
-      })
-      const decided = routeFromAnswers(decision.answers)
-      if (decided) {
-        route = decided
-        runtime.route = 'live'
-        traceLocal.timings.route = decision.ms
-        if (decision.usage.promptTokens) {
-          traceLocal.promptTokens = decision.usage.promptTokens
-          liveUsage.d1 = decision.usage.promptTokens
-        }
-      }
-    } catch {
-      route = null
-    }
-  }
-  if (!route) {
-    const routeStarted = performance.now()
-    route = routeCommand(command)
-    traceLocal.timings.route = Number((performance.now() - routeStarted).toFixed(1))
-  }
-  // Deterministic syntax checks outrank the live route in three narrow
-  // cases: a question can never be a mutation (a small model reads
-  // hypotheticals as edits and deletes real content), a vague deictic
-  // reference must not be upgraded to a mutation (keyword grounding would
-  // then guess a target from accidental token hits), and "replace X with
-  // Y" is always an edit_text — routing it as add_text would insert the
-  // replacement instead of swapping the span, and the blast-radius critic
-  // never sees the destructive intent.
-  if (route && !route.directive && route.action === 'file_mutation') {
-    const localSyntax = routeCommand(command)
-    if (
-      localSyntax.action === 'conversational_only' &&
-      /Interrogative turn/i.test(localSyntax.reason)
-    ) {
-      route = {
-        ...localSyntax,
-        reason: `${localSyntax.reason} Live d1 route said ${route.action}; the imperative-syntax check overrode it.`,
-      }
-      runtime.route = 'fallback'
-      } else if (
-        localSyntax.action === 'ambiguous_request' &&
-        isVagueMutation(command)
-      ) {
-        // The live route upgraded "delete that part" to a mutation; the
-        // deterministic vague-reference guardrail diverts it to the same
-        // clarification flow the local router produces. Provenance is
-        // relabeled like the interrogative override — the effective
-        // decision is the deterministic one — and the reason records
-        // what the live route originally said.
-        route = {
-          ...localSyntax,
-          reason: `${localSyntax.reason} Live d1 route said ${route.action}; the vague-reference guardrail diverted it to clarification.`,
-        }
-        runtime.route = 'fallback'
-      } else if (
-        route.primaryTool &&
-        route.primaryTool !== 'edit_text' &&
-        /\b(?:replace|swap|substitute)\b/i.test(command) &&
-        /\bwith\b/i.test(command)
-      ) {
-        const pinned = pFloor(
-          route.allowedTools.find((tool) => tool.name === 'edit_text')?.p,
-          0.3,
-        )
-        route = {
-          ...route,
-          primaryTool: 'edit_text',
-          allowedTools: [
-            { name: 'edit_text', p: pinned },
-            ...route.allowedTools.filter((tool) => tool.name !== 'edit_text'),
-          ],
-          reason: `${route.reason} · "replace … with …" pinned to edit_text by the syntax check.`,
-        }
-      } else if (
-        route.primaryTool &&
-        route.primaryTool !== 'extract_visual_to_note' &&
-        /\b(?:extract|pull|grab|copy|transcribe|ocr|import|capture|bring|take)\b/i.test(command) &&
-        /\b(?:slide|whiteboard|screen|camera|image|photo|frame|chart|diagram|sticky)\b/i.test(command)
-      ) {
-        const pinned = pFloor(
-          route.allowedTools.find((tool) => tool.name === 'extract_visual_to_note')?.p,
-          0.3,
-        )
-        route = {
-          ...route,
-          primaryTool: 'extract_visual_to_note',
-          allowedTools: [
-            { name: 'extract_visual_to_note', p: pinned },
-            ...route.allowedTools.filter((tool) => tool.name !== 'extract_visual_to_note'),
-          ],
-          reason: `${route.reason} · extraction verb plus a named visual source pinned to extract_visual_to_note.`,
-        }
-      }
-  }
-  traceLocal.route = route
-  publish()
-  deps.setStageStates({ A: 'done', B: 'idle', C: 'idle' })
-  return route
-}
-
-/** Undo/redo directives: snapshot rollback short-circuits the model stages. */
-async function runDirectiveStage(
+/** Undo/redo: snapshot rollback short-circuits the model stages. */
+async function runSnapshotDirective(
   deps: PipelineDeps,
   ctx: TurnContext,
-  route: RouteDecision,
+  action: 'undo' | 'redo',
 ): Promise<void> {
   const { traceLocal, publish, finish } = ctx
-    deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
-    deps.setStage('executing')
-    deps.setFlowModel(null)
-    const directiveStarted = performance.now()
-    const delta = route.directive === 'undo' ? -1 : 1
-    const restored = deps.restoreHistory(deps.historyIndexRef.current + delta)
-    traceLocal.timings.execute = Number((performance.now() - directiveStarted).toFixed(1))
-    if (!restored.ok) {
-      traceLocal.status = 'conversational'
-      deps.addMessage({
-        role: 'assistant',
-        kind: 'result',
-        text:
-          route.directive === 'undo'
-            ? 'There is nothing to undo yet — the note is at its first snapshot.'
-            : 'There is nothing to redo. The note is already at the latest snapshot.',
-      })
-      deps.setContextUsage((previous) => ({
-        ...previous,
-        omni: clamp(previous.omni + 90, 1200, 30000),
-      }))
-      finish('conversational')
-      return
-    }
-    traceLocal.execution = {
-      ok: true,
-      message: restored.message,
-      // The orchestrator only enters this stage when route.directive is set.
-      tool: route.directive!,
-      note: restored.note,
-      durationMs: traceLocal.timings.execute,
-      snapshotId: restored.snapshot?.id,
-    }
-    publish()
-    const confirmation =
-      route.directive === 'undo'
-        ? `Reverted to “${restored.snapshot?.label}”. The note is back to the previous verified snapshot — no model inference needed.`
-        : `Reapplied “${restored.snapshot?.label}”. Snapshot ${deps.historyIndexRef.current} is active again.`
+  deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
+  deps.setStage('executing')
+  deps.setFlowModel(null)
+  const directiveStarted = performance.now()
+  const delta = action === 'undo' ? -1 : 1
+  const restored = deps.restoreHistory(deps.historyIndexRef.current + delta)
+  traceLocal.timings.execute = Number((performance.now() - directiveStarted).toFixed(1))
+  if (!restored.ok) {
+    traceLocal.status = 'conversational'
     deps.addMessage({
       role: 'assistant',
       kind: 'result',
-      text: confirmation,
+      text:
+        action === 'undo'
+          ? 'There is nothing to undo yet — the note is at its first snapshot.'
+          : 'There is nothing to redo. The note is already at the latest snapshot.',
       runId: traceLocal.id,
     })
-    deps.setContextUsage((previous) => ({
-      ...previous,
-      omni: clamp(previous.omni + 120, 1200, 30000),
-      d1: clamp(5200 + estimateTokens(restored.note) + 900, 4500, 120000),
-    }))
-    deps.speakReply(confirmation)
-    finish('verified')
-    return
-}
-
-/** Conversational branch: streamed Omni chat with the deterministic template fallback. */
-async function runConversationalStage(deps: PipelineDeps, ctx: TurnContext): Promise<void> {
-  const { command, noteAtStart, traceLocal, runtime, liveUsage, publish, finish } = ctx
-    deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
-    const last = deps.runsRef.current[0]
-    const lastRun = last
-      ? {
-          command: last.command,
-          status: last.status,
-          executionMessage: last.execution?.message,
-        }
-      : null
-    const memory = conversationTurns(deps.messagesRef.current, CHAT_MEMORY_TURNS)
-    // Stage the assistant bubble now; streamed tokens fill it live.
-    const streamId = deps.addMessage({
-      role: 'assistant',
-      kind: 'result',
-      text: '',
-      streaming: true,
-      runId: traceLocal.id,
-    })
-    const controller = new AbortController()
-    deps.chatAbortRef.current = controller
-    let reply = ''
-    let aborted = false
-    let lastFlush = 0
-    const flush = () => {
-      const now = performance.now()
-      if (now - lastFlush < 48) return
-      lastFlush = now
-      deps.patchMessage(streamId, { text: sanitizeOmniText(reply) })
-    }
-    // Live path: LFM3-Omni-2B over /v1/chat/completions, streamed. The frame
-    // is attached only for visual-relevant turns — small talk stays fast.
-    if (endpointUp(deps.healthRef.current, 'omni')) {
-      try {
-        const wantsVisual =
-          /\b(see|look|slide|screen|camera|show|image|frame|describe|chart|table|formula|sticky|whiteboard|visual|read)\b/i.test(
-            command,
-          )
-        const frame =
-          wantsVisual && deps.videoEnabledRef.current
-            ? await resolveSceneFrame('full')
-            : null
-        if (frame) traceLocal.frameSource = frame.source
-        const completion = await chatCompleteStream(
-          'omni',
-          buildChatMessages(
-            command,
-            noteAtStart,
-            lastRun,
-            memory,
-            frame,
-          ),
-          {
-            temperature: 0.3,
-            maxTokens: 500,
-            signal: controller.signal,
-            onToken: (delta) => {
-              reply += delta
-              flush()
-            },
-          },
-        )
-        reply = completion.text
-        runtime.chat = 'live'
-        traceLocal.timings.chat = completion.ms
-        traceLocal.outputTokens = completion.usage.outputTokens || estimateTokens(reply)
-        if (completion.usage.promptTokens) {
-          traceLocal.promptTokens = completion.usage.promptTokens
-          liveUsage.omni = completion.usage.promptTokens
-        }
-      } catch {
-        aborted = controller.signal.aborted
-      } finally {
-        if (deps.chatAbortRef.current === controller) deps.chatAbortRef.current = null
-      }
-    }
-
-    // Omni is chat-only: strip tool-call artifacts it improvises before
-    // the reply is accepted, displayed or spoken. An all-artifact reply
-    // falls through to the deterministic template below.
-    reply = sanitizeOmniText(reply)
-
-    if (aborted && !reply.trim()) {
-      // Cut before the first token: never leave an empty bubble behind.
-      deps.setMessages((previous) => previous.filter((message) => message.id !== streamId))
-      finish('conversational')
-      return
-    }
-    if (!reply.trim()) {
-      // Fallback: deterministic local templates. The scene's true source
-      // decides what may be described: only the synthetic slide's content
-      // is known by construction; a live frame is never described by a
-      // template (audit TD-18).
-      reply = conversationalReply(command, noteAtStart, lastRun, currentSceneSource())
-      traceLocal.outputTokens = estimateTokens(reply)
-      deps.setContextUsage((previous) => ({
-        ...previous,
-        omni: clamp(
-          previous.omni + 120 + Math.round(estimateTokens(command) / 2),
-          1200,
-          30000,
-        ),
-      }))
-    } else if (aborted && runtime.chat !== 'live') {
-      // Partial tokens did arrive from the model before the abort.
-      runtime.chat = 'live'
-      traceLocal.outputTokens = estimateTokens(reply)
-    }
-    deps.patchMessage(streamId, { text: reply, streaming: false })
-    publish()
-    if (!aborted) deps.speakReply(reply)
     finish('conversational')
     return
-}
-
-/** Ambiguous request: deterministic clarification with suggestion actions. */
-async function runClarificationStage(
-  deps: PipelineDeps,
-  ctx: TurnContext,
-  route: RouteDecision,
-): Promise<void> {
-  const { command, noteAtStart, traceLocal, publish, finish } = ctx
-    deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
-    const clarification = buildClarification(
-      noteAtStart,
-      command,
-      route.primaryTool ?? 'edit_text',
-      'ambiguous',
-    )
-    traceLocal.outputTokens = estimateTokens(clarification.text)
-    deps.addMessage({
-      role: 'assistant',
-      kind: 'clarify',
-      text: clarification.text,
-      actions: clarification.actions,
-      runId: traceLocal.id,
-    })
-    deps.setContextUsage((previous) => ({
-      ...previous,
-      omni: clamp(previous.omni + 100, 1200, 30000),
-    }))
-    publish()
-    deps.speakReply(clarification.text)
-    finish('clarify')
-    return
-}
-
-/**
- * Grounding: deterministic buildPlan with runner-up tool repair, d1 span
- * grounding, canned ack. Null halts the turn (clarification finished it).
- */
-async function runGroundingStage(
-  deps: PipelineDeps,
-  ctx: TurnContext,
-  route: RouteDecision,
-): Promise<GroundedTurn | null> {
-  const { command, noteAtStart, traceLocal, liveUsage, publish, finish } = ctx
-  let effectiveRoute: RouteDecision = route
-
-  deps.setStage('grounding')
-  deps.setStageStates({ A: 'done', B: 'running', C: 'idle' })
-  deps.setFlowModel('d1')
-  // Deterministic pre-pass: literal pre-empts (exact quote, line numbers,
-  // ordinals) plus the fallback candidate search. A vague reference then
-  // goes to d1-Omni's typed span question in resolveGroundingSpan below.
-  const groundStarted = performance.now()
-  let plan = buildPlan(command, effectiveRoute, noteAtStart)
-  // d1's tool pick can fail to ground (e.g. add_text chosen for an update
-  // command). Retry the runner-up tools from d1's own distribution before
-  // falling back to a clarification, and record the repair in the reason.
-  if (plan.problem && effectiveRoute.primaryTool) {
-    const failedTool = effectiveRoute.primaryTool
-    // Adoption-gate the alternatives: an unreported runner-up (d1 chose
-    // without a distribution) is still a candidate; a measured score must
-    // clear the prune. Unreported sorts as adopted, mirroring the ranking.
-    const alternatives = effectiveRoute.allowedTools
-      .filter((tool) => pAdopted(tool.p, 0.2) && tool.name !== failedTool)
-      .sort((a, b) => (b.p ?? 1) - (a.p ?? 1))
-    for (const alternative of alternatives) {
-      const retryPlan = buildPlan(
-        command,
-        { ...effectiveRoute, primaryTool: alternative.name },
-        noteAtStart,
-      )
-      if (!retryPlan.problem) {
-        // The critic's `tool_match` demands adoption-gated membership, so
-        // the switched tool must be visible in allowedTools — otherwise
-        // the retry wins grounding and is then guaranteed rejected. A
-        // measured score below the repair floor is replaced by the flat
-        // heuristic floor (the reason records the repair); an unreported
-        // score stays unreported.
-        const mergedTools = effectiveRoute.allowedTools.some(
-          (tool) => tool.name === alternative.name,
-        )
-          ? effectiveRoute.allowedTools.map((tool) =>
-              tool.name === alternative.name ? { ...tool, p: pFloor(tool.p, 0.5) } : tool,
-            )
-          : [
-              ...effectiveRoute.allowedTools,
-              { name: alternative.name, p: pFloor(alternative.p, 0.5) },
-            ]
-        effectiveRoute = {
-          ...effectiveRoute,
-          primaryTool: alternative.name,
-          allowedTools: mergedTools,
-          reason: `${effectiveRoute.reason} · grounded as ${alternative.name} after ${failedTool} found no target`,
-        }
-        plan = retryPlan
-        break
-      }
-    }
   }
-  if (!effectiveRoute.primaryTool) {
-    throw new Error('Supervisor returned no tool for a mutation turn.')
-  }
-  // d1-Omni typed span grounding: structural candidates are enumerated
-  // from the note and d1 answers one choice question over them. A d1
-  // outage or sub-threshold choice keeps the deterministic search; the
-  // trace records which path ran.
-  const grounding = await resolveGroundingSpan(
-    command,
-    noteAtStart,
-    plan,
-    effectiveRoute.primaryTool,
-    { live: endpointUp(deps.healthRef.current, 'd1omni') },
-  )
-  if (grounding.span) {
-    plan = { ...plan, span: grounding.span }
-  }
-  if (grounding.planPatch) {
-    plan = { ...plan, ...grounding.planPatch }
-  }
-  if (grounding.promptTokens) {
-    liveUsage.d1 = grounding.promptTokens
-  }
-  traceLocal.grounding = {
-    source: grounding.source,
-    p: grounding.p,
-    chosenLine: grounding.span?.startLine,
-    candidateCount: grounding.offered,
-    detail: grounding.detail,
-  }
-  traceLocal.route = effectiveRoute
-  traceLocal.timings.ground = Number((performance.now() - groundStarted).toFixed(1))
-  if (traceLocal.timings.ground < 180) await sleep(180 - traceLocal.timings.ground)
-
-  const acknowledgement = ackFor(effectiveRoute.primaryTool)
-  deps.addMessage({
-    role: 'assistant',
-    kind: 'ack',
-    text: acknowledgement,
-    runId: traceLocal.id,
-  })
-  deps.speakReply(acknowledgement)
-
-  if (plan.span) {
-    traceLocal.span = plan.span
-    deps.setSpan(plan.span)
-  }
-  if (plan.bbox) {
-    traceLocal.bbox = plan.bbox
-    deps.setBBox(plan.bbox)
+  traceLocal.execution = {
+    ok: true,
+    message: restored.message,
+    tool: action,
+    note: restored.note,
+    durationMs: traceLocal.timings.execute,
+    snapshotId: restored.snapshot?.id,
   }
   publish()
-  deps.setStageStates({ A: 'done', B: 'done', C: 'idle' })
-
-  if (plan.problem) {
-    const clarification = buildClarification(
-      noteAtStart,
-      command,
-      effectiveRoute.primaryTool,
-      plan.problem,
-      plan.problemDetail,
-    )
-    deps.setStageStates({ A: 'done', B: 'done', C: 'skipped' })
-    traceLocal.outputTokens = estimateTokens(clarification.text)
-    deps.addMessage({
-      role: 'assistant',
-      kind: 'clarify',
-      text: clarification.text,
-      actions: clarification.actions,
-      runId: traceLocal.id,
-    })
-    deps.setContextUsage((previous) => ({
-      ...previous,
-      omni: clamp(previous.omni + 110, 1200, 30000),
-    }))
-    publish()
-    deps.speakReply(clarification.text)
-    finish('clarify')
-    return null
-  }
-
-  return { effectiveRoute, plan, grounding }
-}
-
-/**
- * Generation: worker attempt loop with template fallback and the
- * supervisor's span-overwrite of a live call that narrowed the target.
- */
-async function runWorkerStage(
-  deps: PipelineDeps,
-  ctx: TurnContext,
-  grounded: GroundedTurn,
-): Promise<WorkerOutcome> {
-  const { command, noteAtStart, traceLocal, runtime, liveUsage, publish } = ctx
-  const { effectiveRoute, plan } = grounded
-  const templateCall = buildWorkerCall(command, effectiveRoute, plan, noteAtStart)
-  // Worker selection: LFM3-1.7B (256K ctx) decodes every text mutation; a
-  // down 1.7B falls back to the deterministic template, so a run never
-  // fails on worker availability alone. Visual extraction never calls a
-  // model: the supervisor's deterministic extractor already carries the
-  // Markdown, so there the template call IS the call.
-  const wantsText = effectiveRoute.primaryTool !== 'extract_visual_to_note'
-  const textWorkerUp = wantsText && endpointUp(deps.healthRef.current, 'text')
-  const delegation = {
-    runId: traceLocal.id,
-    // Grounding threw unless a primary tool survived; the narrowing does not
-    // cross the stage boundary, the guard does.
-    tool: effectiveRoute.primaryTool!,
-    status: 'generating' as const,
-    modelLabel: wantsText ? '1.7B' : 'local',
-    thought: wantsText
-      ? 'The 1.7B worker is decoding the grounded hints into one XML tool call.'
-      : (templateCall?.thought ??
-        'The supervisor is building the deterministic extraction call.'),
-  }
-  const delegationId = deps.addMessage({
-    role: 'tool',
-    text: '',
-    delegation,
-  })
-
-  deps.setStage('generating')
-  deps.setStageStates({ A: 'done', B: 'done', C: 'idle' })
-  deps.setFlowModel('worker')
-
-  // Live path: the 1.7B emits the XML tool call over /v1/chat/completions.
-  // Fallback: the deterministic template.
-  let call: WorkerCall | null = null
-  if (textWorkerUp) {
-    try {
-      const messages = buildWorkerMessages(command, effectiveRoute, plan, noteAtStart)
-      // The 1.7B reasons at length before closing its  thinking block
-      // (~2K tokens on the windowed prompt); a 900-token budget truncated
-      // it mid-think, so give it room and one spare attempt before falling
-      // back to the deterministic template.
-      const attempts: ChatOptions[] = [
-        { temperature: 0.3, maxTokens: 3000 },
-        { temperature: 0.4, maxTokens: 3000 },
-      ]
-      for (const options of attempts) {
-        const completion = await chatComplete('text', messages, options)
-        const rawText = completion.text
-        const xmlInput = /<think>/.test(rawText)
-          ? rawText
-          : completion.reasoning
-            ? `<think>${completion.reasoning}</think>\n${rawText}`
-            : rawText
-        const parsed = parseToolCallXml(xmlInput)
-        // Mismatched-but-sensible calls were dropped on both attempts: the
-        // 1.7B often picks the better tool (edit_text for an update routed
-        // as add_text). Accept any allowed tool with real routing support;
-        // the critic still gates execution afterwards.
-        const routed =
-          parsed !== null &&
-          (parsed.name === effectiveRoute.primaryTool ||
-            effectiveRoute.allowedTools.some(
-              (tool) => tool.name === parsed.name && pAdopted(tool.p, 0.25),
-            ))
-        const required = parsed
-          ? TOOL_BY_NAME[parsed.name].params
-              .filter((param) => param.required)
-              .map((param) => param.name)
-          : []
-        const complete =
-          parsed !== null &&
-          routed &&
-          required.every((name) => (parsed.params[name] ?? '').length > 0)
-        if (parsed && complete) {
-          call = liveWorkerCall(
-            parsed,
-            completion.reasoning,
-            rawText,
-            completion.ms,
-            completion.usage.promptTokens,
-            completion.usage.outputTokens,
-            plan,
-            noteAtStart,
-            // Exactly what this attempt put on the wire — the trace's
-            // sampler chips read it back instead of hardcoding values.
-            // The fallbacks mirror chatComplete's own request defaults.
-            {
-              temperature: options.temperature ?? 0.1,
-              maxTokens: options.maxTokens ?? 700,
-            },
-          )
-          runtime.worker = 'live'
-          traceLocal.timings.generate = completion.ms
-          traceLocal.outputTokens = call.rawTokens
-          if (completion.usage.promptTokens) {
-            traceLocal.promptTokens = completion.usage.promptTokens
-            liveUsage.worker = completion.usage.promptTokens
-          }
-          deps.patchMessage(delegationId, {
-            delegation: {
-              ...delegation,
-              thought: call.thought,
-              modelLabel: '1.7B',
-            },
-          })
-          break
-        }
-        }
-    } catch {
-      call = null
-    }
-  }
-  if (!call) {
-    if (!templateCall) throw new Error('Worker could not build a call from supervisor hints.')
-    call = templateCall
-    traceLocal.timings.generate = 0.2
-    // The deterministic template executed: relabel the delegation card so
-    // it never claims a 1.7B decode that did not happen (audit TD-13).
-    if (wantsText) {
-      deps.patchMessage(delegationId, {
-        delegation: {
-          ...delegation,
-          modelLabel: 'local',
-          thought: `${templateCall.thought} The 1.7B worker was ${
-            textWorkerUp ? 'asked but returned no usable call' : 'unavailable'
-          } — this call was built locally instead.`,
-        },
-      })
-    }
-    if (traceLocal.timings.generate < 240) await sleep(240)
-  }
-  // The supervisor owns the target. A live worker can narrow a multi-line
-  // grounded span to the one line it finds salient ("that section about API
-  // keys" → the API-key bullet), which the critic would reject even though
-  // d1 already settled the span. Emit the supervisor's exact call instead;
-  // the critic still gates its blast radius and anchors.
-  if (
-    templateCall &&
-    call !== templateCall &&
-    call.name === templateCall.name &&
-    call.name !== 'add_text' &&
-    call.name !== 'extract_visual_to_note' &&
-    `${call.params.start_line}:${call.params.end_line}` !==
-      `${templateCall.params.start_line}:${templateCall.params.end_line}`
-  ) {
-    deps.patchMessage(delegationId, {
-      delegation: {
-        ...delegation,
-        modelLabel: 'supervisor',
-        thought: `The worker proposed lines ${call.params.start_line}–${call.params.end_line}; the grounded span was ${templateCall.params.start_line}–${templateCall.params.end_line}, so the supervisor's exact call replaced it.`,
-      },
-    })
-    call = templateCall
-    runtime.worker = 'fallback'
-    traceLocal.timings.generate = 0.2
-    traceLocal.outputTokens = call.rawTokens
-  }
-  traceLocal.call = call
-  traceLocal.workerNoteView = call.noteView
-  if (!traceLocal.promptTokens || traceLocal.promptTokens < estimateTokens(noteAtStart)) {
-    traceLocal.promptTokens =
-      estimateTokens(`${call.noteView}\n${call.promptHints.join('\n')}`) + 180
-  }
-  publish()
-
-  return { call, delegation, delegationId }
-}
-
-/**
- * Verification: local deterministic critique plus the d1 semantic overlay.
- * Null halts the turn (a rejection finished it).
- */
-async function runCriticStage(
-  deps: PipelineDeps,
-  ctx: TurnContext,
-  grounded: GroundedTurn,
-  produced: WorkerOutcome,
-): Promise<CriticResult | null> {
-  const { command, noteAtStart, traceLocal, runtime, liveUsage, publish, finish } = ctx
-  const { effectiveRoute, plan } = grounded
-  const { call, delegation, delegationId } = produced
-  deps.setStage('verifying')
-  deps.setStageStates({ A: 'done', B: 'done', C: 'running' })
-  deps.setFlowModel('d1')
-  // Local deterministic checks are hard gates (anchor exactness, blast
-  // radius, range bounds). When they pass and d1-Omni is up, its semantic
-  // pass answers one zero-token question over /v1/systemone.
-  const criticStarted = performance.now()
-  let critic: CriticResult = critique(noteAtStart, effectiveRoute, plan.span, call)
-  if (critic.verdict === 'verified' && endpointUp(deps.healthRef.current, 'd1omni')) {
-    try {
-      const decision = await d1Decide({
-        state: buildCriticState(command, plan, call, noteAtStart),
-        questions: CRITIC_QUESTIONS,
-      })
-      const answer = decision.answers.sound
-      if (answer && answer.type === 'noul') {
-        // A 2B model's cautious 0.4–0.5 scores were vetoing calls whose
-        // local hard gates (anchor exactness, blast radius, bounds) all
-        // passed. This block only runs when they did; the semantic pass is
-        // an overlay, so only a confidently bad score rejects.
-        const localPassed = critic.verdict === 'verified'
-        const accepted = localPassed && answer.noul >= 0.35
-        critic = {
-          ...critic,
-          pCorrect: clamp(answer.noul, 0.01, 0.99),
-          verdict: accepted ? 'verified' : 'rejected',
-          feedback: accepted
-            ? critic.feedback
-            : 'd1 semantic pass rejected the call; the note was not touched.',
-        }
-        runtime.critic = 'live'
-        traceLocal.timings.critic = decision.ms
-        if (decision.usage.promptTokens) {
-          traceLocal.promptTokens = decision.usage.promptTokens
-          liveUsage.d1 = decision.usage.promptTokens
-        }
-      }
-    } catch {
-      // d1 unreachable or malformed answer — the local verdict stands.
-    }
-  }
-  if (runtime.critic !== 'live') {
-    const criticElapsed = Number((performance.now() - criticStarted).toFixed(1))
-    traceLocal.timings.critic = criticElapsed
-    if (criticElapsed < 150) await sleep(150 - criticElapsed)
-  }
-  traceLocal.critic = critic
-  publish()
-
-  if (critic.verdict === 'rejected') {
-    deps.setStageStates({ A: 'done', B: 'done', C: 'failed' })
-    deps.patchMessage(delegationId, {
-      delegation: { ...delegation, status: 'rejected' },
-    })
-    const rejection =
-      'I paused before execution. The supervisor rejected the proposed tool call, so the note was not touched. Open the trace to see which check failed.'
-    traceLocal.status = 'rejected'
-    recordRejectedTrace(deps, ctx, grounded, produced, critic.feedback, critic.pCorrect)
-    deps.addMessage({
-      role: 'assistant',
-      kind: 'error',
-      text: rejection,
-      runId: traceLocal.id,
-    })
-    deps.notify('Call rejected by d1', 'No lines were written. The trace has the critic feedback.', 'error')
-    deps.speakReply(rejection)
-    finish('rejected')
-    return null
-  }
-
-  deps.setStageStates({ A: 'done', B: 'done', C: 'done' })
-  deps.patchMessage(delegationId, {
-    delegation: { ...delegation, status: 'verified', confidence: critic.pCorrect },
-  })
-  deps.setStage('executing')
-  deps.setFlowModel('worker')
-  return critic
-}
-
-/** Execution: engine run, snapshot commit, canned completion. */
-async function runExecutionStage(
-  deps: PipelineDeps,
-  ctx: TurnContext,
-  grounded: GroundedTurn,
-  produced: WorkerOutcome,
-  critic: CriticResult,
-): Promise<void> {
-  const { command, noteAtStart, traceLocal, liveUsage, publish, finish } = ctx
-  const { plan } = grounded
-  const { call, delegation, delegationId } = produced
-  const execStarted = performance.now()
-  const parsed = parseToolCallXml(call.xml)
-  if (!parsed || parsed.name !== call.name) {
-    throw new Error('The worker XML did not round-trip through the tool parser.')
-  }
-  const execution = executeTool(
-    noteAtStart,
-    { ...call, name: parsed.name, params: parsed.params },
-    plan.span,
-  )
-  traceLocal.timings.execute = Number((performance.now() - execStarted).toFixed(1))
-  traceLocal.execution = execution
-  publish()
-
-  if (!execution.ok) {
-    deps.setStageStates({ A: 'done', B: 'done', C: 'done' })
-    deps.patchMessage(delegationId, {
-      delegation: { ...delegation, status: 'rejected', confidence: critic.pCorrect },
-    })
-    traceLocal.status = 'failed'
-    recordRejectedTrace(deps, ctx, grounded, produced, execution.message, critic.pCorrect)
-    deps.addMessage({
-      role: 'assistant',
-      kind: 'error',
-      text: `I stopped before writing. ${execution.message} The note was not changed.`,
-      runId: traceLocal.id,
-    })
-    deps.notify('Execution stopped', execution.message, 'error')
-    finish('failed')
-    return
-  }
-
-  let newNote = noteAtStart
-  if (execution.diff) {
-    const snapshot = deps.commitNote(
-      execution.note,
-      snapshotLabel(call.name, plan),
-      call.name,
-    )
-    execution.snapshotId = snapshot.id
-    newNote = execution.note
-    traceLocal.execution = execution
-    deps.setDiff(execution.diff)
-    deps.setSpan(null)
-  } else {
-    deps.setSpan(null)
-  }
-  deps.patchMessage(delegationId, {
-    delegation: { ...delegation, status: 'executed', confidence: critic.pCorrect },
-  })
-  traceLocal.status = 'verified'
-  deps.setContextUsage((previous) =>
-    contextAfterMutation(previous, newNote, command, plan, call, liveUsage),
-  )
-  const completion = completionFor(call.name, plan, execution.message)
+  const confirmation =
+    action === 'undo'
+      ? `Reverted to “${restored.snapshot?.label}”. The note is back to the previous verified snapshot — no model inference needed.`
+      : `Reapplied “${restored.snapshot?.label}”. Snapshot ${deps.historyIndexRef.current} is active again.`
   deps.addMessage({
     role: 'assistant',
     kind: 'result',
-    text: completion,
+    text: confirmation,
     runId: traceLocal.id,
   })
-  publish()
-  deps.speakReply(completion)
+  deps.speakReply(confirmation)
   finish('verified')
-  deps.scheduleHighlightClear()
 }

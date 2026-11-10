@@ -61,9 +61,10 @@ Tracked as GitHub Issues #7 (real-mic pass) and #8 (real-speaker pass).
       (2) **Schema/validator misalignment** — `DELEGATE_EDIT_TOOL` does not
       mark `target.description` as required, while `validateDirective`
       hard-rejects a target without a non-empty description. Valid-looking Omni
-      output therefore lands in repair/clarify loops. Suggested direction:
-      align the tool schema's required fields with `validateDirective` (or
-      accept heading-only targets), then re-run the battery.
+      output therefore lands in repair/clarify loops. **Fixed 2026-11-09** on
+      `fix/no-silent-failures-delete-supervisor`: the schema now requires
+      `target.description`; the battery re-run on the workstation is the
+      remaining verification for this item.
       Also present: an occasional llama.cpp 500 on tools requests (the known
       "server-tool-parse" class). The 2026-11-09 after-drop run recorded
       **Total 45 | PASS 19 | FAIL 26 | KNOWN-BUG 0** (333.0 s); failing cases:
@@ -78,8 +79,15 @@ Tracked as GitHub Issues #7 (real-mic pass) and #8 (real-speaker pass).
       context packet + full line-numbered note), d1 reduced to the §7 safety
       check, the pending-edit store + ✓ / ✗ adjudication UI, and the
       deterministic layer demoted to hard gates. What remains is acceptance:
-      the §13 battery is red (see the first item), and once it is green the
-      legacy supervisor-first path behind `OMNI_FIRST = false` can be deleted.
+      the §13 battery is red (see the first item). The legacy supervisor-first
+      path, `supervisor.ts`, and the `OMNI_FIRST` flag were deleted 2026-11-09
+      (ahead of the green battery, at the user's call) together with the
+      reliability fixes: the `delegate_edit` target schema now requires
+      `description` (aligned with `validateDirective` — the misalignment was
+      root cause (2) of the red battery below), repair-failure clarifies
+      disclose the failure instead of reading as a plain question, and
+      `lowram` edits are held as pending edits (no decision model → no
+      silent execution).
 - [ ] **LoRA/tool-call SFT pass on rejected traces** (plan.md §7 Phase 5,
       §9.6, §9.8 item 5). The rejected-trace JSONL export already produces the
       training data; run a lightweight LoRA fine-tune of LFM3-1.7B on a single
@@ -99,8 +107,9 @@ Tracked as GitHub Issues #7 (real-mic pass) and #8 (real-speaker pass).
       disapproval), `worker-d1` (1.7B :8080 chats and authors XML tool calls;
       d1-Omni :8085 decides edit safety: approve → execute, disapprove/
       unavailable → pending edit; ASR/TTS ride :8085; Omni out of the loop),
-      `lowram` (LFM3-1.7B only; hard gates + engine dry-run execute directly,
-      no d1 and no pending path; mic disabled, browser TTS). Switch in the
+      `lowram` (LFM3-1.7B only; hard gates + engine dry-run, then held as a
+      pending edit for the user — no d1, and no silent execution without a
+      decision model; mic disabled, browser TTS). Switch in the
       TopBar on desktop or the **Runtime truth card** on the phone surface
       (≤780px, where the TopBar control is hidden). Persisted under localStorage
       `liquidscribe.runmode.v1`; captured at turn start and busy-guarded.
