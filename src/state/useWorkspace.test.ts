@@ -16,7 +16,6 @@ const EDIT: PendingEdit = {
     target: { description: 'the Risks section', heading: 'Risks' },
     verbatim: null,
     constraints: [],
-    frame_relevant: false,
   },
   call: {
     name: 'edit_text',

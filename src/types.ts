@@ -514,7 +514,7 @@ export interface PendingEdit {
   /** Hash of the note the call was authored against; staleness compares against the current note. */
   noteHash: string
   /**
-   * Insertion neighbourhood for `add_text` / `extract_visual_to_note`
+   * Insertion neighbourhood for `add_text`
    * pendings (battery case 33): those calls carry no line range and the
    * hard gates have no anchor for them, so this is their staleness anchor —
    * the authoring note's lines either side of the insertion point

@@ -1062,7 +1062,7 @@ function holdForUserDecision(
   // against, so record the insertion neighbourhood (authoring note lines
   // either side of the diff's insertion point) as their staleness anchor.
   const insertion =
-    call.name === 'add_text' || call.name === 'extract_visual_to_note'
+    call.name === 'add_text'
       ? (() => {
           const lines = splitLines(ctx.noteAtStart)
           const startLine = diff.startLine

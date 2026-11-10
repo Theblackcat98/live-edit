@@ -158,7 +158,7 @@ export function adjudicate(
   const gates = runHardGates(currentNote, edit.call)
 
   // Insertion tools have no gate anchor (bounds/anchor/blast do not apply
-  // to add_text / extract_visual_to_note), so a passing gate run says
+  // to add_text), so a passing gate run says
   // nothing about their drift. Their staleness anchor is the recorded
   // insertion neighbourhood: the authoring note's lines either side of the
   // insertion point must still sit at the recorded line — if they moved,
@@ -166,7 +166,7 @@ export function adjudicate(
   if (
     gates.pass &&
     edit.insertion &&
-    (edit.call.name === 'add_text' || edit.call.name === 'extract_visual_to_note')
+    edit.call.name === 'add_text'
   ) {
     const { startLine, precedingLine, followingLine } = edit.insertion
     const lines = splitLines(currentNote)
