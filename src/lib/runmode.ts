@@ -2,7 +2,7 @@
  * User-selectable run modes: which local model(s) serve the chat and the
  * edit pipeline.
  *
- * - `omni`      the shipped Omni-first pipeline (flags.ts `OMNI_FIRST`):
+ * - `omni`      the Omni-first pipeline:
  *               LFM3-Omni-2B (:8083) is the chat/ASR/TTS front door, the
  *               1.7B (:8080) authors tool calls, d1-Omni (:8085) is the §7
  *               safety check.
