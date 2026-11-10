@@ -372,8 +372,5 @@ The refactor is done when the QA battery (extended, §13 cases in
 - **Q3 — Omni budget and serving flags.** Chat max-tokens, note cap,
   temperature, and the `--reasoning off` server flag: tune together, since
   the delegate-or-answer decision is Omni's core skill in this design.
-- **Q4 — Context packet size.** 3 edit turns is the starting value (§6); the
-  battery's follow-up cases (§13.2) are how it gets validated or revised.
-- **Q5 — Pending-edit lifetime.** Do pending edits survive a reload (the
-  workspace persists today)? Leaning yes, with the staleness gate (§8) as the
-  safety net — confirm before building §9.
+
+Q4 and Q5 were filed as GitHub Issue #50 on 2026-11-09.
