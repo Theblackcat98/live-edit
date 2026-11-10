@@ -57,6 +57,7 @@ import {
 } from './worker'
 import { executeTool } from './tools'
 import { recoverDictatedText } from './dictation'
+import { scaffoldTemplateBrief } from './templateScaffold'
 import { sectionScaleCollapse } from './blastGate'
 import { checkExecutionOutcome } from './executionCheck'
 import { detectSnapshotDirective } from './snapshotDirective'
@@ -690,6 +691,19 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
   // remembering to label it.
   const recovered = recoverDictatedText(command, directive)
   const rawEffective = recovered ? { ...directive, verbatim: recovered } : directive
+  // Template scaffold (battery cases 27/27b/12/12d — design.md §13.1): a
+  // README-template command needs the standard section list in the brief,
+  // and the model echoes the command instead of packing it (measured live:
+  // instruction == command, worker authors 1–3 of the 5 barred sections).
+  // The scaffold appends the fixed section vocabulary to the instruction —
+  // scaffolding, not content: the worker still authors every word. Only
+  // fires on create-task README-template commands without a section
+  // already named, so real user briefs are never rewritten.
+  const scaffolded = scaffoldTemplateBrief(command, rawEffective)
+  const scaffoldNote =
+    scaffolded !== rawEffective
+      ? 'Template scaffold: the §13.1 section vocabulary appended to the brief (the model echoed the command instead of packing it).'
+      : null
   // Verbatim is insert-shaped: exact words to put into the note. A
   // MODEL-set verbatim on edit/remove tasks is a mislabel (battery case
   // 6: a "$1.45M Final" value update packed as verbatim routes the
@@ -704,12 +718,12 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
   // through untouched.
   const effectiveDirective =
     !recovered &&
-    (directive.task === 'edit' || directive.task === 'remove') &&
-    typeof directive.verbatim === 'string' &&
-    directive.verbatim.trim().length > 0
-      ? { ...directive, verbatim: null }
-      : rawEffective
-  if (effectiveDirective.verbatim === null && rawEffective.verbatim) {
+    (scaffolded.task === 'edit' || scaffolded.task === 'remove') &&
+    typeof scaffolded.verbatim === 'string' &&
+    scaffolded.verbatim.trim().length > 0
+      ? { ...scaffolded, verbatim: null }
+      : scaffolded
+  if (effectiveDirective !== directive) {
     traceLocal.directive = effectiveDirective
     publish()
   }
@@ -744,9 +758,9 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
     return
   }
 
-  const packet = buildWorkerPacket(directive, deps.runsRef.current, noteAtStart)
+  const packet = buildWorkerPacket(effectiveDirective, deps.runsRef.current, noteAtStart)
   const packetInput: PacketWorkerPromptInput = {
-    directive,
+    directive: effectiveDirective,
     contextPacket: packet,
     note: noteAtStart,
   }
@@ -832,7 +846,10 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
   traceLocal.workerNoteView = call.noteView
   publish()
 
-  await verifyAndExecute(deps, ctx, directive, call)
+  if (scaffoldNote) {
+    call.promptHints.push(scaffoldNote)
+  }
+  await verifyAndExecute(deps, ctx, effectiveDirective, call)
 }
 
 /** The directive task that matches a tool the 1.7B already chose (task only). */
