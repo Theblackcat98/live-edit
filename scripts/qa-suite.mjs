@@ -1594,8 +1594,14 @@ async function main() {
     const producer33 = await producePendingEdit()
     const card33 = producer33.pending.last
     const precondition33 = producer33.info.status === 'pending' && card33?.status === 'pending' && Boolean(card33?.id)
-    const startLine33 = Number(card33?.call?.params?.start_line)
-    const endLine33 = Number(card33?.call?.params?.end_line)
+    // Span calls carry their range in the call params; insertion calls
+    // (add_text / extract) carry it in the recorded diff — the line the
+    // inserted content starts at, whose authoring-note occupant is the
+    // insertion neighbourhood adjudication checks for drift.
+    const paramStart33 = Number(card33?.call?.params?.start_line)
+    const paramEnd33 = Number(card33?.call?.params?.end_line)
+    const startLine33 = Number.isInteger(paramStart33) ? paramStart33 : Number(card33?.diff?.startLine)
+    const endLine33 = Number.isInteger(paramEnd33) ? paramEnd33 : startLine33
     const rangeOk33 =
       Number.isInteger(startLine33) && Number.isInteger(endLine33) && startLine33 >= 1 && endLine33 >= startLine33
     if (!precondition33 || !rangeOk33) {

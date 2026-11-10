@@ -151,7 +151,7 @@ export interface WorkspaceApi {
  * is honestly marked `pending-adjudication`: the user, not a grounding
  * pass, made this call.
  */
-function pendingResolutionRecord(edit: PendingEdit, reason: string): RejectedTraceRecord {
+export function pendingResolutionRecord(edit: PendingEdit, reason: string): RejectedTraceRecord {
   return {
     at: Date.now(),
     command: edit.directive.instruction,
@@ -161,6 +161,10 @@ function pendingResolutionRecord(edit: PendingEdit, reason: string): RejectedTra
     workerXml: edit.call.xml,
     critic: { verdict: 'rejected', reason, pCorrect: edit.d1.noul },
     directive: edit.directive,
+    // §9.5: the record carries the proposal — directive, call, AND the d1
+    // verdict that routed it to adjudication (battery case 32: the verdict
+    // was dropped here even though the type has the field).
+    d1: edit.d1,
   }
 }
 
