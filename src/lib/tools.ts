@@ -252,32 +252,5 @@ export function executeTool(note: string, call: WorkerCall, span?: SpanTarget): 
     })
   }
 
-  if (call.name === 'extract_visual_to_note') {
-    const content = call.params.extracted_markdown ?? ''
-    if (!content.trim()) {
-      return finish({ ok: false, message: 'ROI extraction returned no Markdown.', tool: call.name, note })
-    }
-    const block = insertUnderHeading(note, call.params.anchor_heading ?? '', content)
-    if (!block) {
-      return finish({ ok: false, message: 'Anchor heading was not found.', tool: call.name, note })
-    }
-    const lines = splitLines(block.note)
-    const inserted = lines.slice(block.startLine - 1, block.endLine)
-    const diff: ExecutionDiff = {
-      startLine: block.startLine,
-      before: [],
-      after: inserted,
-      added: inserted.length,
-      removed: 0,
-    }
-    return finish({
-      ok: true,
-      message: `Extracted ${call.params.visual_format} into ${inserted.length} Markdown lines under “${call.params.anchor_heading}”.`,
-      tool: call.name,
-      note: block.note,
-      diff,
-    })
-  }
-
   return finish({ ok: false, message: 'Unsupported tool.', tool: 'none', note })
 }

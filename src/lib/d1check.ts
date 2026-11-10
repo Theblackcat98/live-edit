@@ -13,10 +13,8 @@ import type { D1DecideResult, D1Question, d1Decide } from './bridge'
  * `unavailable` — never a silent approval and never a guessed verdict.
  *
  * Caller note (P4 wiring): the `state` blob comes from context.ts's
- * `buildD1State` (parallel module) and the frame is attached by the bridge as
- * an image — d1check itself never assembles packets. It forwards `state`
- * verbatim and hands `frameDataUrl` to the injected bridge, which sends it as
- * the packet's single image (`images: [dataUrl]`).
+ * `buildD1State` (parallel module) — d1check itself never assembles packets.
+ * It forwards `state` verbatim and nothing else: every request is text-only.
  */
 
 /** Injectable d1 bridge: exactly bridge.ts's typed-question `d1Decide` signature. */
@@ -70,8 +68,6 @@ export const D1_QUESTIONS: Record<string, D1Question> = {
 export interface D1CheckInput {
   /** State blob from context.ts's buildD1State; forwarded to the bridge verbatim. */
   state: string
-  /** Scene frame data URL; the bridge attaches it as the packet's single image. */
-  frameDataUrl?: string | null
   /** The d1 bridge — the real `d1Decide` in the pipeline, a mock in tests. */
   d1Decide: D1DecideFn
 }
@@ -88,7 +84,6 @@ export async function runD1Check(input: D1CheckInput): Promise<D1CheckResult> {
   try {
     decision = await input.d1Decide({
       state: input.state,
-      imageDataUrl: input.frameDataUrl ?? undefined,
       questions: D1_QUESTIONS,
     })
   } catch (error) {

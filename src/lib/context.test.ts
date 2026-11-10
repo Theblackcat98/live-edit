@@ -44,7 +44,6 @@ function makeEditRun(
       target: { description: 'test target', heading: null },
       verbatim: null,
       constraints: [],
-      frame_relevant: false,
     },
     timings: { route: 1, ground: 1, generate: 1, critic: 1, execute: 1, total: 5 },
     status: 'verified',
@@ -187,7 +186,6 @@ const D1_DIRECTIVE: Directive = {
   target: { description: 'the Q3 row of the Revenue table', heading: '2. Revenue' },
   verbatim: null,
   constraints: ['keep the table structure'],
-  frame_relevant: false,
 }
 const D1_COMMAND = 'update the Q3 revenue row to $1.45M Final'
 const D1_CALL = {
@@ -211,10 +209,10 @@ describe('buildD1State', () => {
   it('assembles the E3 sections in the calibrated order', () => {
     const state = buildD1State({ directive: D1_DIRECTIVE, command: D1_COMMAND, call: D1_CALL, diff: D1_DIFF })
     const lines = state.split('\n')
-    // Fixed preamble first, verbatim — including the sentence about the frame
-    // the BRIDGE attaches as an image (the frame never enters the blob).
+    // Fixed preamble first, verbatim: d1 judges text only, so the preamble
+    // states that none is attached rather than describing an attachment.
     expect(lines[0]).toBe(
-      "Safety check for a proposed note edit. You are given the directive from the interface model, the user command, the worker's proposed tool call, and the rendered diff of that call against the current note. The current video frame (a synthetic operating-review slide) is attached.",
+      "Safety check for a proposed note edit. You are given the directive from the interface model, the user command, the worker's proposed tool call, and the rendered diff of that call against the current note. No video frame is attached; judge text only.",
     )
     const indexOf = (needle: string) => state.indexOf(needle)
     expect(indexOf('Directive (typed, from the interface model):')).toBeGreaterThan(-1)
@@ -227,7 +225,6 @@ describe('buildD1State', () => {
     const state = buildD1State({ directive: D1_DIRECTIVE, command: D1_COMMAND, call: D1_CALL, diff: D1_DIFF })
     expect(state).toContain('"task": "edit"')
     expect(state).toContain('"instruction": "Update the Q3 revenue row: figure to $1.45M, status to Final."')
-    expect(state).toContain('"frame_relevant": false')
   })
 
   it('preserves the user command verbatim, exactly as JSON.stringify renders it', () => {
@@ -297,7 +294,7 @@ describe('buildD1State', () => {
     expect(rendered.endsWith('…')).toBe(true)
   })
 
-  it('never embeds frame image data in the state blob', () => {
+  it('never embeds binary attachment data in the state blob', () => {
     const state = buildD1State({ directive: D1_DIRECTIVE, command: D1_COMMAND, call: D1_CALL, diff: D1_DIFF })
     expect(state).not.toContain('data:image')
   })
@@ -369,7 +366,7 @@ describe('renderUnifiedDiff', () => {
  * The d1 thresholds (noul ≥ 0.50 AND destructive_safety = safe) were
  * calibrated against the exact state text recorded in
  * docs/spikes/E3-d1-check.json. These tests re-assemble one fixture per diff
- * kind (edit, remove, insert-under-heading, extract, prepend) and require
+ * kind (edit, remove, insert-under-heading, prepend) and require
  * BYTE-IDENTICAL output — the packet must stay fixed for the calibration to
  * hold. Diffs are real: produced by executeTool on the seed note, exactly as
  * the pipeline produces them.
@@ -389,7 +386,6 @@ describe('buildD1State — E3 recorded-state fidelity', () => {
     'g01-q3-revenue-edit',
     'g02-remove-redis-bullet',
     'g03-add-security-line',
-    'g04-extract-ltv-formula',
     'g10-readme-prepend',
   ]
 

@@ -667,7 +667,7 @@ async function main() {
   const say = (s) => { group = s; console.log(`\n== ${s}`) }
 
   // --- Group A: fresh seed + conversational battery ----------------------
-  say('Group A: fresh seed, greeting, memory, vision')
+  say('Group A: fresh seed, greeting, memory')
   await seedWorkspace(null)
   await waitStorageFlushed()
 
@@ -715,20 +715,6 @@ async function main() {
     const reply = await waitForReplySettled()
     record('4', 'memory recall: reply mentions teal', /teal/i.test(reply.text),
       `reply="${reply.text.slice(0, 100)}"`)
-  }
-
-  {
-    const wsBefore = await getWs()
-    await submitCommand('what can you see?')
-    const run = await waitForRun()
-    const reply = await waitForReplySettled()
-    const ws = await getWs()
-    const status = ws?.runs?.at(-1)?.status
-    const mentionsScene = /bar chart|table|LTV|slide|scene|camera/i.test(reply.text)
-    const chatLive = ws?.runs?.at(-1)?.runtime?.chat === 'live'
-    record('5', `visual question: conversational + scene content + omni chat live`,
-      status === 'conversational' && mentionsScene && chatLive,
-      `status=${status}, sceneHit=${mentionsScene}, runtime.chat=${ws?.runs?.at(-1)?.runtime?.chat}, reply="${reply.text.slice(0, 90)}"`)
   }
 
   // --- Group B: mutations, undo/redo, clarify ----------------------------
@@ -808,25 +794,6 @@ async function main() {
     record('8f', 'dictation: quoted insert lands verbatim, traced runtime.worker="dictation" (never a model-call label) — §7.4 gate',
       info8f.status === 'verified' && verbatim && !junkPrefix && dictationLabel && neverModelCall,
       `status=${info8f.status}, verbatim=${verbatim}, junkPrefix=${junkPrefix}, runtime.worker=${info8f.runtime?.worker ?? '-'}, call.sampler=${info8f.call?.sampler ? 'present (model decode)' : 'absent'}${run8f.timedOut ? ', TIMEOUT' : ''}`)
-  }
-
-  await submitCommand('pull the LTV/CAC formula from the slide into Revenue')
-  {
-    const run = await waitForRun()
-    const info = await runsInfo()
-    const n = await note()
-    if (info.status === 'verified') {
-      record('9', 'extract LTV/CAC formula → verified', true,
-        `status=verified, noteHasLTV=${n.includes('LTV')}`)
-    } else if (info.status === 'clarify') {
-      const clarifyMsg = (await getWs())?.messages?.filter((m) => m.kind === 'clarify').at(-1)?.text ?? '(no clarify text)'
-      const sensible = clarifyMsg.length > 10 && /\?/.test(clarifyMsg)
-      record('9', 'extract LTV/CAC formula → clarify (needs review)', sensible,
-        `status=clarify, clarify="${clarifyMsg.slice(0, 120)}" — FLAG FOR REVIEW`)
-    } else {
-      record('9', 'extract LTV/CAC formula → run completed', false,
-        `status=${info.status}`)
-    }
   }
 
   const noteBeforeAmbiguous = await note()

@@ -22,7 +22,6 @@
  */
 
 import type {
-  BBoxTarget,
   ContextUsage,
   D1CheckResult,
   DelegationInfo,
@@ -66,7 +65,6 @@ import { runHardGates } from './gates'
 import { runD1Check } from './d1check'
 import { createPendingEdit } from './pending'
 import { parseToolCallXml, type ParsedToolCall } from './xml'
-import { resolveSceneFrame } from './frame'
 import {
   chatComplete,
   d1Decide,
@@ -108,13 +106,6 @@ export interface PipelineDeps {
    * switch mid-turn must never change the in-flight turn's models.
    */
   modeRef: { current: RunMode }
-  /**
-   * Video toggle, kept current by the hook. When false, a turn resolves no
-   * scene frame at all: Omni/vision calls run text-only and the trace records
-   * `frameSource: 'none'`. Read at each resolution site, so a toggle mid-turn
-   * only affects frames not yet attached.
-   */
-  videoEnabledRef: { current: boolean }
   /** Where the last voice capture was transcribed; recorded on the run's trace. */
   asrSourceRef: { current: RuntimeSource }
   /** Duration of the last voice capture, recorded on the user message. */
@@ -137,8 +128,6 @@ export interface PipelineDeps {
   setSourceMode: (value: boolean) => void
   /** Grounded-span highlight on the note. */
   setSpan: (span: SpanTarget | null) => void
-  /** Visual-ROI highlight on the frame. */
-  setBBox: (bbox: BBoxTarget | null) => void
   /** Execution diff highlight on the note. */
   setDiff: (diff: ExecutionDiff | null) => void
   /** Pipeline stage chip; finish() also uses the updater form. */
@@ -181,7 +170,7 @@ export interface PipelineDeps {
   clearTransientHighlights: () => void
   /** Speak an assistant reply when the speaker is on. */
   speakReply: (text: string) => void
-  /** Fade the diff/ROI highlights out after a successful execution. */
+  /** Fade the diff/span highlights out after a successful execution. */
   scheduleHighlightClear: () => void
 }
 
@@ -296,7 +285,6 @@ export async function runPipelineTurn(
   deps.clearTransientHighlights()
   deps.setDiff(null)
   deps.setSpan(null)
-  deps.setBBox(null)
   deps.setStage('routing')
   deps.setStageStates({ A: 'running', B: 'idle', C: 'idle' })
   deps.setFlowModel('d1')
@@ -360,16 +348,17 @@ export async function runPipelineTurn(
   if (source === 'voice') runtime.asr = deps.asrSourceRef.current
   deps.asrSourceRef.current = 'fallback'
   traceLocal.runtime = runtime
-  traceLocal.frameSource = 'none'
   const liveUsage: Partial<ContextUsage> = {}
 
   const ctx: TurnContext = { command, noteAtStart, traceLocal, runtime, liveUsage, publish, finish }
 
   try {
     // Captured once at turn start: a mode switch mid-turn must never swap the
-    // models under an in-flight turn.
+    // models under an in-flight turn. `audio` and `omni` share the
+    // runOmniTurn front door (the chat default selects the member); the
+    // worker-chat modes route below.
     const mode = deps.modeRef.current
-    if (mode === 'omni') {
+    if (mode === 'omni' || mode === 'audio') {
       await runOmniFirstTurn(deps, ctx)
       return
     }
@@ -526,14 +515,7 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
   deps.setFlowModel('omni')
   deps.setStage('routing')
 
-  // Video toggle: OFF means this turn resolves no frame at all — Omni gets a
-  // text-only turn (its prompt says so verbatim), and the d1 check below
-  // receives no image. `resolveSceneFrame` is never called, so nothing is
-  // even rasterized.
-  const frame = deps.videoEnabledRef.current
-    ? await resolveSceneFrame('full').catch(() => null)
-    : null
-  traceLocal.frameSource = frame?.source ?? 'none'
+  // Text-only turn: Omni and the d1 check read the note and command alone.
 
   const history = buildOmniHistory(deps.messagesRef.current, deps.runsRef.current)
   // The current command is already in the transcript; history is prior turns.
@@ -583,10 +565,6 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
       source: traceLocal.source,
       history: priorHistory,
       note: noteAtStart,
-      frame:
-        frame && frame.source !== 'none'
-          ? { source: frame.source as 'live-camera' | 'live-screen' | 'synthetic-slide', dataUrl: frame.dataUrl }
-          : null,
       lastRun,
       onText,
     })
@@ -696,7 +674,7 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
     traceLocal.call = call
     traceLocal.workerNoteView = call.noteView
     publish()
-    await verifyAndExecute(deps, ctx, directive, call, frame)
+    await verifyAndExecute(deps, ctx, directive, call)
     return
   }
 
@@ -800,7 +778,7 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
   traceLocal.workerNoteView = call.noteView
   publish()
 
-  await verifyAndExecute(deps, ctx, directive, call, frame)
+  await verifyAndExecute(deps, ctx, directive, call)
 }
 
 /** The directive task that matches a tool the 1.7B already chose (task only). */
@@ -808,7 +786,6 @@ const TASK_FOR_TOOL: Record<ToolName, Directive['task']> = {
   add_text: 'insert',
   edit_text: 'edit',
   remove_text: 'remove',
-  extract_visual_to_note: 'extract',
 }
 
 /** Honest WorkerCall provenance for a live 1.7B chat-turn decode. */
@@ -881,10 +858,6 @@ async function runWorkerChatFirstTurn(
     finish('failed')
     return
   }
-
-  // No frame in either mode: the 1.7B is text-only and no Omni model runs to
-  // read one, so claiming a frame here would be a lie in the trace.
-  traceLocal.frameSource = 'none'
 
   const history = conversationTurns(deps.messagesRef.current, CHAT_MEMORY_TURNS)
   // The current command is already in the transcript; history is prior turns.
@@ -1029,7 +1002,6 @@ async function runWorkerChatFirstTurn(
   const directive: Directive = {
     task: TASK_FOR_TOOL[parsed.name],
     instruction: command,
-    frame_relevant: false,
   }
   traceLocal.directive = directive
   deps.setStageStates({ A: 'done', B: 'done', C: 'idle' })
@@ -1052,7 +1024,7 @@ async function runWorkerChatFirstTurn(
   // Mode 3 runs no d1: verifyAndExecute holds the gate-passing edit for
   // the user's decision — with no decision model running, nothing may
   // execute silently.
-  await verifyAndExecute(deps, ctx, directive, call, null, {
+  await verifyAndExecute(deps, ctx, directive, call, {
     d1Check: mode === 'worker-d1',
     snapshotLabel: '1.7B tool call',
   })
@@ -1108,7 +1080,6 @@ async function verifyAndExecute(
   ctx: TurnContext,
   directive: Directive,
   call: WorkerCall,
-  frame: { dataUrl: string; source: string } | null,
   options: { d1Check: boolean; snapshotLabel?: string } = { d1Check: true },
 ): Promise<void> {
   const { command, noteAtStart, traceLocal, runtime, publish, finish } = ctx
@@ -1208,7 +1179,6 @@ async function verifyAndExecute(
         lastUserTurn,
         noteLineCount,
       }),
-      frameDataUrl: frame?.dataUrl ?? null,
       d1Decide,
     })
     traceLocal.d1Check = check

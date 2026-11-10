@@ -162,14 +162,12 @@ export default function App() {
 
         <div className="column left-column">
           <VisualPanel
-            bbox={workspace.bbox}
             stage={workspace.stage}
             micOn={workspace.micOn}
             micActive={workspace.micActive}
             speaking={workspace.speaking}
             getMicLevel={workspace.getMicLevel}
             elapsedSeconds={workspace.elapsedSeconds}
-            videoOn={workspace.videoOn}
           />
           <SessionPanel
             messages={workspace.messages}
@@ -193,8 +191,6 @@ export default function App() {
             pendingEdits={workspace.pendingEdits}
             onApplyPending={workspace.applyPendingEdit}
             onDismissPending={workspace.dismissPendingEdit}
-            videoOn={workspace.videoOn}
-            onToggleVideo={workspace.toggleVideo}
             mode={workspace.mode}
             showComposer={!isPhone}
           />

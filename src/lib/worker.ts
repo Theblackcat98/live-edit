@@ -18,15 +18,8 @@ export function renderToolCallXml(
   return `<tool_call>\n<function=${name}>\n${body}\n</function>\n</tool_call>`
 }
 
-/**
- * Directive plus the Phase-3 `frame_extract` field (decision D2): Omni — the
- * only model that sees the frame — reads the frame and packs the extracted
- * Markdown here; the 1.7B worker is text-only and places it. Mirrored into
- * design.md §5 when P3 lands.
- */
-export interface PacketDirective extends Directive {
-  frame_extract?: string
-}
+/** The directive a packet worker turn acts on. */
+export type PacketDirective = Directive
 
 export interface PacketWorkerPromptInput {
   directive: PacketDirective
@@ -59,7 +52,6 @@ const TASK_TOOL_HINT: Record<Directive['task'], ToolName> = {
   insert: 'add_text',
   edit: 'edit_text',
   remove: 'remove_text',
-  extract: 'extract_visual_to_note',
 }
 
 export const PACKET_WORKER_SYSTEM_PROMPT = `You are the edit worker in a local note-editing app. A conversation model heard the user and sent you a directive — a brief, not the text. You author the edit end to end: you write the new content yourself, you choose the target lines yourself from the numbered note, and you emit exactly one tool call.
@@ -83,8 +75,7 @@ TOOL CHOICE — every parameter name belongs to exactly one tool; never mix:
 - add_text inserts NEW lines (new bullet, row, section, whole document). Its parameters: file_path, position, anchor, content.
 - edit_text REPLACES existing lines (fix a value, reword a row, rename a heading or the title). Its parameters: file_path, start_line, end_line, old_text_anchor, new_text. new_text is never empty.
 - remove_text DELETES existing lines (a bullet, a row, a whole section). Its parameters: file_path, start_line, end_line, target_excerpt. Deleting is this tool — never edit_text with an empty new_text.
-- extract_visual_to_note places the directive's frame_extract markdown under a heading. Its parameters: file_path, visual_format, anchor_heading, extracted_markdown.
-Decide in one line, then commit: new content → add_text; changing existing words → edit_text; deleting → remove_text; placing frame_extract → extract_visual_to_note. The simplest correct tool is the right tool.
+Decide in one line, then commit: new content → add_text; changing existing words → edit_text; deleting → remove_text. The simplest correct tool is the right tool.
 Before emitting, check that every parameter you wrote appears in your chosen tool's list above.`
 
 /**
@@ -107,8 +98,6 @@ const TOOL_USE_WHEN: Record<ToolName, string> = {
     'changing text that already exists in the note — fixing a value, rewording a row or bullet, renaming a heading or the title',
   remove_text:
     'deleting existing lines from the note — a bullet, a table row, or a whole section',
-  extract_visual_to_note:
-    'the directive carries frame_extract (markdown the conversation model read off the live frame) and asks to place it in the note',
 }
 
 /**
@@ -134,8 +123,6 @@ function packetToolExample(tool: ToolName, notePath: string): string {
       return `file_path="${notePath}" · start_line=1 · end_line=1 · old_text_anchor="# Weekly Meal Plan" · new_text="# Weekly Meal Plan — Final"`
     case 'remove_text':
       return `file_path="${notePath}" · start_line=41 · end_line=41 · target_excerpt="- Buy oat milk before Friday."`
-    case 'extract_visual_to_note':
-      return `file_path="${notePath}" · visual_format="latex_block" · anchor_heading="1. Ingredients" · extracted_markdown="$$ … $$" (the directive's frame_extract)`
   }
 }
 
@@ -146,14 +133,12 @@ function packetToolExample(tool: ToolName, notePath: string): string {
 const PARAM_DESCRIPTION_FIXES: Record<string, string> = {
   'Line number or exact heading supplied by the supervisor.':
     'line number or exact heading text to anchor the insertion (required for after_line and under_heading)',
-  'Heading supplied by the supervisor.':
-    'exact heading text to insert the extracted markdown under',
   'Where the content is inserted.':
     'where the content is inserted — under_heading inserts at the END of that heading\'s section (after its existing content); after_line inserts immediately after line N',
 }
 
 /**
- * The full 4-tool catalog, one schema block per tool, each with its OWN
+ * The full 3-tool catalog, one schema block per tool, each with its OWN
  * parameter list and a complete example call in the repo XML contract — so a
  * function name and its parameter vocabulary are welded together (E4's
  * `edit_text`-shell-carrying-`add_text`-params class).
@@ -284,8 +269,7 @@ export function buildWorkerRetryMessages(input: WorkerRetryInput): ChatMessage[]
     'Parameter names per tool (exact — never mix):\n' +
       '- add_text: file_path, position, anchor, content\n' +
       '- edit_text: file_path, start_line, end_line, old_text_anchor, new_text\n' +
-      '- remove_text: file_path, start_line, end_line, target_excerpt\n' +
-      '- extract_visual_to_note: file_path, visual_format, anchor_heading, extracted_markdown',
+      '- remove_text: file_path, start_line, end_line, target_excerpt',
   )
 
   parts.push(

@@ -68,7 +68,6 @@ function baseInput(overrides: Partial<OmniTurnInput> = {}): OmniTurnInput {
     source: 'text',
     history: [],
     note: '# Q3 Business Review\n\n## Revenue by Quarter\n\n| Quarter | Revenue |\n| --- | --- |\n| Q1 | $0.92M |\n| Q3 | $1.31M |\n',
-    frame: null,
     lastRun: null,
     ...overrides,
   }
@@ -78,7 +77,6 @@ const VALID_DIRECTIVE_ARGS = {
   task: 'edit',
   instruction: 'Update the Q3 revenue row in the Revenue by Quarter table from $1.31M to $1.45M Final.',
   target: { description: 'the Q3 row of the Revenue by Quarter table', heading: 'Revenue by Quarter' },
-  frame_relevant: false,
 }
 
 // --- sanitizer --------------------------------------------------------------------
@@ -224,19 +222,12 @@ describe('buildOmniMessages', () => {
     }
   })
 
-  it('attaches the frame as an image_url content part on the current turn only', () => {
-    const messages = buildOmniMessages(
-      baseInput({
-        command: 'what can you see?',
-        frame: { source: 'synthetic-slide', dataUrl: 'data:image/png;base64,AAA' },
-      }),
-    )
+  it('sends the current turn as plain text, never as attachment content parts', () => {
+    const messages = buildOmniMessages(baseInput({ command: 'what can you see?' }))
     const last = messages[messages.length - 1]
-    expect(Array.isArray(last.content)).toBe(true)
-    const parts = last.content as Exclude<ChatMessage['content'], string>
-    expect(parts[0]).toMatchObject({ type: 'text' })
-    expect((parts[0] as { text: string }).text).toContain('synthetic operating-review slide frame')
-    expect(parts[1]).toEqual({ type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } })
+    expect(last.role).toBe('user')
+    expect(typeof last.content).toBe('string')
+    expect(last.content).toContain('User: what can you see?')
   })
 
   it('cites the last completed run when present', () => {
@@ -322,7 +313,7 @@ describe('runOmniTurn — delegate', () => {
     const user = repair[repair.length - 1]
     expect(user.role).toBe('user')
     expect(user.content).toMatch(/That delegate_edit call was rejected/)
-    expect(user.content).toContain('task must be one of create|insert|edit|remove|extract')
+    expect(user.content).toContain('task must be one of create|insert|edit|remove')
     // The repair request still offers the tools.
     expect(calls[1].options.tools?.map((t) => t.function.name)).toEqual(['delegate_edit', 'harness_action'])
   })
@@ -443,7 +434,7 @@ describe('runOmniTurn — server-side tool-parse HTTP 500 (E2 finding)', () => {
     await expect(promise).rejects.toMatchObject({
       kind: 'server-tool-parse',
       status: 500,
-      endpoint: { id: 'omni', port: 8083 },
+      endpoint: { id: 'audio', port: 8086 },
     })
     expect(calls).toHaveLength(2)
     // Bare retry: identical messages — nothing was appended (the raw call
@@ -480,7 +471,7 @@ describe('runOmniTurn — endpoint errors', () => {
     await expect(runOmniTurn(baseInput({ chat }))).rejects.toMatchObject({
       name: 'OmniTurnError',
       kind: 'endpoint',
-      endpoint: { id: 'omni', name: 'LFM3-Omni-2B', port: 8083, url: 'http://127.0.0.1:8083' },
+      endpoint: { id: 'audio', name: 'LFM3-Audio-2B', port: 8086, url: 'http://127.0.0.1:8086' },
       detail: 'HTTP 404: not found',
     })
   })

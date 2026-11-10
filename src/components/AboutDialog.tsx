@@ -111,7 +111,7 @@ export function AboutDialog({ open, onClose }: AboutDialogProps) {
           <div className="about-footer">
             <ShieldCheck size={12} />
             <span>
-              The app does not upload audio, frames or note state: capture goes to the local Omni
+              The app does not upload audio or note state: capture goes to the local Omni
               model on 127.0.0.1 only. LFM Open License v1.0 applies to the model family; this
               interface is a local demonstration build.
             </span>

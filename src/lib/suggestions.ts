@@ -10,8 +10,8 @@ export function buildSuggestions(note: string): Suggestion[] {
   const suggestions: Suggestion[] = [
     {
       icon: 'eye',
-      label: 'What do you see?',
-      command: 'What can you see on the slide?',
+      label: 'What is in the note?',
+      command: 'What is in the note?',
       mode: 'submit',
     },
   ]

@@ -1,9 +1,10 @@
 # TODOs
 
-LiquidScribe is functional end to end on the three-model trinity: LFM3-Omni-2B
-(interface — chat/ASR/TTS, :8083), d1-Omni-2B (decision — route/critic, :8085)
-and LFM3-1.7B (tool-call worker, :8080). `extract_visual_to_note` is
-deterministic. LFM3-VL-2B (:8081) was removed from the runtime on 2026-11-08.
+LiquidScribe is functional end to end on the three-model trinity: LFM3-Audio-2B
+(interface — chat/ASR/TTS, :8086), d1-Omni-2B (decision — route/critic, :8085)
+and LFM3-1.7B (tool-call worker, :8080). Turns are text-only; no video or
+frames are resolved or attached. (LFM3-Omni-2B :8083 is the legacy front door;
+LFM3-VL-2B :8081 was removed from the runtime on 2026-11-08.)
 
 **Design correction (2026-11-09):** [`docs/design.md`](docs/design.md) is now
 the authoritative spec — **Omni-first**: Omni converses and silently delegates
@@ -15,16 +16,16 @@ work, and design.md §12/§13 are its scope and acceptance criteria.
 
 Landed: streaming chat with multi-turn memory and barge-in, d1 typed grounding
 (structural span extraction, 2026-11-08), persistent workspace, rejected-trace
-JSONL export, camera/screen frames into the bridge, "New note", §10 MVP
-hardening (b1693ab), the phone-width command surface (≤780px Session/Note/
-Runtime tabs + persistent composer), the floor-adaptive VAD gate (2026-11-08),
-the Omni-first pipeline (default `omni` run mode), user-selectable run modes
-(`omni` / `worker-d1` / `lowram`, 2026-11-09), the persistent hands-free mic
-toggle with barge-in, and the session-level Video/VideoOff frame gate
-(2026-11-09). `npm run typecheck`, `npm run build` and `npm test` (290 tests)
-pass. The QA battery is **RED** — see the first item under Next implementation
-work; plan.md §9.6 is the authoritative build status for the pre-run-mode
-pipeline, and the §7 phase list is the original roadmap.
+JSONL export, "New note", §10 MVP hardening (b1693ab), the phone-width command
+surface (≤780px Session/Note/Runtime tabs + persistent composer), the
+floor-adaptive VAD gate (2026-11-08), the Omni-first pipeline (default `audio`
+run mode), user-selectable run modes (`audio` / `omni` legacy / `worker-d1` /
+`lowram`, 2026-11-09), the persistent hands-free mic toggle with barge-in, and
+the video/frame drop (text-only turns, audio-only panel, 2026-11-10).
+`npm run typecheck`, `npm run build` and `npm test` pass. The QA battery is
+**RED** — see the first item under Next implementation work; plan.md §9.6 is
+the authoritative build status for the pre-run-mode pipeline, and the §7 phase
+list is the original roadmap.
 
 ## Verification (needs a human — real hardware ears/voice)
 
@@ -99,12 +100,14 @@ Tracked as GitHub Issues #7 (real-mic pass) and #8 (real-speaker pass).
 ## Ops notes
 
 - Required servers: `scripts/start-models.sh` (idempotent) starts text :8080,
-      omni :8083 and d1-omni :8085 (pid files in
+      omni :8083, d1-omni :8085 and audio :8086 (pid files in
       `~/Documents/Models/logs/lfm3/`); `scripts/stop-models.sh` stops them.
       There is no :8081 server or probe any more.
-- **Run modes** (2026-11-09): `omni` (default; Omni :8083 chat/ASR/TTS, 1.7B
-      :8080 authors tool calls, d1-Omni :8085 safety check → pending edit on
-      disapproval), `worker-d1` (1.7B :8080 chats and authors XML tool calls;
+- **Run modes** (2026-11-09): `audio` (default; Audio 2B :8086
+      chat/ASR/TTS, 1.7B :8080 authors tool calls, d1-Omni :8085 safety check →
+      pending edit on disapproval), `omni` (legacy Omni-first; Omni :8083
+      chat/ASR/TTS, 1.7B :8080 authors tool calls, d1-Omni :8085 safety check),
+      `worker-d1` (1.7B :8080 chats and authors XML tool calls;
       d1-Omni :8085 decides edit safety: approve → execute, disapprove/
       unavailable → pending edit; ASR/TTS ride :8085; Omni out of the loop),
       `lowram` (LFM3-1.7B only; hard gates + engine dry-run, then held as a
@@ -121,12 +124,9 @@ Tracked as GitHub Issues #7 (real-mic pass) and #8 (real-speaker pass).
       the composer ring/waveform and `data-capturing`; `stopMic` (reset/unmount)
       is the only abandon-without-submit path. Voice onset fires
       `VoiceRecorder.onVoiceStart` once per capture and cuts TTS.
-- **Video toggle**: SessionPanel header Video/VideoOff button (session-level,
-      default on, not persisted). OFF resolves no frame at all
-      (`frameSource: 'none'`); the Visual panel shows "Not sent to models".
-      `extract_visual_to_note`'s own crop use is not gated. No effect in
-      `worker-d1`/`lowram` — the 1.7B is text-only.
-- `npm run qa` is the 45-assertion Omni-first CDP battery. It needs the dev
+- `npm run qa` is the 43-assertion Omni-first CDP battery (turns are
+      text-only: the visual-question case 5 and the slide-extract case 9 are
+      gone with the video/frame drop). It needs the dev
       server on :5173 and the trinity up. Warm the dev server with a curl first;
       a cold Vite dependency optimization can lose the suite's first navigation
       race. See the red-battery item under Next implementation work for the

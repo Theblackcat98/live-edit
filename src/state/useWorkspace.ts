@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
-  BBoxTarget,
   ContextUsage,
   ExecutionDiff,
   Message,
@@ -58,14 +57,14 @@ function initialMessages(): Message[] {
       id: makeId('msg'),
       role: 'system',
       kind: 'notice',
-      text: 'Session ready · local runtime · camera frame captured',
+      text: 'Session ready · local runtime · audio input ready',
       at: now - 800,
     },
     {
       id: makeId('msg'),
       role: 'assistant',
       kind: 'greeting',
-      text: "I'm watching the camera and your note. Tell me what to change, or ask me what I see.",
+      text: "I'm reading your note. Tell me what to change.",
       at: now - 400,
     },
   ]
@@ -106,7 +105,6 @@ export interface WorkspaceApi {
   stageStates: Record<StageId, StageState>
   busy: boolean
   span: SpanTarget | null
-  bbox: BBoxTarget | null
   diff: ExecutionDiff | null
   contextUsage: ContextUsage
   sourceMode: boolean
@@ -120,9 +118,6 @@ export interface WorkspaceApi {
   toggleMic: () => void
   asrBusy: boolean
   getMicLevel: () => number
-  /** Attach scene frames to model turns (default on; session-level, not persisted). */
-  videoOn: boolean
-  toggleVideo: () => void
   speaking: boolean
   ttsBusy: boolean
   stopSpeech: () => void
@@ -201,14 +196,12 @@ export function useWorkspace(): WorkspaceApi {
   })
   const [busy, setBusy] = useState(false)
   const [span, setSpan] = useState<SpanTarget | null>(null)
-  const [bbox, setBBox] = useState<BBoxTarget | null>(null)
   const [diff, setDiff] = useState<ExecutionDiff | null>(null)
   const [flowModel, setFlowModel] = useState<ActiveModel>(null)
   const [speaking, setSpeaking] = useState(false)
   const [speakerOn, setSpeakerOn] = useState(false)
   const [micOn, setMicOn] = useState(false)
   const [micActive, setMicActive] = useState(false)
-  const [videoOn, setVideoOn] = useState(true)
   const [contextUsage, setContextUsage] = useState<ContextUsage>(INITIAL_CONTEXT)
   const [sourceMode, setSourceMode] = useState(false)
   const [commandInput, setCommandInput] = useState('')
@@ -251,11 +244,6 @@ export function useWorkspace(): WorkspaceApi {
   const demoStopRef = useRef(false)
   const healthRef = useRef<RuntimeHealth | null>(null)
   const modeRef = useRef<RunMode>(mode)
-  /**
-   * Video toggle mirror: each frame-resolution site in the pipeline reads
-   * this, so the hook's state is the single switch (default on).
-   */
-  const videoEnabledRef = useRef(true)
   /** Hands-free toggle mirror: capture callbacks outlive the render they began in. */
   const micOnRef = useRef(false)
   const asrBusyRef = useRef(false)
@@ -264,7 +252,7 @@ export function useWorkspace(): WorkspaceApi {
   /** Latest stopMic, callable from the mode switch declared above it. */
   const stopMicRef = useRef<() => void>(() => {})
   /** Endpoint the active mic capture started against (mode is read at start, not at stop). */
-  const micEndpointRef = useRef<'omni' | 'd1omni' | null>(null)
+  const micEndpointRef = useRef<'omni' | 'd1omni' | 'audio' | null>(null)
   const asrSourceRef = useRef<RuntimeSource>('fallback')
   const lastVoiceSecondsRef = useRef<number | undefined>(undefined)
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null)
@@ -426,7 +414,6 @@ export function useWorkspace(): WorkspaceApi {
     clearTransientHighlights()
     highlightTimerRef.current = window.setTimeout(() => {
       setDiff(null)
-      setBBox(null)
     }, 7200)
   }, [clearTransientHighlights])
 
@@ -466,7 +453,6 @@ export function useWorkspace(): WorkspaceApi {
     noteRef.current = target.note
     setNote(target.note)
     setSpan(null)
-    setBBox(null)
     setDiff(null)
     setSourceMode(false)
     return {
@@ -616,7 +602,6 @@ export function useWorkspace(): WorkspaceApi {
       if (nextNote === noteRef.current) return false
       commitNote(nextNote, 'Manual source edit', 'manual')
       setSpan(null)
-      setBBox(null)
       setDiff(null)
       addMessage({
         role: 'system',
@@ -736,24 +721,6 @@ export function useWorkspace(): WorkspaceApi {
     })
   }, [])
 
-  /**
-   * Video toggle: OFF means model turns attach no frame at all (the pipeline
-   * reads `videoEnabledRef` at each resolution site). Session-level by
-   * design — a reload starts with frames on, like the camera feed itself.
-   */
-  const toggleVideo = useCallback(() => {
-    const next = !videoEnabledRef.current
-    videoEnabledRef.current = next
-    setVideoOn(next)
-    notify(
-      next ? 'Frames on' : 'Frames off',
-      next
-        ? 'Omni chat turns attach the current scene frame again.'
-        : 'Chat turns now run text-only — no frame is resolved or attached (Omni mode only).',
-      'neutral',
-    )
-  }, [notify])
-
   /** State + mirror in one step: capture callbacks read the ref, not a render. */
   const setMicToggle = useCallback((on: boolean) => {
     micOnRef.current = on
@@ -769,13 +736,15 @@ export function useWorkspace(): WorkspaceApi {
   }, [notify])
 
   const notifySpeechOffline = useCallback(
-    (endpoint: 'omni' | 'd1omni') => {
+    (endpoint: 'omni' | 'd1omni' | 'audio') => {
       const port = speechPortFor(endpoint)
       notify(
-        endpoint === 'omni' ? 'Omni ASR offline' : 'd1-Omni ASR offline',
+        endpoint === 'omni' ? 'Omni ASR offline' : endpoint === 'audio' ? 'Audio ASR offline' : 'd1-Omni ASR offline',
         endpoint === 'omni'
           ? `LFM3-Omni-2B is not answering on :${port} — start it with ./lfm3.sh omni, or type the command.`
-          : `d1-Omni-2B is not answering on :${port} — start it, or type the command.`,
+          : endpoint === 'audio'
+            ? `LFM3-Audio-2B is not answering on :${port} — start it with scripts/start-models.sh, or type the command.`
+            : `d1-Omni-2B is not answering on :${port} — start it, or type the command.`,
         'error',
       )
     },
@@ -809,7 +778,6 @@ export function useWorkspace(): WorkspaceApi {
     messagesRef,
     healthRef,
     modeRef,
-    videoEnabledRef,
     asrSourceRef,
     lastVoiceSecondsRef,
     chatAbortRef,
@@ -820,7 +788,6 @@ export function useWorkspace(): WorkspaceApi {
     setCommandInput,
     setSourceMode,
     setSpan,
-    setBBox,
     setDiff,
     setStage,
     setStageStates,
@@ -856,7 +823,7 @@ export function useWorkspace(): WorkspaceApi {
    * hands-free toggle.
    */
   const beginCapture = useCallback(
-    async (endpoint: 'omni' | 'd1omni'): Promise<boolean> => {
+    async (endpoint: 'omni' | 'd1omni' | 'audio'): Promise<boolean> => {
       const recorder = new VoiceRecorder({
         // The VAD ending an utterance is NOT the user ending hands-free:
         // finishVoiceCapture transcribes + submits, then re-arms if the
@@ -1048,7 +1015,6 @@ export function useWorkspace(): WorkspaceApi {
     }
     commitNote('# Untitled\n\n', 'New note', 'manual')
     setSpan(null)
-    setBBox(null)
     setDiff(null)
     setSourceMode(false)
     notify(
@@ -1171,7 +1137,6 @@ export function useWorkspace(): WorkspaceApi {
     stageStates,
     busy,
     span,
-    bbox,
     diff,
     contextUsage,
     sourceMode,
@@ -1183,8 +1148,6 @@ export function useWorkspace(): WorkspaceApi {
     toggleMic,
     asrBusy,
     getMicLevel,
-    videoOn,
-    toggleVideo,
     speaking,
     ttsBusy,
     stopSpeech,

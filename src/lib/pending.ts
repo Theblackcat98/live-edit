@@ -223,16 +223,11 @@ export function fromStorable(raw: unknown): PendingEdit[] {
 // --- defensive parsing (outside-controlled JSON; one bad field drops the entry) ---
 
 function isToolName(value: unknown): value is ToolName {
-  return (
-    value === 'add_text' ||
-    value === 'edit_text' ||
-    value === 'remove_text' ||
-    value === 'extract_visual_to_note'
-  )
+  return value === 'add_text' || value === 'edit_text' || value === 'remove_text'
 }
 
 function isDirectiveTask(value: unknown): value is Directive['task'] {
-  return value === 'create' || value === 'insert' || value === 'edit' || value === 'remove' || value === 'extract'
+  return value === 'create' || value === 'insert' || value === 'edit' || value === 'remove'
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -255,14 +250,12 @@ function parseDirective(raw: unknown): Directive | null {
   }
   if (raw.verbatim !== undefined && raw.verbatim !== null && typeof raw.verbatim !== 'string') return null
   if (raw.constraints !== undefined && !isStringArray(raw.constraints)) return null
-  if (raw.frame_relevant !== undefined && typeof raw.frame_relevant !== 'boolean') return null
   return {
     task: raw.task,
     instruction: raw.instruction,
     ...(target !== undefined ? { target } : {}),
     ...(raw.verbatim !== undefined ? { verbatim: raw.verbatim as string | null } : {}),
     ...(raw.constraints !== undefined ? { constraints: raw.constraints } : {}),
-    ...(raw.frame_relevant !== undefined ? { frame_relevant: raw.frame_relevant } : {}),
   }
 }
 

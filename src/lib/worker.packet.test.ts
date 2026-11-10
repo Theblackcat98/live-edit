@@ -18,7 +18,6 @@ const README_DIRECTIVE: Directive = {
   target: { description: 'top of the note, before the Q3 Business Review heading', heading: null },
   verbatim: null,
   constraints: ['markdown', 'keep the existing Q3 content intact'],
-  frame_relevant: false,
 }
 
 const THREE_TURN_PACKET: ContextPacket = {
@@ -87,14 +86,14 @@ describe('buildPacketWorkerMessages — assembly (design.md §6)', () => {
     expect(text).toContain(NOTE_PATH)
   })
 
-  it('renders all 4 tool schemas so the worker CHOOSES (task is a hint, not a filter)', () => {
+  it('renders all 3 tool schemas so the worker CHOOSES (task is a hint, not a filter)', () => {
     const text = userText(build())
-    for (const schema of ['add_text', 'edit_text', 'remove_text', 'extract_visual_to_note']) {
+    for (const schema of ['add_text', 'edit_text', 'remove_text']) {
       expect(text).toContain(`<schema function=${schema}>`)
     }
-    // The directive's task hint names a tool but the catalog carries all four.
+    // The directive's task hint names a tool but the catalog carries all three.
     expect(text).toContain('you pick the tool that fits')
-    expect(text.match(/<schema function=/g)).toHaveLength(4)
+    expect(text.match(/<schema function=/g)).toHaveLength(3)
   })
 
   it('includes the context packet turns, in order, oldest first', () => {
@@ -115,7 +114,6 @@ describe('buildPacketWorkerMessages — assembly (design.md §6)', () => {
       target: { description: 'under the Security heading', heading: '6. Security' },
       verbatim: 'rotate keys monthly',
       constraints: ['keep the existing Security bullets'],
-      frame_relevant: false,
     }
     const text = userText(build(directive))
     expect(text).toContain('"task": "insert"')
@@ -127,18 +125,6 @@ describe('buildPacketWorkerMessages — assembly (design.md §6)', () => {
   it('renders an empty context packet as the first-edit marker', () => {
     const text = userText(build(README_DIRECTIVE, { editTurns: [], promptTokens: 0 }))
     expect(text).toContain('first edit of the session')
-  })
-
-  it('carries the frame_extract field when Omni read the frame (decision D2)', () => {
-    const text = userText(
-      build({
-        task: 'extract',
-        instruction: 'Pull the LTV/CAC formula from the slide into Revenue.',
-        frame_relevant: true,
-        frame_extract: '**North star — LTV / CAC**\n\n$$\n\\frac{\\mathrm{LTV}}{\\mathrm{CAC}} = 3.4\\times\n$$',
-      } as Directive & { frame_extract: string }),
-    )
-    expect(text).toContain('LTV / CAC')
   })
 
   it('contains NO supervisor-authored content or supervisor vocabulary', () => {
@@ -170,12 +156,11 @@ describe('buildPacketWorkerMessages — assembly (design.md §6)', () => {
     // v2 lesson: complete XML examples in the catalog were read by the 1.7B as
     // its own prior assistant turns — examples stay prose.
     expect(catalog).not.toContain('<tool_call>')
-    expect(catalog.match(/Filled example/g)).toHaveLength(4)
+    expect(catalog.match(/Filled example/g)).toHaveLength(3)
     const ownership: Record<string, string[]> = {
       add_text: ['file_path', 'position', 'anchor', 'content'],
       edit_text: ['file_path', 'start_line', 'end_line', 'old_text_anchor', 'new_text'],
       remove_text: ['file_path', 'start_line', 'end_line', 'target_excerpt'],
-      extract_visual_to_note: ['file_path', 'visual_format', 'anchor_heading', 'extracted_markdown'],
     }
     for (const [tool, params] of Object.entries(ownership)) {
       const block = catalog.slice(

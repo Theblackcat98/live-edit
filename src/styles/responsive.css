@@ -241,14 +241,6 @@
     grid-template-columns: 15px 100px minmax(0, 1fr);
   }
 
-  .trace-bbox-card {
-    flex-direction: column;
-  }
-
-  .trace-bbox-preview {
-    width: 100%;
-  }
-
   .about-shortcuts {
     grid-template-columns: 1fr;
   }

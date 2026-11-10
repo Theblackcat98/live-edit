@@ -32,7 +32,6 @@ function makeEdit(overrides: Partial<PendingEdit> = {}): PendingEdit {
       },
       verbatim: null,
       constraints: [],
-      frame_relevant: false,
     },
     call: {
       name: 'edit_text',

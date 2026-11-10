@@ -4,7 +4,6 @@ export type ToolName =
   | 'add_text'
   | 'edit_text'
   | 'remove_text'
-  | 'extract_visual_to_note'
 
 export type ActionClass =
   | 'conversational_only'
@@ -37,10 +36,6 @@ export type PipelineStage =
 export type StageId = 'A' | 'B' | 'C'
 
 export type StageState = 'idle' | 'running' | 'done' | 'skipped' | 'failed'
-
-export type SourceId = 'camera' | 'screen'
-
-export type VideoMode = 'synthetic' | 'device' | 'screen'
 
 export interface ToolParam {
   name: string
@@ -110,22 +105,6 @@ export interface GroundingRecord {
   candidateCount?: number
   /** Why the deterministic fallback ran, when it did. */
   detail?: string
-}
-
-export type SceneRegionId =
-  | 'full'
-  | 'header'
-  | 'table'
-  | 'q3-row'
-  | 'formula'
-  | 'chart'
-  | 'sticky'
-
-export interface BBoxTarget {
-  region: SceneRegionId
-  label: string
-  confidence: number
-  source: 'camera' | 'screen'
 }
 
 export interface CriticCheck {
@@ -210,25 +189,6 @@ export interface TraceTimings {
   chat?: number
 }
 
-/**
- * Which pixels the models actually received for a run.
- * `none` means no frame was attached at all — never claim a source by default.
- */
-export type FrameSource = 'live-camera' | 'live-screen' | 'synthetic-slide' | 'none'
-
-/** A live camera/screen snapshot registered by the visual panel. */
-export interface LiveFrame {
-  dataUrl: string
-  source: SourceId
-  at: number
-}
-
-/** A resolved frame handed to the models, with its true provenance. */
-export interface ResolvedFrame {
-  dataUrl: string
-  source: FrameSource
-}
-
 export interface Trace {
   id: string
   at: number
@@ -242,7 +202,6 @@ export interface Trace {
   span?: SpanTarget
   /** How the span was resolved (d1 typed question vs deterministic search). */
   grounding?: GroundingRecord
-  bbox?: BBoxTarget
   call?: WorkerCall
   critic?: CriticResult
   /** The d1 safety-check result (P4+; Omni-first traces only — legacy traces carry `critic`). */
@@ -257,7 +216,6 @@ export interface Trace {
   noteTokensAtStart: number
   workerNoteView: string
   runtime?: TraceRuntime
-  frameSource?: FrameSource
 }
 
 export interface MessageAction {
@@ -351,7 +309,7 @@ export interface TraceRuntime {
 }
 
 export interface EndpointHealth {
-  id: 'omni' | 'd1omni' | 'text'
+  id: 'omni' | 'd1omni' | 'text' | 'audio'
   name: string
   role: string
   port: number
@@ -407,7 +365,6 @@ export interface WorkspaceState {
   stageStates: Record<StageId, StageState>
   busy: boolean
   span: SpanTarget | null
-  bbox: BBoxTarget | null
   diff: ExecutionDiff | null
   contextUsage: ContextUsage
   sourceMode: boolean
@@ -434,9 +391,6 @@ export interface WorkspaceState {
  *   directive: the user dictated exact words, and the worker inserts them as-is.
  * - `target` is optional; the worker grounds the exact span itself.
  * - A directive is per-turn and ephemeral; it is recorded in the trace.
- *
- * Note: the `frame_extract` field (decision D2) is deliberately absent — it
- * lands with Phase 3 and is mirrored into design.md §5 then.
  */
 export interface DirectiveTarget {
   /** What was asked for, in Omni's resolved words ("top of the note, before the Q3 heading"). */
@@ -447,7 +401,7 @@ export interface DirectiveTarget {
 
 export interface Directive {
   /** Coarse operation class; the worker still chooses the concrete tool. */
-  task: 'create' | 'insert' | 'edit' | 'remove' | 'extract'
+  task: 'create' | 'insert' | 'edit' | 'remove'
   /** The brief: everything the user meant, references resolved, no chat. */
   instruction: string
   /** Optional resolved target description; the worker grounds the exact span. */
@@ -456,10 +410,7 @@ export interface Directive {
   verbatim?: string | null
   /** Formatting/scope constraints ("markdown", "keep the existing Q3 content intact"). */
   constraints?: string[]
-  /** Whether the worker's task depends on the current video frame. */
-  frame_relevant?: boolean
 }
-
 /**
  * What a single Omni turn resolved to (design.md §2/§4). Exactly one outcome
  * per turn: Omni answers, asks for clarification, silently delegates to the
