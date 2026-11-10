@@ -507,8 +507,9 @@ function recordOmniRejection(
 
 /**
  * The Audio-first turn (design.md §§2–9). One model is
- * the interface: Audio answers, clarifies, maps undo/redo, or silently
- * delegates a typed directive to the 1.7B worker. The worker authors and
+ * the interface: Audio answers, clarifies, or silently
+ * delegates a typed directive to the 1.7B worker (undo/redo are
+ * deterministic pipeline actions, handled before the model runs). The worker authors and
  * grounds its call from the §6 packet; deterministic hard gates run next;
  * d1's only job is the §7 safety check; a disapproved or unavailable check
  * becomes a pending edit for the user — never a dead end, never a silent
@@ -518,6 +519,18 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
   const { command, noteAtStart, traceLocal, runtime, liveUsage, publish, finish } = ctx
   deps.setFlowModel('omni')
   deps.setStage('routing')
+
+  // Deterministic undo/redo pre-check (battery case 10b): snapshot rollback
+  // is a pipeline action, never a model decision — the worker-chat modes
+  // already pre-check, and this path relied on the model emitting
+  // harness_action, which is how 'redo it' got answered conversationally
+  // while 'undo that' happened to be classified. Same detector, same
+  // rationale (design.md §2/§9).
+  const snapshotAction = detectSnapshotDirective(command)
+  if (snapshotAction) {
+    await runSnapshotDirective(deps, ctx, snapshotAction)
+    return
+  }
 
   // Text-only turn: Omni and the d1 check read the note and command alone.
 

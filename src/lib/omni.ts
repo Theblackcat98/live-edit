@@ -443,6 +443,34 @@ function stripToolJson(text: string): string {
   return out
 }
 
+const PLAIN_TOOL_HEADER = /^[ \t]*(?:delegate_edit|harness_action)\s*:/i
+const PLAIN_TOOL_FIELD =
+  /^[ \t]*(?:task|instruction|target|heading|description|verbatim|constraints|action)\s*:/i
+
+/**
+ * Remove plain-text tool-call renditions (battery case 25): the model
+ * spells the call out as prose — a `delegate_edit:` header line followed
+ * by indented/field lines (` task: remove`, ` instruction: …`). None of
+ * the structured strippers (JSON, XML, fences) see this shape. A block
+ * runs from its header through every following indented or field-shaped
+ * line; ordinary prose, including a mid-sentence mention of a tool name,
+ * passes untouched.
+ */
+function stripPlainToolBlocks(text: string): string {
+  const kept: string[] = []
+  let inBlock = false
+  for (const line of text.split('\n')) {
+    if (PLAIN_TOOL_HEADER.test(line)) {
+      inBlock = true
+      continue
+    }
+    if (inBlock && (PLAIN_TOOL_FIELD.test(line) || /^[ \t]+\S/.test(line))) continue
+    inBlock = false
+    kept.push(line)
+  }
+  return kept.join('\n')
+}
+
 /**
  * Visible/TTS text hygiene (§10): nothing the user sees or hears may carry
  * the delegation mechanism. Extends the shipped discipline (pipeline.ts's
@@ -473,6 +501,8 @@ export function sanitizeOmniText(text: string): string {
     .split('\n')
     .filter((line) => !/^[ \t]*ACTION[ :]+(undo|redo)\b/i.test(line))
     .join('\n')
+  // Plain-text tool-call renditions (case 25's leak shape).
+  clean = stripPlainToolBlocks(clean)
   // Bare tool-call JSON.
   clean = stripToolJson(clean)
   return clean.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim()
