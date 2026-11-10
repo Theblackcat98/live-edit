@@ -820,7 +820,7 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
     deps.addMessage({
       role: 'assistant',
       kind: 'error',
-      text: `The worker could not produce a valid tool call for Audio's directive (${attemptError || 'no parseable call'}). Nothing was written to the note, and no fallback content was substituted.`,
+      text: `The worker could not produce a valid tool call for that edit (${attemptError || 'no parseable call'}). Nothing was written to the note, and no fallback content was substituted.`,
       runId: traceLocal.id,
     })
     deps.notify('Worker call invalid', attemptError || 'No parseable tool call.', 'error')
