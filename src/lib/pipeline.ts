@@ -69,6 +69,7 @@ import {
   chatComplete,
   d1Decide,
   endpointUp,
+  type ChatResult,
 } from './bridge'
 import { estimateTokens, makeId } from './utils'
 import { splitLines } from './doc'
@@ -718,7 +719,7 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
             attemptedTool,
             anchorCorrection: anchorCorrectionFor(noteAtStart, attemptedParsed),
           })
-    let completion: Awaited<ReturnType<typeof chatComplete>>
+    let completion: ChatResult
     try {
       completion = await chatComplete('text', messages, sampler)
     } catch (error) {
