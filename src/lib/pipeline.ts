@@ -1362,11 +1362,13 @@ async function verifyAndExecute(
   const execution = preview
   traceLocal.timings.execute = Number((performance.now() - execStarted).toFixed(1))
   traceLocal.execution = execution
-  // Snapshot labels must not claim a model that never ran: mode 1 keeps its
-  // shipped "Audio directive" prefix, worker-chat modes pass their own.
+  // Snapshot labels surface in user-visible messages (undo/redo
+  // confirmations quote them — battery case 25 forbids pipeline stage
+  // vocabulary in the transcript). "Audio edit" names the provenance
+  // without the stage noun; worker-chat modes pass their own label.
   const snapshot = deps.commitNote(
     execution.note,
-    `${options.snapshotLabel ?? 'Audio directive'} · ${call.name}`,
+    `${options.snapshotLabel ?? 'Audio edit'} · ${call.name}`,
     call.name,
   )
   execution.snapshotId = snapshot.id
