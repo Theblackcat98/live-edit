@@ -8,9 +8,27 @@
  * case failed, and always kills its Chrome.
  *
  * No npm dependencies: Node 22 global fetch/WebSocket only.
+ *
+ * Repetition + statistics (2026-11-10): the models are nondeterministic —
+ * a single binary run cannot separate an improvement from luck (the same
+ * code scored 17/45 and 19/45 on consecutive nights). Two modes help:
+ *
+ *   node scripts/qa-suite.mjs --repeat 3
+ *     Runs the whole battery 3 times (fresh Chrome per rep), then prints
+ *     a per-case PASS-RATE table (stable-pass / flaky / stable-fail) and
+ *     aggregate trace statistics (d1 verdicts, which d1 question fails,
+ *     noul distribution on disapprovals, worker-authored share, repair
+ *     count). Exit 0 only if every case passed every rep.
+ *
+ *   node scripts/qa-suite.mjs --aggregate <dir>
+ *     Re-prints that report from a directory of rep-*.json files written
+ *     by an earlier --repeat run (kept in the OS temp dir; path printed).
+ *
+ * A single run can also set QA_RESULTS_JSON=<path> to dump its records +
+ * harvested trace digests as JSON (the --repeat children use this).
  */
-import { spawn, execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { spawn, spawnSync, execFileSync } from 'node:child_process'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -19,6 +37,106 @@ const APP_URL = process.env.QA_APP_URL ?? 'http://localhost:5173'
 const CDP_PORT = 9226
 const STORAGE_KEY = 'liquidscribe.workspace.v1'
 const RUN_TIMEOUT_MS = Number(process.env.QA_RUN_TIMEOUT_MS ?? 120_000)
+
+// ------------------------------------------------- repeat / aggregate ---
+// Parent-side modes, handled before any Chrome spawns. A --repeat run
+// invokes this same file once per rep as a child (without --repeat, with
+// QA_RESULTS_JSON pointing at a per-rep file), then aggregates.
+
+function aggregateReps(dir, repCount) {
+  const reps = []
+  for (let i = 1; i <= repCount; i++) {
+    const file = path.join(dir, `rep-${i}.json`)
+    if (!existsSync(file)) { reps.push(null); continue }
+    try { reps.push(JSON.parse(readFileSync(file, 'utf8'))) } catch { reps.push(null) }
+  }
+  const aborted = reps.filter((r) => r === null).length
+
+  // Per-case pass rates across the reps that recorded the case.
+  const caseIds = []
+  const byCase = new Map()
+  for (const rep of reps) {
+    if (!rep) continue
+    for (const r of rep.records ?? []) {
+      if (!byCase.has(r.id)) { byCase.set(r.id, { title: r.title, runs: 0, passes: 0 }) ; caseIds.push(r.id) }
+      const c = byCase.get(r.id)
+      c.runs += 1
+      if (r.status === 'PASS') c.passes += 1
+    }
+  }
+
+  // Trace statistics across every harvested turn of every rep.
+  const traces = reps.flatMap((rep) => rep?.traces ?? [])
+  const count = (arr, key) => {
+    const m = new Map()
+    for (const t of arr) { const k = key(t); if (k != null) m.set(k, (m.get(k) ?? 0) + 1) }
+    return [...m.entries()].sort((a, b) => b[1] - a[1])
+  }
+  const disapprovals = traces.filter((t) => t.d1Verdict === 'disapproved')
+  const nouls = disapprovals.map((t) => t.noul).filter((n) => Number.isFinite(n)).sort((a, b) => a - b)
+  const delegated = traces.filter((t) => t.task != null)
+  const workerAuthoredCount = delegated.filter((t) => t.workerAuthored).length
+
+  console.log('\n================ BATTERY AGGREGATE ================')
+  console.log(`Reps: ${repCount} (${aborted} aborted) | cases recorded: ${caseIds.length} | turns harvested: ${traces.length}`)
+  console.log('---------------------------------------------------')
+  let stablePass = 0, flaky = 0, stableFail = 0
+  for (const id of caseIds) {
+    const c = byCase.get(id)
+    const rate = c.passes / c.runs
+    const mark = rate === 1 ? 'stable-pass' : rate === 0 ? 'stable-fail' : 'FLAKY     '
+    if (rate === 1) stablePass += 1; else if (rate === 0) stableFail += 1; else flaky += 1
+    console.log(`${id.padEnd(4)} ${mark} ${c.passes}/${c.runs}  ${c.title.slice(0, 84)}`)
+  }
+  console.log('---------------------------------------------------')
+  console.log(`Cases: ${stablePass} stable-pass | ${flaky} flaky | ${stableFail} stable-fail`)
+  console.log('\nTrace statistics (all reps):')
+  console.log('  terminal statuses: ' + count(traces, (t) => t.status).map(([k, v]) => `${k}=${v}`).join(', '))
+  console.log('  d1 verdicts:       ' + count(traces, (t) => t.d1Verdict).map(([k, v]) => `${k}=${v}`).join(', '))
+  if (disapprovals.length) {
+    console.log('  disapproval failing questions: ' + count(disapprovals, (t) => t.failingQuestion ?? '(none recorded)').map(([k, v]) => `${k}=${v}`).join(', '))
+    console.log('  disapproval safety choices:    ' + count(disapprovals, (t) => t.destructiveSafety ?? '(none)').map(([k, v]) => `${k}=${v}`).join(', '))
+    if (nouls.length) {
+      const mid = nouls[Math.floor(nouls.length / 2)]
+      console.log(`  noul on disapprovals: min=${nouls[0]} median=${mid} max=${nouls[nouls.length - 1]} (n=${nouls.length})`)
+    }
+  }
+  console.log(`  delegated turns: ${delegated.length} | worker-authored: ${workerAuthoredCount} (${delegated.length ? Math.round((workerAuthoredCount / delegated.length) * 100) : 0}%)`)
+  console.log('  delegated tools:   ' + count(delegated, (t) => t.tool ?? '(none)').map(([k, v]) => `${k}=${v}`).join(', '))
+  console.log(`  omni repair failures: ${traces.filter((t) => t.repair).length} | timed-out turns: ${traces.filter((t) => t.timedOut).length}`)
+  return { allStablePass: stableFail === 0 && flaky === 0 && aborted === 0 }
+}
+
+const aggregateIdx = process.argv.indexOf('--aggregate')
+if (aggregateIdx !== -1) {
+  const dir = process.argv[aggregateIdx + 1]
+  if (!dir || !existsSync(dir)) { console.error('--aggregate needs a directory of rep-*.json files'); process.exit(2) }
+  let repCount = 0
+  for (let i = 1; i <= 99; i++) if (existsSync(path.join(dir, `rep-${i}.json`))) repCount = i
+  if (repCount === 0) { console.error(`no rep-*.json files in ${dir}`); process.exit(2) }
+  const { allStablePass } = aggregateReps(dir, repCount)
+  process.exit(allStablePass ? 0 : 1)
+}
+
+const repeatIdx = process.argv.indexOf('--repeat')
+if (repeatIdx !== -1) {
+  const reps = Number(process.argv[repeatIdx + 1])
+  if (!Number.isInteger(reps) || reps < 2) { console.error('--repeat needs an integer >= 2'); process.exit(2) }
+  const dir = mkdtempSync(path.join(tmpdir(), 'liquidscribe-qa-reps-'))
+  const childArgs = process.argv.slice(2).filter((a, i, arr) => a !== '--repeat' && arr[i - 1] !== '--repeat')
+  console.log(`--repeat ${reps}: per-rep results land in ${dir}`)
+  for (let i = 1; i <= reps; i++) {
+    console.log(`\n########## REP ${i}/${reps} ##########`)
+    const res = spawnSync(process.execPath, [fileURLToPath(import.meta.url), ...childArgs], {
+      env: { ...process.env, QA_RESULTS_JSON: path.join(dir, `rep-${i}.json`) },
+      stdio: 'inherit',
+    })
+    console.log(`########## REP ${i} exit ${res.status} ##########`)
+  }
+  const { allStablePass } = aggregateReps(dir, reps)
+  console.log(`\nRep files kept at ${dir} (re-print with: node scripts/qa-suite.mjs --aggregate ${dir})`)
+  process.exit(allStablePass ? 0 : 1)
+}
 
 // ---------------------------------------------------------------- chrome ---
 
@@ -439,9 +557,11 @@ async function main() {
       const runs = (ws && Array.isArray(ws.runs)) ? ws.runs : []
       const last = runs[0] ?? null // runs are stored newest-first
       return { count: runs.length, status: last ? last.status : null, command: last ? last.command : null,
+               id: last ? last.id ?? null : null,
                critic: last ? last.critic ?? null : null, runtime: last ? last.runtime ?? null : null,
                span: last ? last.span ?? null : null, grounding: last ? last.grounding ?? null : null,
                directive: last ? last.directive ?? null : null, call: last ? last.call ?? null : null,
+               omniRepair: last ? last.omniRepair ?? null : null,
                d1Check: last ? last.d1Check ?? null : null, route: last ? last.route ?? null : null }
     })()`)
   }
@@ -508,6 +628,28 @@ async function main() {
     )
   }
 
+  // Trace harvest: every terminal turn waitForRun observes contributes a
+  // slim digest (deduped by run id) for the QA_RESULTS_JSON dump and the
+  // --repeat aggregate statistics — the data d1/worker calibration needs.
+  const traceHarvest = []
+  const harvestedRunIds = new Set()
+  function harvestRun(info, timedOut) {
+    if (!info || info.id == null || harvestedRunIds.has(info.id)) return
+    harvestedRunIds.add(info.id)
+    traceHarvest.push({
+      status: info.status ?? null,
+      task: info.directive?.task ?? null,
+      tool: info.call?.name ?? null,
+      workerAuthored: workerAuthored(info),
+      d1Verdict: info.d1Check?.verdict ?? null,
+      failingQuestion: info.d1Check?.failingQuestion ?? null,
+      noul: info.d1Check?.noul ?? null,
+      destructiveSafety: info.d1Check?.destructiveSafety ?? null,
+      repair: Boolean(info.omniRepair),
+      timedOut: Boolean(timedOut),
+    })
+  }
+
   /**
    * Wait for a new terminal run. Returns {status, critic, runtime}.
    * Also samples the streaming transcript so callers can inspect growth.
@@ -530,11 +672,13 @@ async function main() {
       if (info.count > before.count && TERMINAL.has(info.status)) {
         await settleState()
         await harvestHygiene()
+        harvestRun(info, false)
         return { ...info, samples }
       }
       await sleep(300)
     }
     const final = await runsInfo()
+    harvestRun(final, true)
     return { ...final, timedOut: true, samples }
   }
 
@@ -1807,6 +1951,15 @@ async function main() {
   }
   if (fails.length) {
     console.log('\nFailing-case evidence is in the table above.')
+  }
+
+  if (process.env.QA_RESULTS_JSON) {
+    try {
+      writeFileSync(process.env.QA_RESULTS_JSON, JSON.stringify({ records: results, traces: traceHarvest }, null, 2))
+      console.log(`\nRecords + ${traceHarvest.length} trace digests written to ${process.env.QA_RESULTS_JSON}`)
+    } catch (err) {
+      console.log(`\n(could not write QA_RESULTS_JSON: ${err?.message ?? err})`)
+    }
   }
 
   ws.close()
