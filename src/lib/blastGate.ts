@@ -1,3 +1,4 @@
+import type { Directive } from '../types'
 import { findSectionEnd, getHeadings, splitLines } from './doc'
 import type { ExecutionDiff } from '../types'
 
@@ -23,22 +24,59 @@ export interface CollapseVerdict {
  * refusal — the user can still apply it — it only removes the silence.
  * Small or content-preserving edits are untouched by this gate.
  *
- * Narrowing (Nick's call, 2026-11-10, after battery case 23): the
- * forbidden class is destruction disguised as an edit — a section
- * replaced by a stub under an edit tool. An outright deletion is a
- * different shape: the user asked for a removal in plain words and the
- * worker grounded it with the remove tool. `remove_text` calls are
- * therefore exempt from this gate and execute on d1's approval like any
- * other edit (the executor's own removal caps still bound them). An
- * edit-tool call that empties a section stays held — that is the
- * disguised shape, whatever the command said.
+ * Tool/directive/command scoping (issue #58 follow-up; battery cases
+ * 12c/29 versus case 23): the forbidden class is destruction of
+ * section-scale content the user did not ask to delete. An outright
+ * deletion the user asked for in plain words (a plain-removal command,
+ * directive task `remove`, grounded with the remove tool — case 23's
+ * shape: "remove that section about API keys") executes on d1's approval
+ * like any other edit; the executor's own removal caps still bound it.
+ * But a section-scale removal whose command asked for a replacement (the
+ * live 12c/29 shape: "Replace the Risks section with tiny" — Omni tasks
+ * it as remove, the worker deletes the section because no edit shape
+ * passes the retention gates, d1 approves at noul 0.60) is destruction
+ * disguised by tool choice, and it is held whatever the tool and task. A
+ * remove_text under a non-remove directive, and an edit-tool call that
+ * empties a section, stay held — those are the disguised shapes.
  */
+
+/**
+ * Replacement intent in a raw user command: the command names new content
+ * to put in place of the old (replace X with Y, change/update/rename A to
+ * B, rewrite A as B). A plain removal ("remove that section", "delete the
+ * bullet") carries no replacement complement and returns false. Same
+ * deterministic-command-reading philosophy as the pipeline's
+ * snapshot-directive detector: the user's phrasing, not a model verdict.
+ */
+export function hasReplacementIntent(command: string | undefined): boolean {
+  if (!command) return false
+  return (
+    /\breplac\w*\b.+?\bwith\b/i.test(command) ||
+    /\b(chang\w*|updat\w*|renam\w*|rewrit\w*|rewrot\w*|convert\w*|swap\w*)\b.+?\bto\b/i.test(command) ||
+    /\brewrit\w*\b.+?\bas\b/i.test(command)
+  )
+}
 export function sectionScaleCollapse(
   note: string,
   diff: ExecutionDiff,
   tool?: string,
+  directiveTask?: Directive['task'],
+  command?: string,
 ): CollapseVerdict | null {
-  if (tool === 'remove_text') return null
+  // The case-23 shape: the directive asked for a removal, the command is a
+  // plain removal (no replacement phrasing), and the worker grounded it
+  // with the remove tool. That executes on d1's approval. Every other
+  // section-scale destruction is held — including a remove_text call whose
+  // command asked for a replacement (the live 12c/29 shape: Omni tasks
+  // "Replace the Risks section with tiny" as remove, the worker deletes
+  // the section, d1 approves at noul 0.60, and the silence would violate
+  // §8), and any remove_text under a non-remove directive.
+  if (
+    tool === 'remove_text' &&
+    directiveTask === 'remove' &&
+    !hasReplacementIntent(command)
+  )
+    return null
   if (diff.removed < 2) return null
   const beforeChars = diff.before.join('\n').length
   if (beforeChars === 0) return null

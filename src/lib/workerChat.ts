@@ -20,7 +20,7 @@ import type { ToolName } from '../types'
 import { NOTE_PATH } from '../data/note'
 import { TOOL_DEFS } from '../data/tools'
 import { parseToolCallXml, type ParsedToolCall } from './xml'
-import { HISTORY_TURN_CHARS, HISTORY_TURNS, noteContextFor, sanitizeOmniText } from './omni'
+import { HISTORY_TURN_CHARS, HISTORY_TURNS, sanitizeOmniText } from './omni'
 import { truncate } from './utils'
 
 // --- sampling/serving ----------------------------------------------------------
@@ -175,9 +175,8 @@ export interface WorkerChatInput {
   command: string
   /** Prior turns, oldest first (the last HISTORY_TURNS are used). */
   history: WorkerChatHistoryTurn[]
-  /** Current note text; noteContextFor decides full text vs outline. */
+  /** Current full note text — always sent whole (the worker grounds its own span). */
   note: string
-  /** Last completed edit run, for continuity; null when none yet. */
   lastRun?: WorkerChatLastRun | null
   /** Barge-in signal forwarded to the bridge stream. */
   signal?: AbortSignal
@@ -202,8 +201,13 @@ export function buildWorkerChatMessages(input: WorkerChatInput): ChatMessage[] {
     return [user]
   })
 
+  // The full note, always — never the outline. This mode has no Omni
+  // front door: the 1.7B grounds the span itself, and an outline-only
+  // turn cannot author a valid call (it invents note content instead).
+  // The worker-chat prompt never sends the truncated variant; the cap
+  // from omni.ts's §6 context policy does not apply here.
   const textParts = [
-    noteContextFor(input.command, input.note),
+    `Current note (${NOTE_PATH}):\n${input.note}`,
     input.lastRun
       ? `Last completed run: "${input.lastRun.command}" → ${input.lastRun.status}${
           input.lastRun.message ? ` (${input.lastRun.message})` : ''

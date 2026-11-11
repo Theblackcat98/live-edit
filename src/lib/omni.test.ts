@@ -203,7 +203,7 @@ describe('buildOmniMessages', () => {
     expect(messages[3].role).toBe('user')
   })
 
-  it('persists delegations as assistant tool_calls plus a tool-role result — never harness text in the assistant channel', () => {
+  it('persists delegations as a tool call plus a tool-role result — never harness text', () => {
     const messages = buildOmniMessages(
       baseInput({
         history: [
@@ -218,11 +218,16 @@ describe('buildOmniMessages', () => {
         ],
       }),
     )
-    // system, history user, history assistant(tool_calls), history tool, current user
+    // system, history user, history assistant(tool_calls, empty content),
+    // history tool, current user. The assistant message carries the call
+    // and nothing else: visible harness text teaches plain-text delegation
+    // (battery case 21, measured 4/4 server-side), an empty-content echo
+    // without the call teaches confabulation ('hey' → sections-7-9 brief).
     expect(messages).toHaveLength(5)
     const [user, assistant, tool, current] = messages.slice(1)
     expect(user.role).toBe('user')
     expect(assistant.role).toBe('assistant')
+    expect(assistant.content).toBe('')
     expect(assistant.tool_calls).toHaveLength(1)
     expect(assistant.tool_calls?.[0].function.name).toBe('delegate_edit')
     expect(tool.role).toBe('tool')
@@ -237,6 +242,32 @@ describe('buildOmniMessages', () => {
       const content = typeof message.content === 'string' ? message.content : ''
       expect(content).not.toMatch(/Executed|Execution failed|User:|Current note|Last completed run/)
     }
+  })
+
+  it('drops visible reply text on delegation turns — the call travels, harness prose does not', () => {
+    const messages = buildOmniMessages(
+      baseInput({
+        history: [
+          {
+            command: 'update the Q3 row',
+            reply: 'Inserted 1 line at line 39.',
+            delegation: {
+              tool: 'delegate_edit',
+              arguments: JSON.stringify({ task: 'edit', instruction: 'Update Q3.' }),
+              result: 'Executed',
+            },
+          },
+        ],
+      }),
+    )
+    // The execution confirmation is harness text, not model chat: replaying
+    // it visibly teaches plain-text delegation (case 21). Content stays
+    // empty; the tool call and result still travel.
+    expect(messages).toHaveLength(5)
+    const assistant = messages[2]
+    expect(assistant.role).toBe('assistant')
+    expect(assistant.content).toBe('')
+    expect(assistant.tool_calls).toHaveLength(1)
   })
 
   it('sends the current turn as plain text, never as attachment content parts', () => {

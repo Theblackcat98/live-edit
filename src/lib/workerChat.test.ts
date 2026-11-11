@@ -87,16 +87,19 @@ describe('buildWorkerChatMessages', () => {
     expect(WORKER_CHAT_SYSTEM_PROMPT).toContain('authoritative')
   })
 
-  it('sends the full note for a command about the note, and the outline for small talk', () => {
+  it('always sends the full note — the worker grounds its own span, outlines cannot author calls', () => {
     const mutation = buildWorkerChatMessages(
       baseInput({ command: 'update the Q3 revenue row to $1.45M Final' }),
     )
     expect(userText(mutation)).toContain('| Q3 | $1.31M |')
     expect(userText(mutation)).toContain(`Current note (${NOTE_PATH}):`)
 
+    // Small talk gets the full note too: this mode has no Omni front
+    // door, so an outline-only turn could never ground a later edit —
+    // and the model answers outlines by inventing note content.
     const smallTalk = buildWorkerChatMessages(baseInput({ command: 'hello there' }))
-    expect(userText(smallTalk)).toContain('outline')
-    expect(userText(smallTalk)).not.toContain('| Q3 | $1.31M |')
+    expect(userText(smallTalk)).toContain('| Q3 | $1.31M |')
+    expect(userText(smallTalk)).not.toContain('outline')
   })
 
   it('replays prior turns as user/assistant pairs, command-only when there was no reply', () => {

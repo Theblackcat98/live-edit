@@ -70,6 +70,7 @@ GROUNDING
 - The user message carries the whole note with every line numbered, like " 17 │ | Q3 | $1.2M | Pending |". The leading number and the " │ " gutter are NOT note text; the note text starts after the gutter.
 - old_text_anchor and target_excerpt must repeat the note's text at your chosen lines exactly — the gutter and its number excluded.
 - start_line / end_line / anchor line numbers come from that gutter.
+- Match the range to the granularity the directive names: a "section" spans its heading line through the last content line before the next heading (battery case 23: "remove that section about API keys" with heading Security means lines 39-42, the heading plus both bullets — not one bullet). A "bullet"/"row"/"line" is only its own line. A heading alone is never the section.
 
 TOOL CHOICE — every parameter name belongs to exactly one tool; never mix:
 - add_text inserts NEW lines (new bullet, row, section, whole document). Its parameters: file_path, position, anchor, content.

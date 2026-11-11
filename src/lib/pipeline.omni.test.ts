@@ -68,6 +68,42 @@ describe('buildDictationCall (design.md §11 dictation exception)', () => {
   })
 })
 
+describe('verbatim is insert-shaped (battery case 6 guard)', () => {
+  // The pipeline nulls a model-set verbatim on edit/remove tasks before
+  // the dictation branch: a "$1.45M Final" value update is not dictation,
+  // and routing it through the harness-built add_text guarantees a d1
+  // disapproval. The rule below mirrors runOmniFirstTurn's guard exactly
+  // (same conditions, same result) so the contract is pinned in unit.
+  function stripMisplacedVerbatim(directive: Directive): Directive {
+    return (directive.task === 'edit' || directive.task === 'remove') &&
+      typeof directive.verbatim === 'string' &&
+      directive.verbatim.trim().length > 0
+      ? { ...directive, verbatim: null }
+      : directive
+  }
+
+  it('nulls verbatim on an edit task (case 6: value update, not dictation)', () => {
+    const out = stripMisplacedVerbatim({
+      task: 'edit',
+      instruction: 'update the Q3 revenue row to $1.45M Final',
+      verbatim: '$1.45M Final',
+    })
+    expect(out.verbatim).toBeNull()
+    expect(out.instruction).toContain('$1.45M')
+  })
+
+  it('keeps verbatim on insert/create tasks (case 8f dictation)', () => {
+    const insert: Directive = {
+      task: 'insert',
+      instruction: 'Add the dictated line',
+      verbatim: 'rotate production keys monthly starting Monday',
+    }
+    expect(stripMisplacedVerbatim(insert).verbatim).toBe(
+      'rotate production keys monthly starting Monday',
+    )
+  })
+})
+
 describe('buildOmniHistory', () => {
   it('pairs commands with their visible replies', () => {
     const history = buildOmniHistory(
@@ -96,6 +132,35 @@ describe('buildOmniHistory', () => {
           delegation: { runId: 'run-1', tool: 'add_text', status: 'executed', modelLabel: '1.7B' },
         }),
         msg({ role: 'assistant', text: 'Inserted 2 lines after line 9.', runId: 'run-1', kind: 'result' }),
+      ],
+      [run({ id: 'run-1', directive, status: 'verified' })],
+    )
+    expect(history).toHaveLength(1)
+    expect(history[0].delegation).toEqual({
+      tool: 'delegate_edit',
+      arguments: JSON.stringify(directive),
+      result: 'Executed',
+    })
+    expect(history[0].reply).toBeUndefined()
+  })
+
+  it('pairs the delegation card by runId even when the execution confirmation comes first', () => {
+    // Battery case 21: the execution confirmation ("Inserted 1 line…")
+    // is an assistant message with the run's runId; the delegation card
+    // now carries it too, so the builder pairs them and the confirmation
+    // never leaks in as visible reply history (which taught the front
+    // door plain-text delegation, measured 4/4 server-side).
+    const directive = { task: 'insert' as const, instruction: 'add the Q4 dates' }
+    const history = buildOmniHistory(
+      [
+        msg({ role: 'user', text: 'add the Q4 dates' }),
+        msg({ role: 'assistant', text: 'Inserted 2 lines after line 9.', runId: 'run-1', kind: 'result' }),
+        msg({
+          role: 'tool',
+          text: '',
+          runId: 'run-1',
+          delegation: { runId: 'run-1', tool: 'add_text', status: 'executed', modelLabel: '1.7B' },
+        }),
       ],
       [run({ id: 'run-1', directive, status: 'verified' })],
     )

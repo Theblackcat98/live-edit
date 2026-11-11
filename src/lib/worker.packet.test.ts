@@ -69,6 +69,13 @@ describe('numberNoteLines — the shared numbering discipline', () => {
 })
 
 describe('buildPacketWorkerMessages — assembly (design.md §6)', () => {
+  it('grounds section-granularity removals to the heading span (case 23)', () => {
+    // The directive names a section: the worker must span heading through
+    // the last content line, not one bullet. Pinned as prompt text (the
+    // model behavior itself is battery-rated).
+    expect(PACKET_WORKER_SYSTEM_PROMPT).toContain('a "section" spans its heading line');
+  });
+
   it('is [system, user] with the packet system prompt', () => {
     const messages = build()
     expect(messages).toHaveLength(2)

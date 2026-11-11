@@ -28,13 +28,24 @@ describe('recoverDictatedText', () => {
     ).toBeNull()
   })
 
-  it('never treats quotes on edit/remove tasks as dictation', () => {
+  it('never treats reference quotes on edit/remove tasks as dictation', () => {
     expect(
       recoverDictatedText('rename the title to "Q3 Review Final"', directive({ task: 'edit' })),
     ).toBeNull()
     expect(
       recoverDictatedText('remove the line "old draft"', directive({ task: 'remove' })),
     ).toBeNull()
+  })
+
+  it('recovers a dictated line when an add-line command is mistasked as edit (8f rep-3 shape)', () => {
+    // Omni tasked the add-line command as edit with no verbatim; the
+    // quoted span is still a dictated line (insertion verb present).
+    expect(
+      recoverDictatedText(
+        'add a line under Security: "rotate production keys monthly starting Monday"',
+        directive({ task: 'edit' }),
+      ),
+    ).toBe('rotate production keys monthly starting Monday')
   })
 
   it('returns null when there is no quoted span or only trivia', () => {

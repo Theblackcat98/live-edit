@@ -57,6 +57,7 @@ import {
 } from './worker'
 import { executeTool } from './tools'
 import { recoverDictatedText } from './dictation'
+import { scaffoldTemplateBrief } from './templateScaffold'
 import { sectionScaleCollapse } from './blastGate'
 import { checkExecutionOutcome } from './executionCheck'
 import { detectSnapshotDirective } from './snapshotDirective'
@@ -225,8 +226,7 @@ interface ChatTurn {
 const CHAT_MEMORY_TURNS = 6
 
 /** Workspace-authored replies that are pipeline templates, not conversation. */
-const TEMPLATE_REPLY_KINDS: Array<NonNullable<Message['kind']>> = ['clarify', 'ack']
-
+const TEMPLATE_REPLY_KINDS: Array<NonNullable<Message['kind']>> = ['clarify', 'ack', 'greeting']
 /**
  * Pair each user message with the last assistant reply before the next user
  * message. A trailing user turn (the command being submitted) has no reply yet
@@ -417,6 +417,16 @@ export function buildOmniHistory(messages: Message[], runs: Trace[]): OmniHistor
         result: run.status === 'verified' ? 'Executed' : 'Execution failed',
       }
     } else if (!current.reply && !current.delegation && message.text && message.kind !== 'error') {
+      // Execution/result confirmations belong to a run (runId set) — they
+      // are harness prose, never model-authored chat. Accept one as the
+      // turn's reply only when it carries no run pairing (an unpaired
+      // confirmation has no delegation to hang off, so dropping it would
+      // lose the turn entirely); a run-paired confirmation whose run also
+      // produced a delegation card contributes nothing beyond the tool
+      // record (battery case 21: replaying it visibly taught the front
+      // door plain-text delegation, measured 4/4 server-side).
+      const pairedRun = message.runId ? runsById.get(message.runId) : undefined
+      if (message.role === 'assistant' && message.runId && pairedRun?.directive) continue
       current.reply = message.text
     }
   }
@@ -537,10 +547,19 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
   const history = buildOmniHistory(deps.messagesRef.current, deps.runsRef.current)
   // The current command is already in the transcript; history is prior turns.
   const priorHistory = history.slice(0, -1)
-  const lastRun = deps.runsRef.current[0]
+  // Last-run continuity is edit context for the worker's follow-ups —
+  // conversational/chat turns carry no edit state, and replaying one
+  // ("Last completed run: hey → conversational") teaches the front door
+  // that chat turns are delegations (measured: greeting delegated 3/3
+  // with the line present, answered 3/3 without it). Only verified and
+  // pending runs (real edit attempts) are reported.
+  const lastEditRun = deps.runsRef.current.find(
+    (run) => run.status === 'verified' || run.status === 'pending',
+  )
+  const lastRun = lastEditRun
     ? {
-        command: deps.runsRef.current[0].command,
-        status: deps.runsRef.current[0].status,
+        command: lastEditRun.command,
+        status: lastEditRun.status,
       }
     : null
 
@@ -689,8 +708,40 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
   // deterministically — the dictated text must never depend on the model
   // remembering to label it.
   const recovered = recoverDictatedText(command, directive)
-  const effectiveDirective = recovered ? { ...directive, verbatim: recovered } : directive
-  if (recovered) {
+  const rawEffective = recovered ? { ...directive, verbatim: recovered } : directive
+  // Template scaffold (battery cases 27/27b/12/12d — design.md §13.1): a
+  // README-template command needs the standard section list in the brief,
+  // and the model echoes the command instead of packing it (measured live:
+  // instruction == command, worker authors 1–3 of the 5 barred sections).
+  // The scaffold appends the fixed section vocabulary to the instruction —
+  // scaffolding, not content: the worker still authors every word. Only
+  // fires on create-task README-template commands without a section
+  // already named, so real user briefs are never rewritten.
+  const scaffolded = scaffoldTemplateBrief(command, rawEffective, noteAtStart)
+  const scaffoldNote =
+    scaffolded !== rawEffective
+      ? 'Template scaffold: the §13.1 section vocabulary appended to the brief (the model echoed the command instead of packing it).'
+      : null
+  // Verbatim is insert-shaped: exact words to put into the note. A
+  // MODEL-set verbatim on edit/remove tasks is a mislabel (battery case
+  // 6: a "$1.45M Final" value update packed as verbatim routes the
+  // harness-built add_text instead of the worker's edit_text, and d1
+  // rightly disapproves the mismatch) — null it and return the turn to
+  // the worker, whose instruction already quotes the values. A RECOVERED
+  // verbatim is the harness's own finding from the command's quoted span:
+  // it always routes to the dictation call, whatever the task (battery
+  // case 8f: an add-line command the model tasked as edit still carries
+  // a dictated line — the worker would paraphrase it). Dictation with a
+  // model-set verbatim on insert/create (e.g. 8f's classic shape) flows
+  // through untouched.
+  const effectiveDirective =
+    !recovered &&
+    (scaffolded.task === 'edit' || scaffolded.task === 'remove') &&
+    typeof scaffolded.verbatim === 'string' &&
+    scaffolded.verbatim.trim().length > 0
+      ? { ...scaffolded, verbatim: null }
+      : scaffolded
+  if (effectiveDirective !== directive) {
     traceLocal.directive = effectiveDirective
     publish()
   }
@@ -725,9 +776,9 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
     return
   }
 
-  const packet = buildWorkerPacket(directive, deps.runsRef.current, noteAtStart)
+  const packet = buildWorkerPacket(effectiveDirective, deps.runsRef.current, noteAtStart)
   const packetInput: PacketWorkerPromptInput = {
-    directive,
+    directive: effectiveDirective,
     contextPacket: packet,
     note: noteAtStart,
   }
@@ -801,7 +852,7 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
     deps.addMessage({
       role: 'assistant',
       kind: 'error',
-      text: `The worker could not produce a valid tool call for Audio's directive (${attemptError || 'no parseable call'}). Nothing was written to the note, and no fallback content was substituted.`,
+      text: `The worker could not produce a valid tool call for that edit (${attemptError || 'no parseable call'}). Nothing was written to the note, and no fallback content was substituted.`,
       runId: traceLocal.id,
     })
     deps.notify('Worker call invalid', attemptError || 'No parseable tool call.', 'error')
@@ -813,7 +864,10 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
   traceLocal.workerNoteView = call.noteView
   publish()
 
-  await verifyAndExecute(deps, ctx, directive, call)
+  if (scaffoldNote) {
+    call.promptHints.push(scaffoldNote)
+  }
+  await verifyAndExecute(deps, ctx, effectiveDirective, call)
 }
 
 /** The directive task that matches a tool the 1.7B already chose (task only). */
@@ -897,12 +951,14 @@ async function runWorkerChatFirstTurn(
   const history = conversationTurns(deps.messagesRef.current, CHAT_MEMORY_TURNS)
   // The current command is already in the transcript; history is prior turns.
   const priorHistory = history.slice(0, -1)
-  const last = deps.runsRef.current[0]
-  const lastRun = last
+  const lastEdit = deps.runsRef.current.find(
+    (run) => run.status === 'verified' || run.status === 'pending',
+  )
+  const lastRun = lastEdit
     ? {
-        command: last.command,
-        status: last.status,
-        ...(last.execution?.message ? { message: last.execution.message } : {}),
+        command: lastEdit.command,
+        status: lastEdit.status,
+        ...(lastEdit.execution?.message ? { message: lastEdit.execution.message } : {}),
       }
     : null
 
@@ -1145,6 +1201,7 @@ async function verifyAndExecute(
   const delegationId = deps.addMessage({
     role: 'tool',
     text: '',
+    runId: traceLocal.id,
     delegation,
   })
 
@@ -1273,7 +1330,7 @@ async function verifyAndExecute(
   // necessary but not sufficient — the class never executes silently, so it
   // goes to the user with d1's verdict recorded on the card.
   if (check) {
-    const collapse = sectionScaleCollapse(noteAtStart, preview.diff, call.name)
+    const collapse = sectionScaleCollapse(noteAtStart, preview.diff, call.name, directive.task, command)
     if (collapse) {
       holdForUserDecision(
         deps,
@@ -1349,11 +1406,13 @@ async function verifyAndExecute(
   const execution = preview
   traceLocal.timings.execute = Number((performance.now() - execStarted).toFixed(1))
   traceLocal.execution = execution
-  // Snapshot labels must not claim a model that never ran: mode 1 keeps its
-  // shipped "Audio directive" prefix, worker-chat modes pass their own.
+  // Snapshot labels surface in user-visible messages (undo/redo
+  // confirmations quote them — battery case 25 forbids pipeline stage
+  // vocabulary in the transcript). "Audio edit" names the provenance
+  // without the stage noun; worker-chat modes pass their own label.
   const snapshot = deps.commitNote(
     execution.note,
-    `${options.snapshotLabel ?? 'Audio directive'} · ${call.name}`,
+    `${options.snapshotLabel ?? 'Audio edit'} · ${call.name}`,
     call.name,
   )
   execution.snapshotId = snapshot.id

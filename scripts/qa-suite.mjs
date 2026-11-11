@@ -816,6 +816,10 @@ async function main() {
   }
 
   async function produceViaLowramHold() {
+    // The app boots its run mode from this key (useState initializer), so
+    // setting it before seedWorkspace (which reloads) boots lowram, and
+    // restoring it here lets the next case's seedWorkspace boot audio.
+    // Verified live: the turn records runMode 'lowram' on its trace.
     await evalJs(`localStorage.setItem('liquidscribe.runmode.v1', 'lowram')`)
     await seedWorkspace(null)
     await waitStorageFlushed()
@@ -829,7 +833,6 @@ async function main() {
     await evalJs(`localStorage.setItem('liquidscribe.runmode.v1', 'audio')`)
     return { run, info, pending, noteBefore, snapsBefore, rejectsBefore }
   }
-
   /**
    * The recorded shape of a non-approval on the trace, per src/types.ts's
    * D1CheckResult as recorded by pipeline.ts (`traceLocal.d1Check = check`
@@ -1708,9 +1711,21 @@ async function main() {
         const untouchedOk30 =
           n30 === noteBefore30 && !/rotate keys monthly/i.test(n30) &&
           (ws30?.snapshots?.length ?? 0) === snapsBefore30
-        const authoredOk30 = workerAuthored(info30)
+        // Provenance: the d1-down turn usually goes through the live
+        // worker decode (workerAuthored), but when the front door packs
+        // the payload as `verbatim` the harness builds the call itself
+        // under the §11 dictation exception (runtime.worker =
+        // 'dictation', no sampler) — same evidence bar as case 8f. The
+        // case binds the d1-down path (pending + unavailable evidence +
+        // untouched note), not which authorized path authored the call.
+        const dictationOk30 =
+          info30.runtime?.worker === 'dictation' &&
+          info30.call?.sampler == null &&
+          typeof info30.directive?.verbatim === 'string' &&
+          info30.directive.verbatim.length > 0
+        const authoredOk30 = workerAuthored(info30) || dictationOk30
         ok30 = pendingOk30 && unavailableOk30 && untouchedOk30 && authoredOk30
-        evidence30 = `status=${info30.status}, d1Check=${info30.d1Check?.verdict ?? 'null'} (reason=${(info30.d1Check?.reason ?? '').slice(0, 50)}), card.d1=${card30?.d1?.verdict ?? '-'} noul=${JSON.stringify(card30?.d1?.noul)}, noteUntouched=${untouchedOk30}, workerAuthored=${authoredOk30}${run30.timedOut ? ', TIMEOUT' : ''}`
+        evidence30 = `status=${info30.status}, d1Check=${info30.d1Check?.verdict ?? 'null'} (reason=${(info30.d1Check?.reason ?? '').slice(0, 50)}), card.d1=${card30?.d1?.verdict ?? '-'} noul=${JSON.stringify(card30?.d1?.noul)}, noteUntouched=${untouchedOk30}, workerAuthored=${workerAuthored(info30)}, dictation=${dictationOk30}${run30.timedOut ? ', TIMEOUT' : ''}`
       }
     } finally {
       if (d1Killed && !(await d1HealthOk())) {
