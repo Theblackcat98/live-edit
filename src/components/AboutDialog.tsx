@@ -1,12 +1,15 @@
 import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { Boxes, CloudOff, Keyboard, ShieldCheck, X } from 'lucide-react'
-import { MODELS } from '../data/models'
+import { rosterFor } from '../data/models'
+import { runModeInfo, chatModelName, type RunMode } from '../lib/runmode'
 import { LogoMark } from './LogoMark'
 
 interface AboutDialogProps {
   open: boolean
   onClose: () => void
+  /** Active run mode — the roster and copy name the models actually serving it. */
+  mode: RunMode
 }
 
 const SHORTCUTS = [
@@ -18,7 +21,7 @@ const SHORTCUTS = [
   ['Esc', 'Close overlays'],
 ]
 
-export function AboutDialog({ open, onClose }: AboutDialogProps) {
+export function AboutDialog({ open, onClose, mode }: AboutDialogProps) {
   useEffect(() => {
     if (!open) return
     const onKeyDown = (event: KeyboardEvent) => {
@@ -54,8 +57,8 @@ export function AboutDialog({ open, onClose }: AboutDialogProps) {
 
         <div className="about-body">
           <p className="about-lede">
-            A multimodal note workspace where you speak, show a document or slide, and watch a
-            three-model LFM3 stack route, ground and verify every edit before it touches a line.
+            A local-first note workspace where you talk to {chatModelName(mode)} and watch the
+            1.7B author each edit, checked by d1 before it touches a line.
           </p>
 
           <div className="about-callout">
@@ -65,13 +68,12 @@ export function AboutDialog({ open, onClose }: AboutDialogProps) {
             <div>
               <strong>Local LFM3 runtime</strong>
               <p>
-                Voice ASR (Omni-2B), chat replies (Omni-2B), routing and critic decisions
-                (d1-Omni-2B over /v1/systemone) and worker XML calls (LFM3-1.7B) run against local
-                llama.cpp servers on 127.0.0.1. The Runtime truth card in the rail shows live
-                probes. Span grounding asks d1-Omni a typed span question over structural
-                candidates; the diff engine, snapshots and trace format run entirely in this
-                tab. If a model server is down, the stage falls back to a local deterministic
-                layer and the trace labels it.
+                Chat replies ({chatModelName(mode)}), worker XML calls (LFM3-1.7B) and the d1
+                safety check (d1-Omni-2B over /v1/systemone) run against local llama.cpp servers
+                on 127.0.0.1, started by scripts/start-models.sh. The Runtime truth card in the
+                rail probes them live. The worker grounds its own span; the diff engine,
+                snapshots and trace format run entirely in this tab. If a model server is down,
+                the affected stage degrades honestly — the trace labels it, nothing fakes a call.
               </p>
             </div>
           </div>
@@ -81,7 +83,7 @@ export function AboutDialog({ open, onClose }: AboutDialogProps) {
             <span className="mono">The trinity</span>
           </div>
           <div className="about-models">
-            {MODELS.map((model) => (
+            {rosterFor(mode).map((model) => (
               <div className="about-model" key={model.id}>
                 <span className={`status-dot is-${model.color}`} />
                 <div>
@@ -111,9 +113,9 @@ export function AboutDialog({ open, onClose }: AboutDialogProps) {
           <div className="about-footer">
             <ShieldCheck size={12} />
             <span>
-              The app does not upload audio or note state: capture goes to the local Omni
-              model on 127.0.0.1 only. LFM Open License v1.0 applies to the model family; this
-              interface is a local demonstration build.
+              The app does not upload audio or note state: every model call stays on 127.0.0.1.
+              Active mode: {runModeInfo(mode).label}. LFM Open License v1.0 applies to the model
+              family; this interface is a local demonstration build.
             </span>
           </div>
         </div>

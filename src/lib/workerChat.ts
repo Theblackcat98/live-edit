@@ -28,17 +28,17 @@ import { truncate } from './utils'
 /** Same robustness rationale as Audio's 0.3 (E2: accuracy flat across 0/0.3/0.7). */
 export const WORKER_CHAT_TEMPERATURE = 0.3
 /**
- * The 1.7B reasons at length in <think> before answering or calling; the
- * packet-worker measurement (E4: 3,000 truncated deliberators mid-call) is
- * why the chat turn gets the same generous cap, not the 700-token Omni
- * budget.
+ * No output cap: `maxTokens: null` omits max_tokens entirely, so the server
+ * generates until EOS or its context ends. The 1.7B reasons at length in
+ * <think> before the XML call, and both share one completion — every measured
+ * cap truncated real work (E4: 3,000 cut 5/12 deliberators mid-call, 6,000
+ * fixed the packet path but still cut large edit_text payloads in worker-d1
+ * turns), so the reply runs uncapped.
  */
-export const WORKER_CHAT_MAX_TOKENS = 3_000
-
-/** Sampler actually sent, recorded on the trace's WorkerCall. */
 export const WORKER_CHAT_SAMPLER = {
   temperature: WORKER_CHAT_TEMPERATURE,
-  maxTokens: WORKER_CHAT_MAX_TOKENS,
+  /** null = max_tokens not sent (uncapped). */
+  maxTokens: null,
 } as const
 
 // --- injected bridge access ----------------------------------------------------
@@ -326,7 +326,7 @@ export async function runWorkerChatTurn(input: WorkerChatInput): Promise<WorkerC
   try {
     completion = await chat(buildWorkerChatMessages(input), {
       temperature: WORKER_CHAT_TEMPERATURE,
-      maxTokens: WORKER_CHAT_MAX_TOKENS,
+      maxTokens: WORKER_CHAT_SAMPLER.maxTokens,
       signal: input.signal,
       onToken,
     })

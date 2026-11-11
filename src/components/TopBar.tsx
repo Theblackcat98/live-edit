@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import { LogoMark } from './LogoMark'
 import { ModeSwitch } from './ModeSwitch'
-import { TOTAL_MEMORY_GB } from '../data/models'
+import { rosterFor, rosterMemoryGB } from '../data/models'
 import type { RunMode } from '../lib/runmode'
 import { cx, formatElapsed } from '../lib/utils'
 
@@ -80,7 +80,7 @@ export function TopBar({
           <span className="trinity-pip pip-orange" />
         </span>
         <span className="trinity-label">Trinity</span>
-        <span className="trinity-memory mono">{TOTAL_MEMORY_GB.toFixed(1)} GB</span>
+        <span className="trinity-memory mono">{rosterMemoryGB(rosterFor(mode)).toFixed(1)} GB</span>
       </div>
 
       <div className="topbar-divider" />

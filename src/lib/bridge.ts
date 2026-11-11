@@ -5,7 +5,7 @@
  * ~/Documents/Models/lfm3.sh — the app runs on the three-model trinity:
  *
  *   LFM3-Omni-2B   :8083  chat + ASR (/v1/audio/transcriptions)
- *   LFM3-1.7B      :8080  worker XML tool calls (text mutations, 256K ctx)
+ *   LFM3-1.7B      :8080  worker XML tool calls (text mutations, -c 128000)
  *   d1-Omni-2B     :8085  routing / critic decisions (/v1/systemone)
  *
  * LFM3-VL-2B (:8081) was removed from the runtime in 2026-11-08: the 1.7B plus
@@ -37,6 +37,23 @@ export const ENDPOINTS: EndpointSpec[] = [
 const DEFAULT_TIMEOUT_MS = 30_000
 
 export class BridgeError extends Error {}
+
+/**
+ * Model-server host, resolved from the page that served this tab. The model
+ * servers bind 0.0.0.0, so a LAN client reaches them through the same host
+ * it loaded the page from — a hardcoded 127.0.0.1 would be the client
+ * itself. Loopback stays loopback on desktop; no window (tests) keeps it.
+ */
+export function modelHost(): string {
+  const hostname = typeof window !== 'undefined' ? window.location?.hostname : undefined
+  if (!hostname) return '127.0.0.1'
+  return hostname.includes(':') ? `[${hostname}]` : hostname
+}
+
+/** Model-server URL for a port + path, honoring the page's host. */
+export function modelUrl(port: number, path: string): string {
+  return `http://${modelHost()}:${port}${path}`
+}
 
 async function fetchJson(
   url: string,
@@ -77,7 +94,7 @@ async function fetchJson(
 // --- health ------------------------------------------------------------------
 
 export async function probeEndpoint(spec: EndpointSpec): Promise<EndpointHealth> {
-  const url = `http://127.0.0.1:${spec.port}`
+  const url = modelUrl(spec.port, '')
   const started = performance.now()
   try {
     const payload = await fetchJson(`${url}/v1/models`, { method: 'GET', timeoutMs: 4000 })
@@ -196,7 +213,12 @@ export interface ChatResult {
 
 export interface ChatOptions {
   temperature?: number
-  maxTokens?: number
+  /**
+   * Output cap sent as `max_tokens`. `null` explicitly OMITS the field — the
+   * server generates until EOS or its context ends (an uncapped reply); the
+   * fallback default when absent stays 700.
+   */
+  maxTokens?: number | null
   stop?: string[]
   /** Function definitions offered to the model for this call. */
   tools?: ToolDef[]
@@ -255,14 +277,14 @@ export async function chatComplete(
   const spec = ENDPOINTS.find((candidate) => candidate.id === endpoint)
   if (!spec) throw new BridgeError(`Unknown endpoint ${endpoint}`)
   const started = performance.now()
-  const payload = await fetchJson(`http://127.0.0.1:${spec.port}/v1/chat/completions`, {
+  const payload = await fetchJson(modelUrl(spec.port, '/v1/chat/completions'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: spec.alias,
       messages,
       temperature: options.temperature ?? 0.1,
-      max_tokens: options.maxTokens ?? 700,
+      ...(options.maxTokens === null ? {} : { max_tokens: options.maxTokens ?? 700 }),
       ...(options.stop?.length ? { stop: options.stop } : {}),
       ...(options.tools?.length ? { tools: options.tools, tool_choice: 'auto' } : {}),
       stream: false,
@@ -303,14 +325,14 @@ export async function chatCompleteStream(
     ? AbortSignal.any([options.signal, timeout.signal])
     : timeout.signal
   try {
-    const response = await fetch(`http://127.0.0.1:${spec.port}/v1/chat/completions`, {
+    const response = await fetch(modelUrl(spec.port, '/v1/chat/completions'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: spec.alias,
         messages,
         temperature: options.temperature ?? 0.1,
-        max_tokens: options.maxTokens ?? 700,
+        ...(options.maxTokens === null ? {} : { max_tokens: options.maxTokens ?? 700 }),
         ...(options.stop?.length ? { stop: options.stop } : {}),
         ...(options.tools?.length ? { tools: options.tools, tool_choice: 'auto' } : {}),
         stream: true,
@@ -464,7 +486,7 @@ export async function transcribeAudio(
   const form = new FormData()
   form.append('file', blob, 'capture.wav')
   form.append('response_format', 'json')
-  const payload = await fetchJson(`http://127.0.0.1:${spec.port}/v1/audio/transcriptions`, {
+  const payload = await fetchJson(modelUrl(spec.port, '/v1/audio/transcriptions'), {
     method: 'POST',
     body: form,
     timeoutMs: 45_000,
@@ -493,7 +515,7 @@ export async function synthesizeSpeech(
   const endpoint = options.endpoint ?? 'omni'
   const spec = ENDPOINTS.find((candidate) => candidate.id === endpoint)
   if (!spec) throw new BridgeError(`${endpoint} endpoint missing`)
-  const response = await fetch(`http://127.0.0.1:${spec.port}/tts`, {
+  const response = await fetch(modelUrl(spec.port, '/tts'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ input: text, response_format: 'wav' }),
@@ -558,7 +580,7 @@ export async function d1Decide(payload: {
   const started = performance.now()
   const body: Record<string, unknown> = { questions: payload.questions }
   if (payload.state != null && payload.state.length) body.state = payload.state
-  const result = await fetchJson(`http://127.0.0.1:${spec.port}/v1/systemone`, {
+  const result = await fetchJson(modelUrl(spec.port, '/v1/systemone'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

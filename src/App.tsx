@@ -168,6 +168,7 @@ export default function App() {
             speaking={workspace.speaking}
             getMicLevel={workspace.getMicLevel}
             elapsedSeconds={workspace.elapsedSeconds}
+            mode={workspace.mode}
           />
           <SessionPanel
             messages={workspace.messages}
@@ -263,6 +264,7 @@ export default function App() {
         micActive={workspace.micActive}
         asrBusy={workspace.asrBusy}
         runtimeHealth={workspace.runtimeHealth}
+        mode={workspace.mode}
       />
 
       <TraceDrawer
@@ -270,13 +272,14 @@ export default function App() {
         trace={workspace.selectedTrace}
         runs={workspace.runs}
         rejectedTraces={workspace.rejectedTraces}
+        mode={workspace.mode}
         onSelectRun={(id) => workspace.openTrace(id)}
         onClose={workspace.closeTrace}
       />
 
       <ToastView toast={workspace.toast} onDismiss={workspace.dismissToast} />
 
-      <AboutDialog open={aboutOpen} onClose={() => setAboutOpen(false)} />
+      <AboutDialog open={aboutOpen} onClose={() => setAboutOpen(false)} mode={workspace.mode} />
     </div>
   )
 }

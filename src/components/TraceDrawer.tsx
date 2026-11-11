@@ -14,6 +14,8 @@ import {
   X,
 } from 'lucide-react'
 import type { CriticCheck, Probability, RejectedTraceRecord, Trace } from '../types'
+import type { RunMode } from '../lib/runmode'
+import { chatModelShort } from '../lib/runmode'
 import { TOOL_DEFS } from '../data/tools'
 import { cx, formatP, pAdopted, pad, truncate } from '../lib/utils'
 import { Download } from 'lucide-react'
@@ -23,6 +25,8 @@ interface TraceDrawerProps {
   open: boolean
   trace: Trace | null
   runs: Trace[]
+  /** Active run mode — captions name the model that serves it. */
+  mode: RunMode
   onSelectRun: (id: string) => void
   onClose: () => void
 }
@@ -131,7 +135,8 @@ function XmlView({ xml }: { xml: string }) {
   )
 }
 
-export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, onClose }: TraceDrawerProps) {
+export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectRun, onClose }: TraceDrawerProps) {
+  const chatShort = chatModelShort(mode)
   const [copied, setCopied] = useState(false)
   const [showNoteView, setShowNoteView] = useState(false)
 
@@ -269,8 +274,8 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, on
             </div>
             <h3>No grounded run yet</h3>
             <p>
-              Ask Omni to change the note. d1 will register a routing pass, a span, the worker
-              XML and the critic verdict here.
+              Ask {chatShort} to change the note. Each run registers the
+              directive, the worker XML, the d1 verdict and the diff here.
             </p>
           </div>
         ) : (
@@ -364,7 +369,7 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, on
               // the trace from P2 on. Legacy supervisor-first traces have no
               // directive field — for them this section simply does not
               // render, leaving the drawer exactly as it was.
-              <TraceSection index="D" title="Delegation directive" caption="Omni → worker · typed brief">
+              <TraceSection index="D" title="Delegation directive" caption={`${chatShort} → worker · typed brief`}>
                 <div className="trace-route">
                   <div className="trace-query-row">
                     <div className="trace-query-name mono">task</div>
@@ -556,7 +561,7 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, onSelectRun, on
                           temp {trace.call.sampler.temperature}
                         </span>
                         <span className="chip chip-ghost mono">
-                          max_tokens {trace.call.sampler.maxTokens}
+                          max_tokens {trace.call.sampler.maxTokens ?? '∞'}
                         </span>
                       </>
                     ) : trace.runtime?.worker === 'live' ? (

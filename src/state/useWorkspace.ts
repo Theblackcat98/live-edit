@@ -63,6 +63,7 @@ function initialMessages(): Message[] {
     {
       id: makeId('msg'),
       role: 'assistant',
+      author: 'harness',
       kind: 'greeting',
       text: "I'm reading your note. Tell me what to change.",
       at: now - 400,
@@ -499,6 +500,7 @@ export function useWorkspace(): WorkspaceApi {
           ])
           addMessage({
             role: 'assistant',
+            author: 'harness',
             kind: 'error',
             text: `That pending edit passed the gates but the engine refused it: ${execution.message} Nothing was written.`,
           })
@@ -509,6 +511,7 @@ export function useWorkspace(): WorkspaceApi {
         scheduleHighlightClear()
         addMessage({
           role: 'assistant',
+          author: 'harness',
           kind: 'result',
           text: `Applied the pending ${outcome.call.name} edit you approved.`,
         })
@@ -528,6 +531,7 @@ export function useWorkspace(): WorkspaceApi {
       ])
       addMessage({
         role: 'assistant',
+        author: 'harness',
         kind: 'notice',
         text:
           outcome.status === 'stale'
@@ -931,7 +935,7 @@ export function useWorkspace(): WorkspaceApi {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'ASR request failed.'
-      const label = endpoint === 'd1omni' ? 'd1-Omni' : 'Omni'
+      const label = endpoint === 'd1omni' ? 'd1-Omni' : endpoint === 'audio' ? 'Audio' : 'Omni'
       notify(`${label} ASR unavailable`, `${message} Type the command instead.`, 'error')
     } finally {
       asrBusyRef.current = false

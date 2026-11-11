@@ -6,7 +6,6 @@ import {
   runWorkerChatTurn,
   sanitizeWorkerChatText,
   visibleWorkerChatText,
-  WORKER_CHAT_MAX_TOKENS,
   WORKER_CHAT_SAMPLER,
   WORKER_CHAT_SYSTEM_PROMPT,
   WorkerChatError,
@@ -170,7 +169,10 @@ describe('runWorkerChatTurn outcomes', () => {
     // think block; it must never carry the block's content.
     expect(deltas.join('').trim()).toBe('Hello there.')
     expect(deltas.join('')).not.toContain('reasoning')
-    expect(calls[0].options.maxTokens).toBe(WORKER_CHAT_MAX_TOKENS)
+    // Uncapped: max_tokens is omitted entirely (null) so a long <think> plus a
+    // large edit_text payload cannot truncate; temperature still pinned.
+    expect(calls[0].options.maxTokens).toBeNull()
+    expect(calls[0].options.maxTokens).toBe(WORKER_CHAT_SAMPLER.maxTokens)
     expect(calls[0].options.temperature).toBe(WORKER_CHAT_SAMPLER.temperature)
   })
 

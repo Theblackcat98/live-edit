@@ -1,7 +1,8 @@
 import { ShieldCheck } from 'lucide-react'
 import type { PipelineStage, RuntimeHealth, Trace } from '../types'
+import type { RunMode } from '../lib/runmode'
+import { transcribingModel } from '../lib/runmode'
 import { cx } from '../lib/utils'
-
 interface StatusBarProps {
   stage: PipelineStage
   trace: Trace | null
@@ -9,6 +10,8 @@ interface StatusBarProps {
   micActive: boolean
   asrBusy: boolean
   runtimeHealth: RuntimeHealth | null
+  /** Active run mode — ASR labels name the model actually transcribing. */
+  mode: RunMode
 }
 
 const STAGE_LABEL: Record<PipelineStage, string> = {
@@ -48,15 +51,16 @@ function formatMs(value: number | undefined): string {
   return value < 10 ? `${value.toFixed(1)} ms` : `${Math.round(value)} ms`
 }
 
-export function StatusBar({ stage, trace, micOn, micActive, asrBusy, runtimeHealth }: StatusBarProps) {
+export function StatusBar({ stage, trace, micOn, micActive, asrBusy, runtimeHealth, mode }: StatusBarProps) {
   const active = stage !== 'idle' && stage !== 'complete'
   const upCount = runtimeHealth?.endpoints.filter((endpoint) => endpoint.up).length ?? 0
   const totalEndpoints = runtimeHealth?.endpoints.length ?? 4
   const liveTone =
     !runtimeHealth ? 'statusbar-muted' : upCount === totalEndpoints ? 'is-green' : 'is-orange'
+  const asrModel = transcribingModel(mode)
   // Honest three-state: a turn between utterances is not a live capture.
   const micLabel = asrBusy
-    ? 'Omni · transcribing'
+    ? `${asrModel ?? 'ASR'} · transcribing`
     : micActive
       ? 'REC 16 kHz'
       : micOn
@@ -65,7 +69,7 @@ export function StatusBar({ stage, trace, micOn, micActive, asrBusy, runtimeHeal
   return (
     <footer className="statusbar">
       <div className="statusbar-left">
-        <span className="statusbar-item" title="The UI, tool engine and snapshots run in this tab. Voice is transcribed by LFM3-Omni-2B on 127.0.0.1:8083.">
+        <span className="statusbar-item" title={`The UI, tool engine and snapshots run in this tab. ${asrModel ? `Voice is transcribed by ${asrModel} on 127.0.0.1.` : 'No audio server in this mode — typing only.'}`}>
           <ShieldCheck size={12} />
           Local only
         </span>

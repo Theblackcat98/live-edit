@@ -130,7 +130,8 @@ export interface CriticResult {
 /** Sampler settings actually sent with a live worker decode. */
 export interface WorkerSampler {
   temperature: number
-  maxTokens: number
+  /** null = no max_tokens sent: the decode ran uncapped. */
+  maxTokens: number | null
 }
 
 export interface WorkerCall {
@@ -254,7 +255,7 @@ export interface Message {
   role: 'user' | 'assistant' | 'system' | 'tool'
   text: string
   at: number
-  /** Who authored an assistant bubble (defaults to 'Omni 2B'; worker-chat modes label the 1.7B). */
+  /** Who authored an assistant bubble: the chat model's name for model text, 'harness' for pipeline templates. Absent only on legacy persisted messages. */
   author?: string
   kind?: 'greeting' | 'ack' | 'result' | 'clarify' | 'error' | 'notice'
   source?: 'voice' | 'text' | 'demo'
@@ -276,7 +277,9 @@ export interface Snapshot {
 }
 
 export interface ModelInfo {
-  id: 'omni' | 'd1' | 'worker'
+  id: 'omni' | 'audio' | 'd1' | 'worker'
+  /** Which flow-rail slot this row lights up ('omni' = the interface row). */
+  flow: 'omni' | 'd1' | 'worker'
   role: string
   shortName: string
   name: string

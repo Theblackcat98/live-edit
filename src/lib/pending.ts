@@ -180,7 +180,7 @@ export function adjudicate(
         reason:
           `The lines around this edit's insertion point (line ${startLine}) have changed since ` +
           'it was authored, so the position it was written for cannot be trusted. ' +
-          'Nothing was written; ask Omni to redo the edit against the current note.',
+          'Nothing was written; ask for the same change again to rebuild it against the current note.',
       }
     }
   }
@@ -204,7 +204,7 @@ export function adjudicate(
     ? `Hard gates re-ran on approval and ${failedGates} failed — ${details} ` +
       `The note changed since the edit was authored (hash ${edit.noteHash} → ${currentHash}): ` +
       'the text this edit was written against has changed. ' +
-      'Nothing was written; ask Omni to redo the edit against the current note.'
+      'Nothing was written; ask for the same change again to rebuild it against the current note.'
     : `Hard gates re-ran on approval and ${failedGates} failed — ${details} ` +
       'The note hash still matches the authoring hash, so this is a gate-rule failure rather than drift. ' +
       'Nothing was written.'

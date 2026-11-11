@@ -1,5 +1,7 @@
 import { AudioLines } from 'lucide-react'
 import type { PipelineStage } from '../types'
+import type { RunMode } from '../lib/runmode'
+import { chatModelShort } from '../lib/runmode'
 import { cx, formatElapsed } from '../lib/utils'
 import { Waveform, type WaveMode } from './Waveform'
 
@@ -12,6 +14,8 @@ interface VisualPanelProps {
   speaking: boolean
   getMicLevel: () => number
   elapsedSeconds: number
+  /** Active run mode — the speaking label names the chat model. */
+  mode: RunMode
 }
 
 export function VisualPanel({
@@ -21,6 +25,7 @@ export function VisualPanel({
   speaking,
   getMicLevel,
   elapsedSeconds,
+  mode,
 }: VisualPanelProps) {
   const stageActive =
     stage === 'routing' ||
@@ -65,7 +70,7 @@ export function VisualPanel({
             {micActive
               ? 'Listening'
               : speaking
-                ? 'Omni speaking'
+                ? `${chatModelShort(mode)} speaking`
                 : stageActive
                   ? 'Working'
                   : micOn
