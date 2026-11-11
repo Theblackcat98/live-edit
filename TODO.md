@@ -6,13 +6,14 @@ and LFM3-1.7B (tool-call worker, :8080). Turns are text-only; no video or
 frames are resolved or attached. (LFM3-Omni-2B :8083 is the legacy front door;
 LFM3-VL-2B :8081 was removed from the runtime on 2026-11-08.)
 
-**Design correction (2026-11-09):** [`docs/design.md`](docs/design.md) is now
-the authoritative spec — **Omni-first**: Omni converses and silently delegates
-with a typed directive, the 1.7B worker authors edits, d1-Omni is a safety
-check only, and d1 rejections become user-adjudicated pending edits. The roles
-in the paragraph above describe the *shipped* supervisor-first pipeline, not
-the target design; the refactor is the top item under Next implementation
-work, and design.md §12/§13 are its scope and acceptance criteria.
+**Design correction (2026-11-09, interface renamed 2026-11-10):**
+[`docs/design.md`](docs/design.md) is the authoritative spec — **Audio-first**:
+Audio (LFM3-Audio-2B) converses and silently delegates with a typed directive,
+the 1.7B worker authors edits, d1-Omni is a safety check only, and d1
+rejections become user-adjudicated pending edits. The roles in the paragraph
+above describe the *shipped* supervisor-first pipeline, not the target design;
+the refactor is the top item under Next implementation work, and design.md
+§12/§13 are its scope and acceptance criteria.
 
 Landed: streaming chat with multi-turn memory and barge-in, d1 typed grounding
 (structural span extraction, 2026-11-08), persistent workspace, rejected-trace

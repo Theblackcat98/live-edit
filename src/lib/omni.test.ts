@@ -15,6 +15,7 @@ import {
   noteContextFor,
   type OmniTurnInput,
 } from './omni'
+import type { TurnExchange } from '../types'
 
 // --- fixtures -------------------------------------------------------------------
 
@@ -634,5 +635,84 @@ describe('OMNI_SYSTEM_PROMPT — the battery gate run 1 contract', () => {
     expect(OMNI_SYSTEM_PROMPT).toMatch(/Never mention this process or its machinery/)
     expect(OMNI_SYSTEM_PROMPT).toMatch(/Undo and redo are instant, never a discussion/)
     expect(OMNI_SYSTEM_PROMPT).toMatch(/harness_action/)
+  })
+})
+
+describe('runOmniTurn — exchange recording (inspector Chat tab)', () => {
+  it('records the primary request: exact context, sampler, tools and response', async () => {
+    const { chat } = fakeChat([
+      completion({ text: 'Your favorite color is teal.', reasoning: 'thinking it over' }),
+    ])
+    const exchanges: TurnExchange[] = []
+    const result = await runOmniTurn(
+      baseInput({
+        command: 'what is my favorite color?',
+        chat,
+        onExchange: (exchange) => exchanges.push(exchange),
+      }),
+    )
+    expect(result?.outcome).toBe('answer')
+    expect(exchanges).toHaveLength(1)
+    const exchange = exchanges[0]
+    expect(exchange.ok).toBe(true)
+    expect(exchange.role).toBe('chat')
+    expect(exchange.label).toBe('primary · tools')
+    expect(exchange.model).toBe('LFM3-Audio-2B')
+    expect(exchange.url).toContain(':8086/v1/chat/completions')
+    expect(exchange.request.messages[0]?.role).toBe('system')
+    expect(exchange.request.messages.at(-1)?.content).toContain('what is my favorite color?')
+    expect(exchange.request.temperature).toBe(OMNI_TEMPERATURE)
+    expect(exchange.request.maxTokens).toBe(OMNI_MAX_TOKENS)
+    expect(exchange.request.tools).toEqual(['delegate_edit', 'harness_action'])
+    expect(exchange.response?.text).toContain('teal')
+    expect(exchange.response?.reasoning).toBe('thinking it over')
+    expect(exchange.response?.finishReason).toBe('stop')
+  })
+
+  it('records both attempts of a repair loop, the raw context of each', async () => {
+    const { chat } = fakeChat([
+      completion({ toolCalls: [delegateCall({ task: 'edit' })] }),
+      completion({ toolCalls: [delegateCall(VALID_DIRECTIVE_ARGS)] }),
+    ])
+    const exchanges: TurnExchange[] = []
+    const result = await runOmniTurn(baseInput({ chat, onExchange: (e) => exchanges.push(e) }))
+    expect(result?.outcome).toBe('delegate')
+    expect(exchanges.map((e) => e.label)).toEqual(['primary · tools', 'repair retry'])
+    expect(exchanges.every((e) => e.ok)).toBe(true)
+    // The repair context replays the failed assistant tool_calls and the
+    // tool-role error — the inspector must show exactly what was appended.
+    const repair = exchanges[1]
+    const roles = repair.request.messages.map((message) => message.role)
+    expect(roles).toContain('assistant')
+    expect(roles).toContain('tool')
+    const toolResult = repair.request.messages.find((message) => message.role === 'tool')
+    expect(toolResult?.content).toContain('Execution failed')
+  })
+
+  it('records the refused 500 attempt and its bare retry as separate exchanges', async () => {
+    const { chat } = fakeChat([
+      new Error('HTTP 500 tool call refused server-side'),
+      completion({ toolCalls: [delegateCall(VALID_DIRECTIVE_ARGS)] }),
+    ])
+    const exchanges: TurnExchange[] = []
+    const result = await runOmniTurn(baseInput({ chat, onExchange: (e) => exchanges.push(e) }))
+    expect(result?.outcome).toBe('delegate')
+    expect(exchanges).toHaveLength(2)
+    expect(exchanges[0].ok).toBe(false)
+    expect(exchanges[0].error).toContain('HTTP 500')
+    expect(exchanges[0].response).toBeUndefined()
+    expect(exchanges[1].ok).toBe(true)
+  })
+
+  it('records a failed exchange when the endpoint never answers', async () => {
+    const { chat } = fakeChat([new Error('HTTP 503 unavailable')])
+    const exchanges: TurnExchange[] = []
+    await expect(
+      runOmniTurn(baseInput({ chat, onExchange: (e) => exchanges.push(e) })),
+    ).rejects.toBeInstanceOf(OmniTurnError)
+    expect(exchanges).toHaveLength(1)
+    expect(exchanges[0].ok).toBe(false)
+    expect(exchanges[0].error).toContain('HTTP 503')
+    expect(exchanges[0].response).toBeUndefined()
   })
 })

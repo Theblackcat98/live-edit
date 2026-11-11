@@ -115,7 +115,7 @@ export function statusTitle(status: PendingEdit['status']): string {
 export function statusExplanation(status: PendingEdit['status']): string | null {
   switch (status) {
     case 'stale':
-      return 'The text this edit was written against has changed — the anchor no longer matches the note. Nothing was written; ask Omni to redo it.'
+      return 'The text this edit was written against has changed — the anchor no longer matches the note. Nothing was written; ask for the same change again to rebuild it.'
     case 'applied':
       return 'Applied to the note — snapshot pushed.'
     case 'discarded':

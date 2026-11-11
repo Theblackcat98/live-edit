@@ -61,7 +61,7 @@ export const RUN_MODES: RunModeInfo[] = [
     short: '1.7B + d1',
     description:
       'LFM3-1.7B (:8080) chats and authors tool calls; d1-Omni (:8085) decides edit safety. ' +
-      'Omni is out of the loop; ASR and TTS use :8085.',
+      'No front-door model runs; ASR and TTS use :8085.',
   },
   {
     id: 'lowram',
@@ -123,5 +123,35 @@ export function speechPortFor(endpoint: SpeechEndpoint): number | null {
   if (endpoint === 'audio') return 8086
   if (endpoint === 'omni') return 8083
   if (endpoint === 'd1omni') return 8085
+  return null
+}
+
+// --- per-mode model naming -------------------------------------------------------
+// UI honesty: a surface names the model that actually serves the mode, never a
+// hardcoded one. The interface model is Audio by default; Omni only in the
+// legacy mode; the 1.7B itself in the worker-chat modes.
+
+/** The model that answers chat in a mode — the author label on its replies. */
+export function chatModelName(mode: RunMode): string {
+  if (mode === 'audio') return 'LFM3-Audio-2B'
+  if (mode === 'omni') return 'LFM3-Omni-2B'
+  return 'LFM3-1.7B'
+}
+
+/** Short chat-model label for compact status surfaces. */
+export function chatModelShort(mode: RunMode): string {
+  if (mode === 'audio') return 'Audio'
+  if (mode === 'omni') return 'Omni'
+  return '1.7B'
+}
+
+/**
+ * The model whose `/v1/audio/transcriptions` endpoint serves the mic in this
+ * mode; null in `lowram` (no audio server — the mic is honestly disabled).
+ */
+export function transcribingModel(mode: RunMode): string | null {
+  if (mode === 'audio') return 'LFM3-Audio-2B'
+  if (mode === 'omni') return 'LFM3-Omni-2B'
+  if (mode === 'worker-d1') return 'd1-Omni-2B'
   return null
 }

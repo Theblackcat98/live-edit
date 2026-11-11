@@ -86,7 +86,7 @@ The app talks to **real local LFM3 servers** (llama.cpp, started by this repo's
   before execution. **Execution** is the real in-tab diff engine with anchor
   checks and undo/redo; d1's rejection is a pending edit, never a dead end.
 
-The **Runtime truth** card in the supervisor rail continuously probes the three
+The **Runtime truth** card in the runtime rail continuously probes the
 endpoints (10 s cadence, refresh button) and labels each surface LIVE,
 FALLBACK or ENGINE. It also shows the active run mode and carries the same
 three-state mode switch as the TopBar — on the phone surface (≤780px) it is the
@@ -101,9 +101,9 @@ resolved or attached.
 
 | Say / type | What happens |
 | --- | --- |
-| `Update the Q3 revenue row to $1.45M Final` | Omni delegates; the worker authors `edit_text`; d1 approves; the table row changes. |
+| `Update the Q3 revenue row to $1.45M Final` | Audio delegates; the worker authors `edit_text`; d1 approves; the table row changes. |
 | `Remove the bullet about Redis` | Destructive safety check, then one exact line removed. |
-| `Delete that part` | Ambiguity gate: Omni asks which span, with quick reply chips. |
+| `Delete that part` | Ambiguity gate: Audio asks which span, with quick reply chips. |
 | `Undo that` | Snapshot rollback bypasses the worker entirely. |
 | `Add a note about the support backlog` | Pinned insertion at the document tail. |
 | `Change the deadline in the second paragraph to Friday` | The safety check holds an over-broad replacement; nothing is written. |
@@ -125,9 +125,9 @@ Use the **Demo** button in the Live session header to run a two-command guided s
 
 ```
 src/
-  components/   visual stage, session, note workspace, supervisor rail, trace drawer
+  components/   visual stage, session, note workspace, runtime rail, trace drawer
   data/         seed note, synthetic scene, model roster, tool catalog
-  lib/          run modes, Omni/worker turns, tool engine, markdown parser, speech,
+  lib/          run modes, Audio/worker turns, tool engine, markdown parser, speech,
                 hard gates, d1 check, pending-edit store
   state/        orchestrator hook, history stack, context accounting
   styles/       design tokens + application styles
@@ -158,7 +158,8 @@ notice naming the mode and its endpoints.
 
 - In `worker-d1` the 1.7B streams its reply, ` thinking` is stripped from the
   visible bubble, and one invalid-format tool call is retried; prose replies
-  carry the `LFM3-1.7B` author label. Omni is out of the loop, but ASR/TTS use
+  carry the `LFM3-1.7B` author label. No front-door model runs — Audio and Omni
+  are both out of the loop; ASR/TTS use
   :8085 because d1-Omni is the same Omni architecture.
 - `lowram` never contacts d1 or Audio: a tool call that passes the hard gates and
   the engine dry-run is held as a pending edit for the user's ✓ / ✗ — silent
@@ -167,8 +168,8 @@ notice naming the mode and its endpoints.
 
 ## Limits
 
-- The Omni-first design in [`docs/design.md`](./docs/design.md) is implemented as the default
-  `omni` run mode, but its §13 acceptance battery is **not yet green** — the decision-quality and
+- The Audio-first design in [`docs/design.md`](./docs/design.md) is implemented as the default
+  `audio` run mode, but its §13 acceptance battery is **not yet green** — the decision-quality and
   schema/validator failures recorded under Verification pre-date the run-mode work. §13 remains
   the acceptance target.
 - The repo starts the trinity with `scripts/start-models.sh` (idempotent: Audio `:8086`,
@@ -216,7 +217,7 @@ evidence for `main`. It covered natural-phrasing template creation, chat hygiene
 phrasing, and vague-reference span grounding over live d1.
 
 See [`plan.md`](./plan.md) for the build history and [`docs/design.md`](./docs/design.md) for the
-authoritative design. The battery now targets the Omni-first pipeline (45 assertions); design.md
+authoritative design. The battery now targets the design.md pipeline (45 assertions); design.md
 §13 remains the acceptance target, including the README-template case on a non-empty note.
 
 On 2026-11-09, after the run-mode/mic/video drop, `npm run typecheck`, `npm run build` and

@@ -13,10 +13,10 @@
  * channel is everything OUTSIDE <think> blocks, and only that reaches the
  * user's bubble.
  */
-
 import type { ChatMessage, ChatResult, ChatStreamOptions } from './bridge'
+import type { ToolName, TurnExchange } from '../types'
+import { captureExchange, workerExchangeTarget } from './exchange'
 import { chatCompleteStream } from './bridge'
-import type { ToolName } from '../types'
 import { NOTE_PATH } from '../data/note'
 import { TOOL_DEFS } from '../data/tools'
 import { parseToolCallXml, type ParsedToolCall } from './xml'
@@ -28,17 +28,17 @@ import { truncate } from './utils'
 /** Same robustness rationale as Audio's 0.3 (E2: accuracy flat across 0/0.3/0.7). */
 export const WORKER_CHAT_TEMPERATURE = 0.3
 /**
- * The 1.7B reasons at length in <think> before answering or calling; the
- * packet-worker measurement (E4: 3,000 truncated deliberators mid-call) is
- * why the chat turn gets the same generous cap, not the 700-token Omni
- * budget.
+ * No output cap: `maxTokens: null` omits max_tokens entirely, so the server
+ * generates until EOS or its context ends. The 1.7B reasons at length in
+ * <think> before the XML call, and both share one completion — every measured
+ * cap truncated real work (E4: 3,000 cut 5/12 deliberators mid-call, 6,000
+ * fixed the packet path but still cut large edit_text payloads in worker-d1
+ * turns), so the reply runs uncapped.
  */
-export const WORKER_CHAT_MAX_TOKENS = 3_000
-
-/** Sampler actually sent, recorded on the trace's WorkerCall. */
 export const WORKER_CHAT_SAMPLER = {
   temperature: WORKER_CHAT_TEMPERATURE,
-  maxTokens: WORKER_CHAT_MAX_TOKENS,
+  /** null = max_tokens not sent (uncapped). */
+  maxTokens: null,
 } as const
 
 // --- injected bridge access ----------------------------------------------------
@@ -190,6 +190,8 @@ export interface WorkerChatInput {
   retry?: WorkerChatRetry
   /** Injectable bridge chat call (tests); defaults to the live 1.7B endpoint. */
   chat?: WorkerChatFn
+  /** Turn-exchange recorder (the inspector's Chat tab): request, sampler and outcome, failures included. */
+  onExchange?: (exchange: TurnExchange) => void
 }
 
 export function buildWorkerChatMessages(input: WorkerChatInput): ChatMessage[] {
@@ -322,16 +324,34 @@ export async function runWorkerChatTurn(input: WorkerChatInput): Promise<WorkerC
     }
   }
 
+  const messages = buildWorkerChatMessages(input)
+  const report = (completion: ChatResult | null, error?: string) => {
+    input.onExchange?.(
+      captureExchange({
+        role: 'worker',
+        label: input.retry ? 'invalid-reply retry' : 'chat turn',
+        ...workerExchangeTarget(),
+        messages,
+        stream: true,
+        temperature: WORKER_CHAT_TEMPERATURE,
+        maxTokens: WORKER_CHAT_SAMPLER.maxTokens,
+        completion,
+        ...(error ? { error } : {}),
+      }),
+    )
+  }
+
   let completion: ChatResult
   try {
-    completion = await chat(buildWorkerChatMessages(input), {
+    completion = await chat(messages, {
       temperature: WORKER_CHAT_TEMPERATURE,
-      maxTokens: WORKER_CHAT_MAX_TOKENS,
+      maxTokens: WORKER_CHAT_SAMPLER.maxTokens,
       signal: input.signal,
       onToken,
     })
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
+    report(null, detail)
     throw new WorkerChatError('endpoint', `LFM3-1.7B chat failed: ${detail}`)
   }
 
@@ -352,6 +372,7 @@ export async function runWorkerChatTurn(input: WorkerChatInput): Promise<WorkerC
   })
 
   if (parsed) {
+    report(completion)
     return result({
       outcome: 'delegate',
       call: parsed,
@@ -360,12 +381,14 @@ export async function runWorkerChatTurn(input: WorkerChatInput): Promise<WorkerC
   }
 
   const visible = sanitizeWorkerChatText(text)
-  if (visible) return result({ outcome: 'answer', text: visible })
+  if (visible) {
+    report(completion)
+    return result({ outcome: 'answer', text: visible })
+  }
 
-  return result({
-    outcome: 'invalid',
-    error:
-      'the reply contained no parseable tool call and no visible text after stripping the ' +
-      'reasoning channel',
-  })
+  const invalidReason =
+    'the reply contained no parseable tool call and no visible text after stripping the ' +
+    'reasoning channel'
+  report(completion, invalidReason)
+  return result({ outcome: 'invalid', error: invalidReason })
 }

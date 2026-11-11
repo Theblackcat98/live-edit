@@ -28,6 +28,7 @@ import type {
   Directive,
   ExecutionDiff,
   Message,
+  OmniTurnResult,
   PendingEdit,
   PipelineStage,
   Probability,
@@ -43,10 +44,11 @@ import type {
   ToolName,
   Trace,
   TraceRuntime,
+  TurnExchange,
   WorkerCall,
 } from '../types'
 import { NOTE_PATH } from '../data/note'
-import { TOOL_BY_NAME } from '../data/tools'
+import { TOOL_BY_NAME, TOOL_DEFS } from '../data/tools'
 import {
   buildPacketWorkerMessages,
   buildWorkerRetryMessages,
@@ -63,12 +65,14 @@ import { checkExecutionOutcome } from './executionCheck'
 import { detectSnapshotDirective } from './snapshotDirective'
 import { runOmniTurn, type OmniHistoryTurn } from './omni'
 import { runWorkerChatTurn, WORKER_CHAT_SAMPLER, type WorkerChatTurnResult } from './workerChat'
+import { chatModelName } from './runmode'
 import type { RunMode } from './runmode'
 import { buildD1State, buildWorkerPacket, noteHash } from './context'
 import { runHardGates } from './gates'
 import { runD1Check } from './d1check'
 import { createPendingEdit } from './pending'
 import { parseToolCallXml, type ParsedToolCall } from './xml'
+import { captureExchange, workerExchangeTarget } from './exchange'
 import {
   chatComplete,
   d1Decide,
@@ -193,6 +197,8 @@ interface TurnContext {
   liveUsage: Partial<ContextUsage>
   publish: () => void
   finish: (status: RunStatus) => void
+  /** Records one model exchange on the trace (inspector Chat tab) and publishes. */
+  recordExchange: (exchange: TurnExchange) => void
 }
 
 function makeTrace(command: string, source: 'text' | 'voice' | 'demo', note: string): Trace {
@@ -207,6 +213,7 @@ function makeTrace(command: string, source: 'text' | 'voice' | 'demo', note: str
     promptTokens: estimateTokens(note) + 180,
     noteTokensAtStart: estimateTokens(note),
     workerNoteView: '',
+    exchanges: [],
   }
 }
 
@@ -354,7 +361,21 @@ export async function runPipelineTurn(
   traceLocal.runtime = runtime
   const liveUsage: Partial<ContextUsage> = {}
 
-  const ctx: TurnContext = { command, noteAtStart, traceLocal, runtime, liveUsage, publish, finish }
+  const recordExchange = (exchange: TurnExchange) => {
+    traceLocal.exchanges = [...(traceLocal.exchanges ?? []), exchange]
+    publish()
+  }
+
+  const ctx: TurnContext = {
+    command,
+    noteAtStart,
+    traceLocal,
+    runtime,
+    liveUsage,
+    publish,
+    finish,
+    recordExchange,
+  }
 
   try {
     // Captured once at turn start: a mode switch mid-turn must never swap the
@@ -363,7 +384,7 @@ export async function runPipelineTurn(
     // worker-chat modes route below.
     const mode = deps.modeRef.current
     if (mode === 'omni' || mode === 'audio') {
-      await runOmniFirstTurn(deps, ctx)
+      await runOmniFirstTurn(deps, ctx, mode)
       return
     }
     await runWorkerChatFirstTurn(deps, ctx, mode)
@@ -374,6 +395,7 @@ export async function runPipelineTurn(
       traceLocal.status = 'failed'
       deps.addMessage({
         role: 'assistant',
+        author: 'harness',
         kind: 'error',
         text: `I stopped the run: ${message} Nothing was written to the note.`,
       })
@@ -439,7 +461,7 @@ function packetWorkerCall(
   ms: number,
   usagePromptTokens: number,
   usageOutputTokens: number,
-  sampler: { temperature: number; maxTokens: number },
+  sampler: { temperature: number; maxTokens: number | null },
   note: string,
 ): WorkerCall {
   return {
@@ -525,8 +547,17 @@ function recordOmniRejection(
  * becomes a pending edit for the user — never a dead end, never a silent
  * approval. No stage invents content: there is no template fallback here.
  */
-async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<void> {
+async function runOmniFirstTurn(
+  deps: PipelineDeps,
+  ctx: TurnContext,
+  mode: 'audio' | 'omni',
+): Promise<void> {
   const { command, noteAtStart, traceLocal, runtime, liveUsage, publish, finish } = ctx
+  // The model actually answering chat this turn — the reply author label and
+  // the front-door endpoint both follow the captured mode, never a hardcoded
+  // model (legacy `omni` really is served by LFM3-Omni-2B :8083).
+  const chatAuthor = chatModelName(mode)
+  const chatEndpoint = mode === 'omni' ? 'omni' : 'audio'
   deps.setFlowModel('omni')
   deps.setStage('routing')
 
@@ -572,7 +603,12 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
   const onText = (delta: string) => {
     streamedText += delta
     if (!streamId) {
-      streamId = deps.addMessage({ role: 'assistant', text: streamedText, runId: traceLocal.id })
+      streamId = deps.addMessage({
+        role: 'assistant',
+        text: streamedText,
+        author: chatAuthor,
+        runId: traceLocal.id,
+      })
     } else {
       deps.patchMessage(streamId, { text: streamedText })
     }
@@ -590,11 +626,11 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
       deps.patchMessage(streamId, { text })
       streamId = null
     } else {
-      deps.addMessage({ role: 'assistant', text, runId: traceLocal.id })
+      deps.addMessage({ role: 'assistant', text, author: chatAuthor, runId: traceLocal.id })
     }
   }
 
-  let omni: Awaited<ReturnType<typeof runOmniTurn>>
+  let omni: OmniTurnResult | null
   try {
     omni = await runOmniTurn({
       command,
@@ -602,7 +638,9 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
       history: priorHistory,
       note: noteAtStart,
       lastRun,
+      chatEndpoint,
       onText,
+      onExchange: ctx.recordExchange,
     })
   } catch (error) {
     retractStream()
@@ -636,8 +674,9 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
     if (omni.outcome === 'clarify' && omni.repair) {
       deps.addMessage({
         role: 'assistant',
+        author: 'harness',
         kind: 'notice',
-        text: `That edit didn't go through — the instruction Omni produced failed validation (${omni.repair.error}). Nothing was changed. The question below is how to retry it.`,
+        text: `That edit didn't go through — the delegation instruction failed validation (${omni.repair.error}). Nothing was changed. The question below is how to retry it.`,
         runId: traceLocal.id,
       })
       deps.notify('Edit failed validation', omni.repair.error, 'error')
@@ -657,6 +696,7 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
     if (!restored.ok) {
       deps.addMessage({
         role: 'assistant',
+        author: 'harness',
         kind: 'result',
         text:
           omni.action === 'undo'
@@ -680,7 +720,7 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
       omni.action === 'undo'
         ? `Reverted to “${restored.snapshot?.label}”.`
         : `Reapplied “${restored.snapshot?.label}”.`
-    deps.addMessage({ role: 'assistant', kind: 'result', text: confirmation, runId: traceLocal.id })
+    deps.addMessage({ role: 'assistant', author: 'harness', kind: 'result', text: confirmation, runId: traceLocal.id })
     deps.speakReply(confirmation)
     finish('verified')
     return
@@ -690,7 +730,7 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
   const directive = omni.directive
   if (!directive) {
     retractStream()
-    throw new Error('Omni delegated without a directive.')
+    throw new Error(`${chatAuthor} delegated without a directive.`)
   }
   retractStream()
   traceLocal.directive = directive
@@ -767,6 +807,7 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
   if (!endpointUp(deps.healthRef.current, 'text')) {
     deps.addMessage({
       role: 'assistant',
+      author: 'harness',
       kind: 'error',
       text: 'The worker model (LFM3-1.7B) is offline, so the delegated edit cannot run. Nothing was written to the note.',
       runId: traceLocal.id,
@@ -804,6 +845,7 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
             attemptedTool,
             anchorCorrection: anchorCorrectionFor(noteAtStart, attemptedParsed),
           })
+    const label = attemptText === '' ? 'packet decode · attempt 1' : 'packet decode · retry'
     let completion: ChatResult
     try {
       completion = await chatComplete('text', messages, sampler)
@@ -811,7 +853,37 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
       // Transport failure (incl. the bridge's 90s timeout): retrying the
       // same dead/slow endpoint inside this turn buys nothing.
       attemptError = error instanceof Error ? error.message : 'worker request failed'
+      ctx.recordExchange(
+        captureExchange({
+          role: 'worker',
+          label,
+          ...workerExchangeTarget(),
+          messages,
+          stream: false,
+          temperature: sampler.temperature,
+          maxTokens: sampler.maxTokens,
+          tools: TOOL_DEFS.map((tool) => tool.name),
+          completion: null,
+          error: attemptError,
+        }),
+      )
       break
+    }
+    const recordPacketExchange = (error?: string) => {
+      ctx.recordExchange(
+        captureExchange({
+          role: 'worker',
+          label,
+          ...workerExchangeTarget(),
+          messages,
+          stream: false,
+          temperature: sampler.temperature,
+          maxTokens: sampler.maxTokens,
+          tools: TOOL_DEFS.map((tool) => tool.name),
+          completion,
+          ...(error ? { error } : {}),
+        }),
+      )
     }
     attemptText = completion.text
     const xmlInput = /<think>/.test(completion.text)
@@ -824,6 +896,7 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
     attemptedParsed = parsed
     if (!parsed) {
       attemptError = 'The reply did not contain one parseable tool call in the repo XML format.'
+      recordPacketExchange(attemptError)
       continue
     }
     const required = TOOL_BY_NAME[parsed.name].params
@@ -832,8 +905,10 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
     const missing = required.filter((name) => !(parsed.params[name] ?? '').trim())
     if (missing.length > 0) {
       attemptError = `The ${parsed.name} call is missing required parameter(s): ${missing.join(', ')}.`
+      recordPacketExchange(attemptError)
       continue
     }
+    recordPacketExchange()
     call = packetWorkerCall(
       parsed,
       completion.reasoning ?? '',
@@ -851,6 +926,7 @@ async function runOmniFirstTurn(deps: PipelineDeps, ctx: TurnContext): Promise<v
     deps.setStageStates({ A: 'done', B: 'failed', C: 'idle' })
     deps.addMessage({
       role: 'assistant',
+      author: 'harness',
       kind: 'error',
       text: `The worker could not produce a valid tool call for that edit (${attemptError || 'no parseable call'}). Nothing was written to the note, and no fallback content was substituted.`,
       runId: traceLocal.id,
@@ -896,7 +972,7 @@ function workerChatCall(
     rawTokens: outputTokens,
     promptHints: [
       `Decoded by LFM3-1.7B · ${(ms / 1000).toFixed(1)}s · ${promptTokens} prompt tokens`,
-      `Sent sampler: temperature=${WORKER_CHAT_SAMPLER.temperature} · max_tokens=${WORKER_CHAT_SAMPLER.maxTokens}`,
+      `Sent sampler: temperature=${WORKER_CHAT_SAMPLER.temperature} · max_tokens=${WORKER_CHAT_SAMPLER.maxTokens ?? 'uncapped'}`,
       'Run-mode chat turn: the 1.7B chose the tool itself from the note context; no Audio directive exists in this mode.',
     ],
     toolSchemasInjected: 3,
@@ -1009,6 +1085,7 @@ async function runWorkerChatFirstTurn(
       lastRun,
       signal: controller.signal,
       onText,
+      onExchange: ctx.recordExchange,
     })
     // One retry on an unusable reply: the rejected text and the exact parse
     // error are appended (the packet-worker retry pattern), never a guess.
@@ -1021,6 +1098,7 @@ async function runWorkerChatFirstTurn(
         lastRun,
         signal: controller.signal,
         onText,
+        onExchange: ctx.recordExchange,
         retry: { attemptText: rejected.raw, error: rejected.error ?? 'no usable reply' },
       })
     }
@@ -1177,7 +1255,7 @@ function holdForUserDecision(
     delegation: { ...delegation, status: 'pending', confidence },
   })
   traceLocal.status = 'pending'
-  deps.addMessage({ role: 'assistant', kind: 'notice', text: heldText, runId: traceLocal.id })
+  deps.addMessage({ role: 'assistant', author: 'harness', kind: 'notice', text: heldText, runId: traceLocal.id })
   deps.notify('Edit waiting for your decision', notifyDetail, 'neutral')
   deps.speakReply('That edit needs your call. It is waiting under pending edits.')
   finish('pending')
@@ -1217,6 +1295,7 @@ async function verifyAndExecute(
     recordOmniRejection(deps, ctx, directive, call, `Hard gates failed: ${detail}`, null)
     deps.addMessage({
       role: 'assistant',
+      author: 'harness',
       kind: 'error',
       text: `I stopped before execution. A deterministic hard gate refused this call: ${detail} The note was not touched.`,
       runId: traceLocal.id,
@@ -1233,6 +1312,7 @@ async function verifyAndExecute(
     recordOmniRejection(deps, ctx, directive, call, preview.message, null)
     deps.addMessage({
       role: 'assistant',
+      author: 'harness',
       kind: 'error',
       text: `I stopped before writing. ${preview.message} The note was not changed.`,
       runId: traceLocal.id,
@@ -1374,6 +1454,7 @@ async function verifyAndExecute(
     )
     deps.addMessage({
       role: 'assistant',
+      author: 'harness',
       kind: 'error',
       text: `I stopped before writing. ${outcome.reason} The note was not changed.`,
       runId: traceLocal.id,
@@ -1388,6 +1469,7 @@ async function verifyAndExecute(
     })
     deps.addMessage({
       role: 'assistant',
+      author: 'harness',
       kind: 'result',
       text: preview.message,
       runId: traceLocal.id,
@@ -1425,6 +1507,7 @@ async function verifyAndExecute(
   publish()
   deps.addMessage({
     role: 'assistant',
+    author: 'harness',
     kind: 'result',
     text: execution.message,
     runId: traceLocal.id,
@@ -1475,6 +1558,7 @@ async function runSnapshotDirective(
     traceLocal.status = 'conversational'
     deps.addMessage({
       role: 'assistant',
+      author: 'harness',
       kind: 'result',
       text:
         action === 'undo'
@@ -1500,6 +1584,7 @@ async function runSnapshotDirective(
       : `Reapplied “${restored.snapshot?.label}”. Snapshot ${deps.historyIndexRef.current} is active again.`
   deps.addMessage({
     role: 'assistant',
+    author: 'harness',
     kind: 'result',
     text: confirmation,
     runId: traceLocal.id,

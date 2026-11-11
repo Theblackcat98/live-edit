@@ -913,3 +913,25 @@
 .composer-mic.is-busy {
   color: var(--accent, #5a6f8f);
 }
+
+.message-inspect {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 2px;
+  padding: 1px 5px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted, #6b7686);
+  font-size: 8.5px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.message-inspect:hover {
+  background: color-mix(in srgb, var(--accent, #5a6f8f) 12%, transparent);
+  color: var(--ink-2);
+}

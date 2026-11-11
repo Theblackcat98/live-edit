@@ -528,7 +528,7 @@ function domHelpers(cdp) {
         micLabel: mic?.getAttribute('aria-label') ?? null,
         micDisabled: !!mic?.disabled,
         statusHasRec: /REC 16 kHz/.test(status),
-        statusHasTranscribing: /Omni · transcribing/.test(status),
+        statusHasTranscribing: /· transcribing/.test(status),
         stopAudio: stop ? { disabled: stop.disabled, title: stop.title } : null,
         speakerOn: !!document.querySelector('[aria-label="Mute spoken replies"]'),
       }
@@ -889,7 +889,7 @@ async function main() {
     )
     record(
       'M2',
-      'Omni transcribes the real-mic capture; word "row" preserved',
+      'The mode\u2019s audio server transcribes the real-mic capture; word "row" preserved',
       Boolean(transcript) && hasRow && diff.wer <= 0.3,
       `transcript=${JSON.stringify(transcript)}; expected=${JSON.stringify(PHRASE)}; WER=${diff.wer} (${diff.errors}/${diff.expectedWords.length} words); hasRow=${hasRow}; diff="${diff.diff}"`,
     )

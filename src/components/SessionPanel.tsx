@@ -298,7 +298,7 @@ export function SessionComposer({
           !voiceAvailable
             ? 'Voice unavailable in low-RAM mode'
             : asrBusy
-              ? 'Omni is transcribing'
+              ? 'Transcribing'
               : micOn
                 ? 'Turn off hands-free listening'
                 : 'Start hands-free listening'
@@ -307,7 +307,7 @@ export function SessionComposer({
           !voiceAvailable
             ? 'Low-RAM mode runs only LFM3-1.7B — type instead'
             : asrBusy
-              ? 'LFM3-Omni-2B is transcribing…'
+              ? `${MODE_HINTS[mode]} — transcribing…`
               : micOn
                 ? 'Hands-free on — each utterance is transcribed; tap to stop listening'
                 : 'Start hands-free listening — every utterance is transcribed until you tap stop'
@@ -324,7 +324,7 @@ export function SessionComposer({
         onChange={(event) => onInputChange(event.target.value)}
         placeholder={
           asrBusy
-            ? 'Omni is transcribing your capture…'
+            ? 'Transcribing your capture…'
             : micActive
               ? 'Listening — speak, then pause. Tap the mic to turn off.'
               : busy

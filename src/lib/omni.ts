@@ -40,9 +40,10 @@
  */
 
 import type { ChatMessage, ChatResult, ChatStreamOptions, ToolDef } from './bridge'
-import { chatCompleteStream } from './bridge'
-import type { Directive, OmniTurnResult } from '../types'
+import { chatCompleteStream, modelUrl } from './bridge'
+import type { Directive, OmniTurnResult, TurnExchange } from '../types'
 import { buildDirectiveRepairMessage, validateDirective } from './directive'
+import { captureExchange } from './exchange'
 import { NOTE_PATH, NOTE_TITLE } from '../data/note'
 import { truncate } from './utils'
 
@@ -72,16 +73,14 @@ export const HISTORY_TURN_CHARS = 600
 
 /**
  * The one bridge capability runOmniTurn needs, as an injectable function so
- * tests (and any future transport) never touch the network. Defaults to the
- * live streamed chat call against the Audio endpoint (LFM3-Audio-2B :8086 —
- * the default front door; the Omni :8083 path is legacy).
+ * tests (and any future transport) never touch the network. The default is
+ * the live streamed chat call against the turn's front door — Audio
+ * (LFM3-Audio-2B :8086) by default, LFM3-Omni-2B :8083 in the legacy mode.
  */
 export type OmniChatFn = (
   messages: ChatMessage[],
   options: ChatStreamOptions,
 ) => Promise<ChatResult>
-
-const defaultChat: OmniChatFn = (messages, options) => chatCompleteStream('audio', messages, options)
 
 // --- typed errors (design.md §11: honest failure, endpoint state for the UI) ---
 
@@ -92,12 +91,24 @@ export interface OmniEndpointState {
   url: string
 }
 
-export const OMNI_ENDPOINT: OmniEndpointState = {
-  id: 'audio',
-  name: 'LFM3-Audio-2B',
-  port: 8086,
-  url: 'http://127.0.0.1:8086',
+/** Both front doors this client can serve: Audio (default) and legacy Omni. */
+export const OMNI_ENDPOINTS: Record<'audio' | 'omni', OmniEndpointState> = {
+  audio: {
+    id: 'audio',
+    name: 'LFM3-Audio-2B',
+    port: 8086,
+    url: 'http://127.0.0.1:8086',
+  },
+  omni: {
+    id: 'omni',
+    name: 'LFM3-Omni-2B',
+    port: 8083,
+    url: 'http://127.0.0.1:8083',
+  },
 }
+
+/** Default front door (the `audio` run mode). */
+export const OMNI_ENDPOINT: OmniEndpointState = OMNI_ENDPOINTS.audio
 
 export type OmniTurnErrorKind =
   /** Bridge/endpoint failure (unreachable, timeout, non-500 HTTP error, unusable payload). */
@@ -297,8 +308,20 @@ export interface OmniTurnInput {
    * is always the authoritative final text.
    */
   onText?: (delta: string) => void
-  /** Injectable bridge chat call (tests); defaults to the live Omni endpoint. */
+  /**
+   * Which front door serves the turn: 'audio' (default, LFM3-Audio-2B :8086)
+   * or 'omni' (legacy mode, LFM3-Omni-2B :8083). Only read when `chat` is not
+   * injected; error endpoint state follows it.
+   */
+  chatEndpoint?: 'audio' | 'omni'
+  /** Injectable bridge chat call (tests); defaults to the live chatEndpoint. */
   chat?: OmniChatFn
+  /**
+   * Turn-exchange recorder (the inspector's Chat tab): called once per
+   * request this turn makes — primary, repair retry, clarify follow-up —
+   * with the exact messages, sampler and outcome, failures included.
+   */
+  onExchange?: (exchange: TurnExchange) => void
 }
 
 // --- §6 context policy ------------------------------------------------------------
@@ -633,7 +656,10 @@ export async function runOmniTurn(input: OmniTurnInput): Promise<OmniTurnResult 
 }
 
 async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
-  const chat = input.chat ?? defaultChat
+  const endpointState = OMNI_ENDPOINTS[input.chatEndpoint ?? 'audio']
+  const chat: OmniChatFn =
+    input.chat ??
+    ((messages, options) => chatCompleteStream(endpointState.id, messages, options))
   const started = performance.now()
   let promptTokens = 0
   let outputTokens = 0
@@ -665,7 +691,7 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
     return new OmniTurnError(
       'endpoint',
       `Omni turn failed: ${detail}`,
-      OMNI_ENDPOINT,
+      endpointState,
       undefined,
       detail,
     )
@@ -675,10 +701,13 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
    * One request against Omni. Tools requests get E2's bare-retry policy for
    * server-side tool-parse 500s (the client never sees the raw call — nothing
    * can be appended); tool-less requests surface endpoint errors directly.
+   * Every attempt — success, refusal, transport failure — is reported through
+   * input.onExchange so the inspector sees the whole turn, failures included.
    */
   async function request(
     messages: ChatMessage[],
     options: { tools?: ToolDef[]; streamDeltas?: boolean },
+    label: string,
   ): Promise<ChatResult> {
     const requestOptions: ChatStreamOptions = {
       temperature: OMNI_TEMPERATURE,
@@ -687,7 +716,33 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
       ...(options.tools ? { tools: options.tools } : {}),
       onToken: streamingOnToken(options.streamDeltas === true),
     }
-    const attempt = () => chat(messages, requestOptions)
+    const report = (completion: ChatResult | null, error?: string) => {
+      input.onExchange?.(
+        captureExchange({
+          role: 'chat',
+          label,
+          model: endpointState.name,
+          url: modelUrl(endpointState.port, '/v1/chat/completions'),
+          messages,
+          stream: true,
+          temperature: OMNI_TEMPERATURE,
+          maxTokens: OMNI_MAX_TOKENS,
+          ...(options.tools ? { tools: options.tools.map((tool) => tool.function.name) } : {}),
+          completion,
+          ...(error ? { error } : {}),
+        }),
+      )
+    }
+    const attempt = async (): Promise<ChatResult> => {
+      try {
+        const completion = await chat(messages, requestOptions)
+        report(completion)
+        return completion
+      } catch (error) {
+        report(null, error instanceof Error ? error.message : String(error))
+        throw error
+      }
+    }
     try {
       const completion = await attempt()
       promptTokens += completion.usage.promptTokens
@@ -709,7 +764,7 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
             throw new OmniTurnError(
               'server-tool-parse',
               'Omni server refused the generated tool call twice (HTTP 500 tool-parse)',
-              OMNI_ENDPOINT,
+              endpointState,
               500,
               detail,
             )
@@ -726,7 +781,7 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
 
   // -- stage 1: the primary tools call --------------------------------------------
   const messages = buildOmniMessages(input)
-  const primary = await request(messages, { tools: OMNI_TOOLS, streamDeltas: true })
+  const primary = await request(messages, { tools: OMNI_TOOLS, streamDeltas: true }, 'primary · tools')
   if (aborted()) throw new TurnAborted()
 
   const firstCall = primary.toolCalls[0] ?? null
@@ -739,7 +794,7 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
       throw new OmniTurnError(
         'empty-reply',
         'Omni reply contained only unusable tool markup (no tool call, no visible text)',
-        OMNI_ENDPOINT,
+        endpointState,
       )
     }
     return result('answer', { text })
@@ -766,8 +821,7 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
     { role: 'user', content: repairUserMessage },
   ]
   if (aborted()) throw new TurnAborted()
-  const repaired = await request(repairMessages, { tools: OMNI_TOOLS })
-  if (aborted()) throw new TurnAborted()
+  const repaired = await request(repairMessages, { tools: OMNI_TOOLS }, 'repair retry')
 
   const secondCall = repaired.toolCalls[0] ?? null
   const secondEvaluation = evaluateToolCall(secondCall)
@@ -807,14 +861,14 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
     { role: 'user', content: CLARIFY_FOLLOWUP_INSTRUCTION },
   ]
   if (aborted()) throw new TurnAborted()
-  const clarify = await request(clarifyMessages, { streamDeltas: true })
+  const clarify = await request(clarifyMessages, { streamDeltas: true }, 'clarify follow-up')
   if (aborted()) throw new TurnAborted()
   const question = sanitizeOmniText(clarify.text)
   if (!question) {
     throw new OmniTurnError(
       'empty-reply',
       'Omni clarify follow-up returned no usable text',
-      OMNI_ENDPOINT,
+      endpointState,
     )
   }
   // Repair-failure clarify: carry the diagnostics (validation error + the

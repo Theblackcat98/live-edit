@@ -1,4 +1,4 @@
-import { Keyboard, Mic } from 'lucide-react'
+import { Keyboard, Mic, ScanSearch } from 'lucide-react'
 import type { Message } from '../types'
 import { cx, pad } from '../lib/utils'
 import { LogoMark } from './LogoMark'
@@ -67,13 +67,25 @@ export function MessageBubble({ message, onAction, onOpenTrace, recent }: Messag
       </div>
       <div className="message-assistant-content">
         <div className="message-assistant-meta">
-          <span className="message-author">{message.author ?? 'Omni 2B'}</span>
+          <span className="message-author">{message.author ?? 'Assistant'}</span>
           {message.kind === 'ack' && <span className="message-tag mono">delegating</span>}
           {message.kind === 'clarify' && <span className="message-tag mono">clarify</span>}
           {message.kind === 'error' && (
             <span className="message-tag message-tag-error mono">guardrail</span>
           )}
           <span className="message-time mono">{clockOf(message.at)}</span>
+          {message.runId && (
+            <button
+              type="button"
+              className="message-inspect"
+              onClick={() => onOpenTrace(message.runId)}
+              aria-label="Inspect this turn"
+              title="Inspect this turn — context, thinking, tool calls"
+            >
+              <ScanSearch size={10} />
+              <span className="mono">inspect</span>
+            </button>
+          )}
         </div>
         <p className="message-assistant-text">
           <TypewriterText text={message.text} />
