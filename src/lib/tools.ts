@@ -106,7 +106,12 @@ function insertAfterLine(note: string, anchorLine: number, content: string): Not
   }
 }
 
-export function executeTool(note: string, call: WorkerCall, span?: SpanTarget): ExecutionResult {
+export function executeTool(
+  note: string,
+  call: WorkerCall,
+  span?: SpanTarget,
+  options: { overrideBlastRadius?: boolean } = {},
+): ExecutionResult {
   const started = performance.now()
   const finish = (
     result: Omit<ExecutionResult, 'durationMs'>,
@@ -139,7 +144,7 @@ export function executeTool(note: string, call: WorkerCall, span?: SpanTarget): 
     // guts it, at any target size — the old 90-character floor let
     // short-target gutting through (audit TD-44).
     const retained = call.params.new_text.trim().length
-    if (retained < current.length * EDIT_RETENTION_RATIO) {
+    if (!options.overrideBlastRadius && retained < current.length * EDIT_RETENTION_RATIO) {
       return finish({
         ok: false,
         message: `Replacement collapses the target: ${retained} of ${current.length} characters retained${spanNote}.`,
@@ -202,9 +207,11 @@ export function executeTool(note: string, call: WorkerCall, span?: SpanTarget): 
       })
     }
     // Blast radius: a removal of half the note or more is destructive no
-    // matter who asked (audit TD-44).
+    // matter who asked (audit TD-44). Waivable only by an explicit user
+    // override (an approved blast-radius hold); bounds and anchor above
+    // are never waived.
     const removed = end - start + 1
-    if (removed >= removalCapFor(lines.length)) {
+    if (!options.overrideBlastRadius && removed >= removalCapFor(lines.length)) {
       return finish({
         ok: false,
         message: `Removal exceeds the blast-radius limit: ${removed} of ${lines.length} lines${spanNote}.`,

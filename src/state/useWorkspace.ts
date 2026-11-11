@@ -485,7 +485,12 @@ export function useWorkspace(): WorkspaceApi {
         previous.map((entry) => (entry.id === id ? outcome.edit : entry)),
       )
       if (outcome.status === 'applied' && outcome.call) {
-        const execution = executeTool(noteRef.current, outcome.call)
+        const execution = executeTool(
+          noteRef.current,
+          outcome.call,
+          undefined,
+          edit.overrideBlastRadius ? { overrideBlastRadius: true } : {},
+        )
         if (!execution.ok) {
           // The store gate-validated the call; the engine refusing anyway is
           // a drift between the two — surface it honestly, write nothing.

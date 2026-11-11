@@ -13,7 +13,7 @@ import {
   Sparkles,
   X,
 } from 'lucide-react'
-import type { CriticCheck, ExchangeMessage, Probability, RejectedTraceRecord, Trace, TurnExchange } from '../types'
+import type { CriticCheck, ExchangeMessage, Probability, RejectedTraceRecord, Trace, TurnExchange, TurnHold } from '../types'
 import type { RunMode } from '../lib/runmode'
 import { chatModelShort } from '../lib/runmode'
 import { TOOL_DEFS } from '../data/tools'
@@ -133,6 +133,17 @@ function XmlView({ xml }: { xml: string }) {
       })}
     </div>
   )
+}
+
+/** Head-line for a turn that stopped or was held before execution (§8/§9). */
+const HOLD_TITLES: Record<TurnHold['kind'], string> = {
+  'hard-gate': 'Stopped by a hard gate — not overridable',
+  'blast-radius': 'Blast-radius limit — held for your decision',
+  'blast-collapse': 'Section-scale collapse (§8) — held for your decision',
+  'no-decision-model': 'No decision model in this mode — held for your decision',
+  engine: 'The engine refused this call',
+  outcome: 'Outcome check failed — nothing was written',
+  d1: 'Safety check — held for your decision',
 }
 
 function ExchangeMessagesView({ messages }: { messages: ExchangeMessage[] }) {
@@ -320,6 +331,7 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectR
           }
         : undefined,
       timings: trace.timings,
+      hold: trace.hold,
       exchanges: trace.exchanges ?? [],
     }
   }, [trace])
@@ -521,6 +533,27 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectR
               </div>
             )}
 
+            {trace.hold && trace.hold.kind !== 'd1' && (
+              <div className="trace-verdict">
+                <span className="trace-verdict-icon" aria-hidden="true">
+                  {trace.hold.kind === 'blast-radius' || trace.hold.kind === 'blast-collapse' ? (
+                    <Gauge size={11} />
+                  ) : (
+                    <X size={11} />
+                  )}
+                </span>
+                <div>
+                  <strong>{HOLD_TITLES[trace.hold.kind]}</strong>
+                  <p>{trace.hold.reason}</p>
+                  <span className="trace-verdict-meta mono">
+                    {trace.status === 'pending'
+                      ? 'waiting under Pending edits · note untouched'
+                      : 'note untouched'}
+                  </span>
+                </div>
+              </div>
+            )}
+
             {trace.directive && (
               // Audio's typed delegation directive (design.md §5), recorded on
               // the trace from P2 on. Legacy supervisor-first traces have no
@@ -585,6 +618,14 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectR
               </TraceSection>
             )}
 
+            {/* Legacy supervisor-first stages: routing, d1-span grounding and
+                the d1 critic never populate in the current modes (the
+                interface model routes by typed directive, the worker grounds
+                its own span, safety is the d1 check on the summary grid).
+                They render only when a trace actually carries their data —
+                legacy persisted traces keep them, current modes never see
+                the empty sections. */}
+            {trace.route && (
             <TraceSection
               index="A"
               title="Pre-flight routing"
@@ -653,7 +694,9 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectR
                 <p className="trace-muted">Routing pass pending.</p>
               )}
             </TraceSection>
+            )}
 
+            {(trace.span || trace.grounding) && (
             <TraceSection
               index="B"
               title="Zero-token grounding"
@@ -696,6 +739,7 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectR
                 <p className="trace-muted">Grounding was skipped for this turn.</p>
               )}
             </TraceSection>
+            )}
 
             <TraceSection
               index="W"
@@ -777,6 +821,7 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectR
               )}
             </TraceSection>
 
+            {trace.critic && (
             <TraceSection
               index="C"
               title="Post-generation critic"
@@ -819,6 +864,7 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectR
                 <p className="trace-muted">Critic pass pending.</p>
               )}
             </TraceSection>
+            )}
 
             <TraceSection index="E" title="Execution & snapshot" caption="atomic line diff">
               {trace.execution ? (

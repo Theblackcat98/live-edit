@@ -388,3 +388,45 @@ describe('fromStorable', () => {
     expect(fromStorable([])).toEqual([])
   })
 })
+
+describe('blast-radius override adjudication', () => {
+  const gutting = makeCall({
+    file_path: 'notes/meeting.md',
+    start_line: '5',
+    end_line: '5',
+    old_text_anchor: 'Redis cache is on the critical path.',
+    new_text: 'no',
+  })
+
+  function overrideEdit(): PendingEdit {
+    return createPendingEdit({
+      directive: makeDirective('Gut the redis line'),
+      call: gutting,
+      diff: DIFF,
+      noteHash: noteHash(NOTE),
+      d1: D1,
+      overrideBlastRadius: true,
+    })
+  }
+
+  it('waives the destructiveness cap on approval but never a correctness gate', () => {
+    const applied = adjudicate(overrideEdit(), 'apply', NOTE, { noteHash })
+    expect(applied.status).toBe('applied')
+    expect(applied.call).toBe(gutting)
+    expect(applied.reason).toContain('waived')
+    // The anchor gate is a correctness check: drift still refuses the apply.
+    const drifted = adjudicate(overrideEdit(), 'apply', MUTATED_NOTE, { noteHash })
+    expect(drifted.status).toBe('stale')
+    expect(drifted.call).toBeUndefined()
+    expect(drifted.reason).toContain('anchor_exact')
+  })
+
+  it('round-trips the override flag through storage', () => {
+    const restored = fromStorable(
+      JSON.parse(JSON.stringify(toStorable([overrideEdit()]))) as unknown,
+    )
+    expect(restored).toHaveLength(1)
+    expect(restored[0]?.overrideBlastRadius).toBe(true)
+    expect(restored[0]?.call.params.new_text).toBe('no')
+  })
+})

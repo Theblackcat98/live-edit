@@ -279,6 +279,30 @@ export interface Trace {
    * traces; the inspector treats absent as empty.
    */
   exchanges?: TurnExchange[]
+  /**
+   * Why the turn stopped or was held before execution (hard-gate refusal,
+   * blast-radius hold, engine refusal, outcome check, d1 verdict). Absent
+   * when the turn ran to completion or was purely conversational.
+   */
+  hold?: TurnHold
+}
+
+/**
+ * Why a turn stopped or was held before execution — recorded so the trace
+ * drawer can always answer "what happened to my edit", even when the run
+ * produced no worker call or ended pending. `d1` holds are also covered by
+ * `d1Check`; the drawer renders this block for every other kind.
+ */
+export interface TurnHold {
+  kind:
+    | 'hard-gate'
+    | 'blast-radius'
+    | 'blast-collapse'
+    | 'no-decision-model'
+    | 'engine'
+    | 'outcome'
+    | 'd1'
+  reason: string
 }
 
 export interface MessageAction {
@@ -608,4 +632,11 @@ export interface PendingEdit {
   }
   /** pending: awaiting adjudication; applied/discarded: resolved by the user; stale: gates failed on ✓ (drifted anchor). */
   status: 'pending' | 'applied' | 'discarded' | 'stale'
+  /**
+   * Set when the only gate failure was the blast-radius cap: approval
+   * executes the removal with the cap waived (the user overrode a
+   * destructiveness limit, never a correctness gate). Absent on every
+   * other pending.
+   */
+  overrideBlastRadius?: true
 }

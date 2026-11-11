@@ -1240,3 +1240,14 @@
   line-height: 1.6;
   color: var(--muted, #6b7686);
 }
+
+/* Thinking traces can run long (uncapped deliberations): give them a
+   sensible viewport and scroll inside it instead of stretching the card. */
+.trace-thought {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.trace-thought p {
+  white-space: pre-wrap;
+}

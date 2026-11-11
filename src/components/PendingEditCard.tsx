@@ -193,6 +193,16 @@ export function PendingEditCard({ edit, busy, onApply, onDiscard }: PendingEditC
             {edit.d1.reason && <p className="pending-reason">{edit.d1.reason}</p>}
           </div>
         )}
+        {edit.overrideBlastRadius && actionable && (
+          <p className="pending-note is-override-note">
+            <TriangleAlert size={11} />
+            <span>
+              Blast-radius limit exceeded: applying executes this large removal with the limit
+              waived — the cap is the only gate you are overriding.
+            </span>
+          </p>
+        )}
+
 
         {explanation && (
           <p className={cx('pending-note', edit.status === 'stale' && 'is-stale')}>

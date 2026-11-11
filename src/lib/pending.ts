@@ -72,6 +72,8 @@ export interface PendingEditInput {
    * the preview diff; span-tool pendings omit it.
    */
   insertion?: PendingEdit['insertion']
+  /** Set on blast-radius holds: approval executes with the cap waived (user override). */
+  overrideBlastRadius?: true
 }
 
 /**
@@ -116,6 +118,7 @@ export function createPendingEdit(input: PendingEditInput): PendingEdit {
     diff: input.diff,
     noteHash: input.noteHash,
     ...(input.insertion ? { insertion: input.insertion } : {}),
+    ...(input.overrideBlastRadius ? { overrideBlastRadius: true } : {}),
     d1: input.d1,
     status: 'pending',
   }
@@ -157,6 +160,15 @@ export function adjudicate(
   // with no span override — the pending-edit world is worker-grounds-itself,
   // so anchor exactness compares against the note's own lines at the range.
   const gates = runHardGates(currentNote, edit.call)
+  // A blast-radius hold carries the user's pending override: the
+  // destructiveness cap is waived on approval. Correctness gates (schema,
+  // bounds, anchor) are never waived — those still fail the apply.
+  const failures = edit.overrideBlastRadius
+    ? gates.failures.filter(
+        (failure) => failure.gate !== 'destructive_safety' && failure.gate !== 'blast_radius',
+      )
+    : gates.failures
+  const pass = failures.length === 0
 
   // Insertion tools have no gate anchor (bounds/anchor/blast do not apply
   // to add_text), so a passing gate run says
@@ -164,11 +176,7 @@ export function adjudicate(
   // insertion neighbourhood: the authoring note's lines either side of the
   // insertion point must still sit at the recorded line — if they moved,
   // the position this insert was written for cannot be trusted.
-  if (
-    gates.pass &&
-    edit.insertion &&
-    edit.call.name === 'add_text'
-  ) {
+  if (pass && edit.insertion && edit.call.name === 'add_text') {
     const { startLine, precedingLine, followingLine } = edit.insertion
     const lines = splitLines(currentNote)
     const currentPreceding = startLine >= 2 ? (lines[startLine - 2] ?? null) : null
@@ -185,19 +193,21 @@ export function adjudicate(
     }
   }
 
-  if (gates.pass) {
+  if (pass) {
     return {
       status: 'applied',
       edit: { ...edit, status: 'applied' },
       reason:
-        'Hard gates re-ran clean against the current note. ' +
+        (edit.overrideBlastRadius && gates.failures.length > failures.length
+          ? 'Hard gates re-ran with the blast-radius cap waived by your override. '
+          : 'Hard gates re-ran clean against the current note. ') +
         'The caller executes the call via executeTool + commitNote — same snapshot labelling as approved edits, with the tool name.',
       call: edit.call,
     }
   }
 
-  const failedGates = gates.failures.map((failure) => failure.gate).join(', ')
-  const details = gates.failures.map((failure) => failure.detail).join(' ')
+  const failedGates = failures.map((failure) => failure.gate).join(', ')
+  const details = failures.map((failure) => failure.detail).join(' ')
   const currentHash = deps.noteHash(currentNote)
   const drifted = currentHash !== edit.noteHash
   const reason = drifted
@@ -406,6 +416,7 @@ function parseStoredEdit(raw: unknown): PendingEdit | null {
     diff,
     noteHash,
     ...(insertion ? { insertion } : {}),
+    ...(raw.overrideBlastRadius === true ? { overrideBlastRadius: true as const } : {}),
     d1,
     status: 'pending',
   }

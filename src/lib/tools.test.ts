@@ -192,3 +192,30 @@ describe('executeTool: inserts into an empty note start at the first line', () =
     expect(result.note).toContain('Existing line.\n\n- New bullet.')
   })
 })
+
+describe('executeTool: blast-radius override (user-approved hold)', () => {
+  it('executes a beyond-cap removal when the override is set', () => {
+    const call = makeCall('remove_text', {
+      file_path: 'notes/quarterly-review.md',
+      start_line: '1',
+      end_line: '12',
+      target_excerpt: excerptOf(NOTE_13, 1, 12),
+    })
+    const result = executeTool(NOTE_13, call, undefined, { overrideBlastRadius: true })
+    expect(result.ok).toBe(true)
+    expect(result.diff?.removed).toBe(12)
+  })
+
+  it('never waives bounds or anchor under the override', () => {
+    const driftedAnchor = makeCall('remove_text', {
+      file_path: 'notes/quarterly-review.md',
+      start_line: '1',
+      end_line: '12',
+      target_excerpt: 'text that is not the note',
+    })
+    const result = executeTool(NOTE_13, driftedAnchor, undefined, { overrideBlastRadius: true })
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('Anchor')
+    expect(result.note).toBe(NOTE_13)
+  })
+})

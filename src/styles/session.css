@@ -935,3 +935,16 @@
   background: color-mix(in srgb, var(--accent, #5a6f8f) 12%, transparent);
   color: var(--ink-2);
 }
+
+.pending-note.is-override-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--warning, #b0761e);
+  font-weight: 500;
+}
+
+.pending-note.is-override-note svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}

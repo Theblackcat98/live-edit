@@ -45,6 +45,7 @@ import type {
   Trace,
   TraceRuntime,
   TurnExchange,
+  TurnHold,
   WorkerCall,
 } from '../types'
 import { NOTE_PATH } from '../data/note'
@@ -1225,8 +1226,10 @@ function holdForUserDecision(
   confidence: number | null,
   heldText: string,
   notifyDetail: string,
+  hold: TurnHold,
+  overrideBlastRadius?: true,
 ): void {
-  const { traceLocal, finish } = ctx
+  const { traceLocal, publish, finish } = ctx
   // Insertion calls carry no line range for adjudication to check drift
   // against, so record the insertion neighbourhood (authoring note lines
   // either side of the diff's insertion point) as their staleness anchor.
@@ -1249,7 +1252,10 @@ function holdForUserDecision(
     noteHash: noteHash(ctx.noteAtStart),
     ...(insertion ? { insertion } : {}),
     d1,
+    ...(overrideBlastRadius ? { overrideBlastRadius: true } : {}),
   })
+  traceLocal.hold = hold
+  publish()
   deps.addPendingEdit(pending)
   deps.patchMessage(delegationId, {
     delegation: { ...delegation, status: 'pending', confidence },
@@ -1283,7 +1289,10 @@ async function verifyAndExecute(
     delegation,
   })
 
-  // --- hard gates (design.md §8): refusal here is never adjudicable --------
+  // --- hard gates (design.md §8): correctness refusals are never adjudicable.
+  // The blast-radius cap is a destructiveness limit, not a correctness check:
+  // when it is the ONLY failure the call is held for the user's decision
+  // (approval executes with the cap waived — a human overrode it, on record).
   // Stage C is the d1 check; in low-RAM mode there is no d1, so it is never
   // marked as having run.
   deps.setStageStates({ A: 'done', B: 'done', C: options.d1Check ? 'running' : 'skipped' })
@@ -1291,8 +1300,45 @@ async function verifyAndExecute(
   const gates = runHardGates(noteAtStart, call)
   if (!gates.pass) {
     const detail = gates.failures.map((failure) => failure.detail).join(' ')
+    const blastOnly =
+      gates.failures.length > 0 &&
+      gates.failures.every(
+        (failure) => failure.gate === 'destructive_safety' || failure.gate === 'blast_radius',
+      )
+    if (blastOnly) {
+      // Dry-run with the cap waived: the card (and approval) run on the
+      // real diff, so the user sees exactly what the override would do.
+      const overridePreview = executeTool(noteAtStart, call, undefined, { overrideBlastRadius: true })
+      if (overridePreview.ok && overridePreview.diff) {
+        holdForUserDecision(
+          deps,
+          ctx,
+          delegation,
+          delegationId,
+          directive,
+          call,
+          overridePreview.diff,
+          {
+            verdict: 'unavailable',
+            noul: null,
+            destructiveSafety: null,
+            reason: `${detail} Approving executes the removal with the limit waived — you decide.`,
+          },
+          null,
+          `I won't run that removal silently: ${detail} It removes ${overridePreview.diff.removed} of ${
+            splitLines(noteAtStart).length
+          } note lines. It is held under Pending edits — approve it there to run it anyway, or discard it.`,
+          'Blast-radius hold: removal beyond the limit, awaiting your decision.',
+          { kind: 'blast-radius', reason: detail },
+          true,
+        )
+        return
+      }
+    }
     deps.patchMessage(delegationId, { delegation: { ...delegation, status: 'rejected' } })
     recordOmniRejection(deps, ctx, directive, call, `Hard gates failed: ${detail}`, null)
+    traceLocal.hold = { kind: 'hard-gate', reason: detail }
+    publish()
     deps.addMessage({
       role: 'assistant',
       author: 'harness',
@@ -1310,6 +1356,8 @@ async function verifyAndExecute(
   if (!preview.ok || !preview.diff) {
     deps.patchMessage(delegationId, { delegation: { ...delegation, status: 'rejected' } })
     recordOmniRejection(deps, ctx, directive, call, preview.message, null)
+    traceLocal.hold = { kind: 'engine', reason: preview.message }
+    publish()
     deps.addMessage({
       role: 'assistant',
       author: 'harness',
@@ -1349,6 +1397,10 @@ async function verifyAndExecute(
       null,
       'Low-RAM mode runs no safety-check model, so this edit is held for your decision under Pending edits instead of executing on its own. The note was not touched.',
       'No decision model in low-RAM mode; held for adjudication.',
+      {
+        kind: 'no-decision-model',
+        reason: 'Low-RAM mode runs no decision model (d1) — every gate-passing edit is held for the user.',
+      },
     )
     return
   }
@@ -1400,6 +1452,10 @@ async function verifyAndExecute(
         check.verdict === 'unavailable'
           ? 'd1 unavailable; held for adjudication.'
           : 'd1 disapproved; held for adjudication.',
+        {
+          kind: 'd1',
+          reason: check.reason ?? `d1 verdict: ${check.verdict}.`,
+        },
       )
       return
     }
@@ -1429,6 +1485,7 @@ async function verifyAndExecute(
         check.noul,
         `This edit ${collapse.reason}. That class of edit never runs silently (§8), so it is held for your decision under Pending edits — the note was not touched.`,
         'Blast-radius hold (§8): section-scale collapse held for adjudication despite d1 approval.',
+        { kind: 'blast-collapse', reason: collapse.reason },
       )
       return
     }
@@ -1452,6 +1509,8 @@ async function verifyAndExecute(
       `Execution outcome check failed: ${outcome.reason}`,
       confidence,
     )
+    traceLocal.hold = { kind: 'outcome', reason: outcome.reason }
+    publish()
     deps.addMessage({
       role: 'assistant',
       author: 'harness',
