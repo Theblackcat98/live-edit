@@ -1,20 +1,6 @@
 #!/bin/bash
-# Stop the four LiquidScribe llama.cpp servers started by start-models.sh.
+# Stop the four LiquidScribe llama.cpp servers started by start-models.sh
+# (or the model-manager daemon). Thin wrapper: scripts/model-manager.mjs owns
+# the pid-file kill. Per-member: pass names, e.g. `model-manager.mjs stop d1-omni`.
 set -u
-LOGDIR="$HOME/Documents/Models/logs/lfm3"
-fail=0
-for name in text omni d1-omni audio; do
-  pidfile="$LOGDIR/$name.pid"
-  if [ -f "$pidfile" ]; then
-    pid="$(cat "$pidfile")"
-    if kill "$pid" 2>/dev/null; then
-      echo "$name: stopped pid $pid"
-    else
-      echo "$name: pid $pid not running"
-    fi
-    rm -f "$pidfile"
-  else
-    echo "$name: no pid file"
-  fi
-done
-exit $fail
+exec node "$(cd "$(dirname "$0")" && pwd)/model-manager.mjs" stop --all

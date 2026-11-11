@@ -10,6 +10,7 @@ import { StatusBar } from './components/StatusBar'
 import { TraceDrawer } from './components/TraceDrawer'
 import { ToastView } from './components/ToastView'
 import { AboutDialog } from './components/AboutDialog'
+import { ModelSwitchDialog } from './components/ModelSwitchDialog'
 import { cx } from './lib/utils'
 
 type PhoneView = 'session' | 'note' | 'runtime'
@@ -71,7 +72,7 @@ export default function App() {
         target?.tagName === 'TEXTAREA' ||
         target?.isContentEditable === true
       const current = workspaceRef.current
-      const overlayOpen = aboutOpen || current.traceOpen
+      const overlayOpen = aboutOpen || current.traceOpen || Boolean(current.pendingSwitch)
       if (overlayOpen && event.key !== 'Escape') return
 
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
@@ -91,6 +92,10 @@ export default function App() {
       if (event.key === 'Escape') {
         if (aboutOpen) {
           setAboutOpen(false)
+          return
+        }
+        if (current.pendingSwitch) {
+          current.cancelPendingSwitch()
           return
         }
         if (current.traceOpen) {
@@ -280,6 +285,16 @@ export default function App() {
       <ToastView toast={workspace.toast} onDismiss={workspace.dismissToast} />
 
       <AboutDialog open={aboutOpen} onClose={() => setAboutOpen(false)} mode={workspace.mode} />
+
+      {workspace.pendingSwitch && (
+        <ModelSwitchDialog
+          plan={workspace.pendingSwitch}
+          from={workspace.mode}
+          switching={workspace.switchingModels}
+          onConfirm={workspace.confirmPendingSwitch}
+          onCancel={workspace.cancelPendingSwitch}
+        />
+      )}
     </div>
   )
 }

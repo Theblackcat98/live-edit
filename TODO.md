@@ -101,7 +101,17 @@ Tracked as GitHub Issues #7 (real-mic pass) and #8 (real-speaker pass).
 - Required servers: `scripts/start-models.sh` (idempotent) starts text :8080,
       omni :8083, d1-omni :8085 and audio :8086 (pid files in
       `~/Documents/Models/logs/lfm3/`); `scripts/stop-models.sh` stops them.
-      There is no :8081 server or probe any more.
+      Both are wrappers over `scripts/model-manager.mjs` (single source of
+      truth: member specs, pid files, health waits; per-member
+      `start|stop d1-omni` form). There is no :8081 server or probe any more.
+- **Model manager daemon** (2026-11-10): `npm run models:manager` serves
+      `GET /status`, `POST /start`, `POST /stop` on `127.0.0.1:8199`
+      (CORS-open, loopback-only, models outlive the daemon). When it runs, a
+      mode switch with missing/loaded-spare models asks first
+      (`ModelSwitchDialog`): starts the roster the mode needs, stops spares
+      only opt-in, polls health (90 s; d1 Q8_0 slowest), then applies the
+      mode — a member that never answers still switches with an honest error
+      toast. Daemon down → old behavior (switch now, degrade honestly).
 - **Run modes** (2026-11-09): `audio` (default; Audio 2B :8086
       chat/ASR/TTS, 1.7B :8080 authors tool calls, d1-Omni :8085 safety check →
       pending edit on disapproval), `omni` (legacy Omni-first; Omni :8083

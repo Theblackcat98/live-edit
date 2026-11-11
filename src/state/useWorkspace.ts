@@ -20,7 +20,7 @@ import { DEMO_SEQUENCE, INITIAL_NOTE, NOTE_PATH, NOTE_TITLE } from '../data/note
 import { speak, stopSpeaking, cleanSpeechText, speechSynthesisAvailable, VoiceRecorder } from '../lib/speech'
 import { buildSuggestions } from '../lib/suggestions'
 import { loadWorkspaceState, saveWorkspaceState, type PersistedWorkspace } from '../lib/storage'
-import { endpointUp, probeRuntime, synthesizeSpeech, transcribeAudio } from '../lib/bridge'
+import { ENDPOINTS, endpointUp, probeRuntime, synthesizeSpeech, transcribeAudio } from '../lib/bridge'
 import {
   loadRunMode,
   runModeInfo,
@@ -29,6 +29,8 @@ import {
   speechPortFor,
   type RunMode,
 } from '../lib/runmode'
+import { managerStart, managerStatus, managerStop } from '../lib/modelManager'
+import { managerNameFor, planModelSwitch, type ModelSwitchPlan } from '../lib/modelPlan'
 import { estimateTokens, makeId, sleep } from '../lib/utils'
 import { runPipelineTurn, type PipelineDeps, type RunResultSnapshot } from '../lib/pipeline'
 import {
@@ -145,6 +147,14 @@ export interface WorkspaceApi {
   mode: RunMode
   /** Switch run mode (blocked while a turn runs); persists across reloads. */
   setMode: (mode: RunMode) => void
+  /** A mode switch waiting on the model-manager dialog (start/stop members). */
+  pendingSwitch: ModelSwitchPlan | null
+  /** True while a confirmed switch starts/stops members and polls health. */
+  switchingModels: boolean
+  /** Apply the pending switch: start missing members, optionally stop spares. */
+  confirmPendingSwitch: (stopSpares: boolean) => void
+  /** Discard the pending switch without touching any model. */
+  cancelPendingSwitch: () => void
 }
 
 /**
@@ -218,6 +228,8 @@ export function useWorkspace(): WorkspaceApi {
   const [nowTick, setNowTick] = useState(Date.now())
   const [sessionStart] = useState(() => Date.now())
   const [runtimeHealth, setRuntimeHealth] = useState<RuntimeHealth | null>(null)
+  const [pendingSwitch, setPendingSwitch] = useState<ModelSwitchPlan | null>(null)
+  const [switchingModels, setSwitchingModels] = useState(false)
   const [mode, setModeState] = useState<RunMode>(() => loadRunMode())
   const [asrBusy, setAsrBusy] = useState(false)
   const [ttsBusy, setTtsBusy] = useState(false)
@@ -367,22 +379,9 @@ export function useWorkspace(): WorkspaceApi {
     )
   }, [])
 
-  /**
-   * Run-mode switch: blocked while a turn runs (the in-flight turn keeps the
-   * models it started with), persisted immediately, and announced in the
-   * transcript so the active configuration is never implicit.
-   */
-  const setMode = useCallback(
+  /** The mode-switch application itself: persist, announce, honest mic stop. */
+  const applyMode = useCallback(
     (next: RunMode) => {
-      if (next === modeRef.current) return
-      if (busyRef.current) {
-        notify(
-          'Worker is busy',
-          'Wait for the current call to finish before switching run mode.',
-          'neutral',
-        )
-        return
-      }
       modeRef.current = next
       setModeState(next)
       saveRunMode(next)
@@ -407,6 +406,114 @@ export function useWorkspace(): WorkspaceApi {
     },
     [addMessage, notify],
   )
+
+  /**
+   * Run-mode switch: blocked while a turn runs (the in-flight turn keeps the
+   * models it started with), persisted immediately, and announced in the
+   * transcript so the active configuration is never implicit. When the target
+   * mode's models differ from what is loaded — missing members, or loaded
+   * members it would not use — the switch asks first through the
+   * model-manager dialog (npm run models:manager); without the daemon it
+   * falls back to the old behavior: switch now, degrade honestly.
+   */
+  const setMode = useCallback(
+    (next: RunMode) => {
+      if (next === modeRef.current) return
+      if (busyRef.current) {
+        notify(
+          'Worker is busy',
+          'Wait for the current call to finish before switching run mode.',
+          'neutral',
+        )
+        return
+      }
+      if (pendingSwitch) return // already asking about a switch
+      const plan = planModelSwitch(next, healthRef.current)
+      if (!plan.toStart.length && !plan.spareLoaded.length) {
+        applyMode(next)
+        return
+      }
+      void (async () => {
+        if ((await managerStatus()) === null) {
+          applyMode(next)
+          notify(
+            'Models not managed',
+            'Run the model manager (npm run models:manager) so mode switches can start models themselves.',
+            'neutral',
+          )
+          return
+        }
+        setPendingSwitch(plan)
+      })()
+    },
+    [applyMode, notify, pendingSwitch],
+  )
+
+  /**
+   * Confirmed switch: start the missing members, optionally stop the spares,
+   * poll health until the mode's roster answers (d1-Omni Q8_0 is the slowest
+   * to load), then apply the mode. A member that never comes up degrades
+   * honestly — the switch still lands, with an error toast naming it.
+   */
+  const confirmPendingSwitch = useCallback(
+    (stopSpares: boolean) => {
+      const plan = pendingSwitch
+      if (!plan || switchingModels) return
+      setSwitchingModels(true)
+      void (async () => {
+        try {
+          try {
+            if (plan.toStart.length) await managerStart(plan.toStart.map(managerNameFor))
+          } catch {
+            applyMode(plan.mode)
+            notify(
+              'Model manager unreachable',
+              'Switched anyway — start the missing models with scripts/start-models.sh.',
+              'error',
+            )
+            return
+          }
+          if (stopSpares && plan.spareLoaded.length) {
+            try {
+              await managerStop(plan.spareLoaded.map(managerNameFor))
+            } catch {
+              // Non-fatal: the spares stay loaded; the mode still runs.
+            }
+          }
+          const deadline = Date.now() + 90_000
+          let missing = plan.toStart
+          while (missing.length && Date.now() < deadline) {
+            await sleep(2000)
+            const health = await probeRuntime()
+            healthRef.current = health
+            setRuntimeHealth(health)
+            missing = plan.toStart.filter((id) => !endpointUp(health, id))
+          }
+          applyMode(plan.mode)
+          if (missing.length) {
+            const names = missing
+              .map((id) => ENDPOINTS.find((endpoint) => endpoint.id === id)?.name ?? id)
+              .join(', ')
+            notify(
+              'Some models did not answer',
+              `${names} never came up — those stages degrade honestly until started.`,
+              'error',
+            )
+          }
+        } finally {
+          setSwitchingModels(false)
+          setPendingSwitch(null)
+        }
+      })()
+    },
+    [pendingSwitch, switchingModels, applyMode, notify],
+  )
+
+  /** Discard the pending switch without touching any model. */
+  const cancelPendingSwitch = useCallback(() => {
+    if (switchingModels) return
+    setPendingSwitch(null)
+  }, [switchingModels])
 
   const clearTransientHighlights = useCallback(() => {
     if (highlightTimerRef.current) {
@@ -1185,6 +1292,10 @@ export function useWorkspace(): WorkspaceApi {
     refreshRuntime,
     mode,
     setMode,
+    pendingSwitch,
+    switchingModels,
+    confirmPendingSwitch,
+    cancelPendingSwitch,
   }
 }
 

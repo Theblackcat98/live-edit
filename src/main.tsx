@@ -11,6 +11,7 @@ import './styles/document.css'
 import './styles/rail.css'
 import './styles/trace.css'
 import './styles/about.css'
+import './styles/model-switch.css'
 import './styles/responsive.css'
 import App from './App'
 

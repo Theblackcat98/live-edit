@@ -57,7 +57,13 @@ npm run typecheck
 > absent entirely. See [Run modes](#run-modes) for the per-mode endpoints.
 
 The app talks to **real local LFM3 servers** (llama.cpp, started by this repo's
-`scripts/start-models.sh`; `scripts/stop-models.sh` stops them):
+`scripts/start-models.sh`; `scripts/stop-models.sh` stops them). Both scripts
+are thin wrappers over `scripts/model-manager.mjs`, which owns the member
+specs, pid files and health waits, and can run as a loopback daemon
+(`npm run models:manager`). With the daemon up, a run-mode switch that needs
+models which are not answering asks first, then starts them (and, only if you
+opt in, stops the loaded models the mode does not use); without the daemon the
+switch lands immediately and offline stages degrade honestly, as before:
 
 - **Voice ASR** — the mic is captured locally as 16 kHz WAV and transcribed by
   the mode's audio server (`/v1/audio/transcriptions`):
