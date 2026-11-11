@@ -190,6 +190,62 @@ export interface TraceTimings {
   chat?: number
 }
 
+/**
+ * One message of a recorded exchange, as the turn inspector shows it: a
+ * serializable projection of the bridge's ChatMessage (tool_calls flattened
+ * to name + raw arguments).
+ */
+export interface ExchangeMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool'
+  content: string
+  /** Assistant message only: the calls that completion made. */
+  toolCalls?: Array<{ name: string; arguments: string }>
+  /** Tool-role message only: the id of the call this result answers. */
+  toolCallId?: string
+}
+
+/**
+ * One full request/response pair against a model server, recorded per turn
+ * no matter the outcome — conversational replies, tool-call decodes,
+ * retries and failures all land here so any turn is inspectable after the
+ * fact, not just turns that produced a verified tool call.
+ */
+export interface TurnExchange {
+  id: string
+  /** Which model slot served the exchange: the chat front door or the worker. */
+  role: 'chat' | 'worker'
+  /** Label within the turn: 'primary', 'repair retry', 'worker attempt 2', … */
+  label: string
+  /** Model name that answered (e.g. 'LFM3-Audio-2B'). */
+  model: string
+  /** URL the request hit. */
+  url: string
+  at: number
+  ms: number
+  /** False when the request threw, was aborted, or its reply was unusable. */
+  ok: boolean
+  /** Why the exchange failed (transport error, abort, or parse rejection). */
+  error?: string
+  request: {
+    messages: ExchangeMessage[]
+    stream: boolean
+    temperature: number
+    /** null = no max_tokens sent (uncapped decode). */
+    maxTokens: number | null
+    /** Names of the tool definitions attached, when any. */
+    tools?: string[]
+  }
+  /** Absent when the request never returned (transport failure / abort). */
+  response?: {
+    text: string
+    reasoning: string
+    toolCalls: Array<{ name: string; arguments: string }>
+    promptTokens: number
+    outputTokens: number
+    finishReason: string | null
+  }
+}
+
 export interface Trace {
   id: string
   at: number
@@ -217,6 +273,12 @@ export interface Trace {
   noteTokensAtStart: number
   workerNoteView: string
   runtime?: TraceRuntime
+  /**
+   * Every model request/response pair this turn made, in order —
+   * conversational and failed turns included. Absent on legacy persisted
+   * traces; the inspector treats absent as empty.
+   */
+  exchanges?: TurnExchange[]
 }
 
 export interface MessageAction {

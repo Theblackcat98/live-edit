@@ -13,10 +13,10 @@
  * channel is everything OUTSIDE <think> blocks, and only that reaches the
  * user's bubble.
  */
-
 import type { ChatMessage, ChatResult, ChatStreamOptions } from './bridge'
+import type { ToolName, TurnExchange } from '../types'
+import { captureExchange, workerExchangeTarget } from './exchange'
 import { chatCompleteStream } from './bridge'
-import type { ToolName } from '../types'
 import { NOTE_PATH } from '../data/note'
 import { TOOL_DEFS } from '../data/tools'
 import { parseToolCallXml, type ParsedToolCall } from './xml'
@@ -190,6 +190,8 @@ export interface WorkerChatInput {
   retry?: WorkerChatRetry
   /** Injectable bridge chat call (tests); defaults to the live 1.7B endpoint. */
   chat?: WorkerChatFn
+  /** Turn-exchange recorder (the inspector's Chat tab): request, sampler and outcome, failures included. */
+  onExchange?: (exchange: TurnExchange) => void
 }
 
 export function buildWorkerChatMessages(input: WorkerChatInput): ChatMessage[] {
@@ -322,9 +324,26 @@ export async function runWorkerChatTurn(input: WorkerChatInput): Promise<WorkerC
     }
   }
 
+  const messages = buildWorkerChatMessages(input)
+  const report = (completion: ChatResult | null, error?: string) => {
+    input.onExchange?.(
+      captureExchange({
+        role: 'worker',
+        label: input.retry ? 'invalid-reply retry' : 'chat turn',
+        ...workerExchangeTarget(),
+        messages,
+        stream: true,
+        temperature: WORKER_CHAT_TEMPERATURE,
+        maxTokens: WORKER_CHAT_SAMPLER.maxTokens,
+        completion,
+        ...(error ? { error } : {}),
+      }),
+    )
+  }
+
   let completion: ChatResult
   try {
-    completion = await chat(buildWorkerChatMessages(input), {
+    completion = await chat(messages, {
       temperature: WORKER_CHAT_TEMPERATURE,
       maxTokens: WORKER_CHAT_SAMPLER.maxTokens,
       signal: input.signal,
@@ -332,6 +351,7 @@ export async function runWorkerChatTurn(input: WorkerChatInput): Promise<WorkerC
     })
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
+    report(null, detail)
     throw new WorkerChatError('endpoint', `LFM3-1.7B chat failed: ${detail}`)
   }
 
@@ -352,6 +372,7 @@ export async function runWorkerChatTurn(input: WorkerChatInput): Promise<WorkerC
   })
 
   if (parsed) {
+    report(completion)
     return result({
       outcome: 'delegate',
       call: parsed,
@@ -360,12 +381,14 @@ export async function runWorkerChatTurn(input: WorkerChatInput): Promise<WorkerC
   }
 
   const visible = sanitizeWorkerChatText(text)
-  if (visible) return result({ outcome: 'answer', text: visible })
+  if (visible) {
+    report(completion)
+    return result({ outcome: 'answer', text: visible })
+  }
 
-  return result({
-    outcome: 'invalid',
-    error:
-      'the reply contained no parseable tool call and no visible text after stripping the ' +
-      'reasoning channel',
-  })
+  const invalidReason =
+    'the reply contained no parseable tool call and no visible text after stripping the ' +
+    'reasoning channel'
+  report(completion, invalidReason)
+  return result({ outcome: 'invalid', error: invalidReason })
 }

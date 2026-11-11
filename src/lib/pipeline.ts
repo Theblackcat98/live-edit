@@ -44,10 +44,11 @@ import type {
   ToolName,
   Trace,
   TraceRuntime,
+  TurnExchange,
   WorkerCall,
 } from '../types'
 import { NOTE_PATH } from '../data/note'
-import { TOOL_BY_NAME } from '../data/tools'
+import { TOOL_BY_NAME, TOOL_DEFS } from '../data/tools'
 import {
   buildPacketWorkerMessages,
   buildWorkerRetryMessages,
@@ -71,6 +72,7 @@ import { runHardGates } from './gates'
 import { runD1Check } from './d1check'
 import { createPendingEdit } from './pending'
 import { parseToolCallXml, type ParsedToolCall } from './xml'
+import { captureExchange, workerExchangeTarget } from './exchange'
 import {
   chatComplete,
   d1Decide,
@@ -195,6 +197,8 @@ interface TurnContext {
   liveUsage: Partial<ContextUsage>
   publish: () => void
   finish: (status: RunStatus) => void
+  /** Records one model exchange on the trace (inspector Chat tab) and publishes. */
+  recordExchange: (exchange: TurnExchange) => void
 }
 
 function makeTrace(command: string, source: 'text' | 'voice' | 'demo', note: string): Trace {
@@ -209,6 +213,7 @@ function makeTrace(command: string, source: 'text' | 'voice' | 'demo', note: str
     promptTokens: estimateTokens(note) + 180,
     noteTokensAtStart: estimateTokens(note),
     workerNoteView: '',
+    exchanges: [],
   }
 }
 
@@ -356,7 +361,21 @@ export async function runPipelineTurn(
   traceLocal.runtime = runtime
   const liveUsage: Partial<ContextUsage> = {}
 
-  const ctx: TurnContext = { command, noteAtStart, traceLocal, runtime, liveUsage, publish, finish }
+  const recordExchange = (exchange: TurnExchange) => {
+    traceLocal.exchanges = [...(traceLocal.exchanges ?? []), exchange]
+    publish()
+  }
+
+  const ctx: TurnContext = {
+    command,
+    noteAtStart,
+    traceLocal,
+    runtime,
+    liveUsage,
+    publish,
+    finish,
+    recordExchange,
+  }
 
   try {
     // Captured once at turn start: a mode switch mid-turn must never swap the
@@ -621,6 +640,7 @@ async function runOmniFirstTurn(
       lastRun,
       chatEndpoint,
       onText,
+      onExchange: ctx.recordExchange,
     })
   } catch (error) {
     retractStream()
@@ -825,6 +845,7 @@ async function runOmniFirstTurn(
             attemptedTool,
             anchorCorrection: anchorCorrectionFor(noteAtStart, attemptedParsed),
           })
+    const label = attemptText === '' ? 'packet decode · attempt 1' : 'packet decode · retry'
     let completion: ChatResult
     try {
       completion = await chatComplete('text', messages, sampler)
@@ -832,7 +853,37 @@ async function runOmniFirstTurn(
       // Transport failure (incl. the bridge's 90s timeout): retrying the
       // same dead/slow endpoint inside this turn buys nothing.
       attemptError = error instanceof Error ? error.message : 'worker request failed'
+      ctx.recordExchange(
+        captureExchange({
+          role: 'worker',
+          label,
+          ...workerExchangeTarget(),
+          messages,
+          stream: false,
+          temperature: sampler.temperature,
+          maxTokens: sampler.maxTokens,
+          tools: TOOL_DEFS.map((tool) => tool.name),
+          completion: null,
+          error: attemptError,
+        }),
+      )
       break
+    }
+    const recordPacketExchange = (error?: string) => {
+      ctx.recordExchange(
+        captureExchange({
+          role: 'worker',
+          label,
+          ...workerExchangeTarget(),
+          messages,
+          stream: false,
+          temperature: sampler.temperature,
+          maxTokens: sampler.maxTokens,
+          tools: TOOL_DEFS.map((tool) => tool.name),
+          completion,
+          ...(error ? { error } : {}),
+        }),
+      )
     }
     attemptText = completion.text
     const xmlInput = /<think>/.test(completion.text)
@@ -845,6 +896,7 @@ async function runOmniFirstTurn(
     attemptedParsed = parsed
     if (!parsed) {
       attemptError = 'The reply did not contain one parseable tool call in the repo XML format.'
+      recordPacketExchange(attemptError)
       continue
     }
     const required = TOOL_BY_NAME[parsed.name].params
@@ -853,8 +905,10 @@ async function runOmniFirstTurn(
     const missing = required.filter((name) => !(parsed.params[name] ?? '').trim())
     if (missing.length > 0) {
       attemptError = `The ${parsed.name} call is missing required parameter(s): ${missing.join(', ')}.`
+      recordPacketExchange(attemptError)
       continue
     }
+    recordPacketExchange()
     call = packetWorkerCall(
       parsed,
       completion.reasoning ?? '',
@@ -1031,6 +1085,7 @@ async function runWorkerChatFirstTurn(
       lastRun,
       signal: controller.signal,
       onText,
+      onExchange: ctx.recordExchange,
     })
     // One retry on an unusable reply: the rejected text and the exact parse
     // error are appended (the packet-worker retry pattern), never a guess.
@@ -1043,6 +1098,7 @@ async function runWorkerChatFirstTurn(
         lastRun,
         signal: controller.signal,
         onText,
+        onExchange: ctx.recordExchange,
         retry: { attemptText: rejected.raw, error: rejected.error ?? 'no usable reply' },
       })
     }

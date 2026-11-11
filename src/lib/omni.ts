@@ -40,9 +40,10 @@
  */
 
 import type { ChatMessage, ChatResult, ChatStreamOptions, ToolDef } from './bridge'
-import { chatCompleteStream } from './bridge'
-import type { Directive, OmniTurnResult } from '../types'
+import { chatCompleteStream, modelUrl } from './bridge'
+import type { Directive, OmniTurnResult, TurnExchange } from '../types'
 import { buildDirectiveRepairMessage, validateDirective } from './directive'
+import { captureExchange } from './exchange'
 import { NOTE_PATH, NOTE_TITLE } from '../data/note'
 import { truncate } from './utils'
 
@@ -315,6 +316,12 @@ export interface OmniTurnInput {
   chatEndpoint?: 'audio' | 'omni'
   /** Injectable bridge chat call (tests); defaults to the live chatEndpoint. */
   chat?: OmniChatFn
+  /**
+   * Turn-exchange recorder (the inspector's Chat tab): called once per
+   * request this turn makes — primary, repair retry, clarify follow-up —
+   * with the exact messages, sampler and outcome, failures included.
+   */
+  onExchange?: (exchange: TurnExchange) => void
 }
 
 // --- §6 context policy ------------------------------------------------------------
@@ -694,10 +701,13 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
    * One request against Omni. Tools requests get E2's bare-retry policy for
    * server-side tool-parse 500s (the client never sees the raw call — nothing
    * can be appended); tool-less requests surface endpoint errors directly.
+   * Every attempt — success, refusal, transport failure — is reported through
+   * input.onExchange so the inspector sees the whole turn, failures included.
    */
   async function request(
     messages: ChatMessage[],
     options: { tools?: ToolDef[]; streamDeltas?: boolean },
+    label: string,
   ): Promise<ChatResult> {
     const requestOptions: ChatStreamOptions = {
       temperature: OMNI_TEMPERATURE,
@@ -706,7 +716,33 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
       ...(options.tools ? { tools: options.tools } : {}),
       onToken: streamingOnToken(options.streamDeltas === true),
     }
-    const attempt = () => chat(messages, requestOptions)
+    const report = (completion: ChatResult | null, error?: string) => {
+      input.onExchange?.(
+        captureExchange({
+          role: 'chat',
+          label,
+          model: endpointState.name,
+          url: modelUrl(endpointState.port, '/v1/chat/completions'),
+          messages,
+          stream: true,
+          temperature: OMNI_TEMPERATURE,
+          maxTokens: OMNI_MAX_TOKENS,
+          ...(options.tools ? { tools: options.tools.map((tool) => tool.function.name) } : {}),
+          completion,
+          ...(error ? { error } : {}),
+        }),
+      )
+    }
+    const attempt = async (): Promise<ChatResult> => {
+      try {
+        const completion = await chat(messages, requestOptions)
+        report(completion)
+        return completion
+      } catch (error) {
+        report(null, error instanceof Error ? error.message : String(error))
+        throw error
+      }
+    }
     try {
       const completion = await attempt()
       promptTokens += completion.usage.promptTokens
@@ -745,7 +781,7 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
 
   // -- stage 1: the primary tools call --------------------------------------------
   const messages = buildOmniMessages(input)
-  const primary = await request(messages, { tools: OMNI_TOOLS, streamDeltas: true })
+  const primary = await request(messages, { tools: OMNI_TOOLS, streamDeltas: true }, 'primary · tools')
   if (aborted()) throw new TurnAborted()
 
   const firstCall = primary.toolCalls[0] ?? null
@@ -785,8 +821,7 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
     { role: 'user', content: repairUserMessage },
   ]
   if (aborted()) throw new TurnAborted()
-  const repaired = await request(repairMessages, { tools: OMNI_TOOLS })
-  if (aborted()) throw new TurnAborted()
+  const repaired = await request(repairMessages, { tools: OMNI_TOOLS }, 'repair retry')
 
   const secondCall = repaired.toolCalls[0] ?? null
   const secondEvaluation = evaluateToolCall(secondCall)
@@ -826,7 +861,7 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
     { role: 'user', content: CLARIFY_FOLLOWUP_INSTRUCTION },
   ]
   if (aborted()) throw new TurnAborted()
-  const clarify = await request(clarifyMessages, { streamDeltas: true })
+  const clarify = await request(clarifyMessages, { streamDeltas: true }, 'clarify follow-up')
   if (aborted()) throw new TurnAborted()
   const question = sanitizeOmniText(clarify.text)
   if (!question) {

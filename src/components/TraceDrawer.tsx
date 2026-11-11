@@ -13,7 +13,7 @@ import {
   Sparkles,
   X,
 } from 'lucide-react'
-import type { CriticCheck, Probability, RejectedTraceRecord, Trace } from '../types'
+import type { CriticCheck, ExchangeMessage, Probability, RejectedTraceRecord, Trace, TurnExchange } from '../types'
 import type { RunMode } from '../lib/runmode'
 import { chatModelShort } from '../lib/runmode'
 import { TOOL_DEFS } from '../data/tools'
@@ -135,8 +135,136 @@ function XmlView({ xml }: { xml: string }) {
   )
 }
 
+function ExchangeMessagesView({ messages }: { messages: ExchangeMessage[] }) {
+  return (
+    <div className="exchange-messages">
+      {messages.map((message, index) => (
+        <div className="exchange-msg" key={index}>
+          <span className={cx('exchange-msg-role mono', `r-${message.role}`)}>{message.role}</span>
+          <div className="exchange-msg-body">
+            {message.content && <pre className="mono">{message.content}</pre>}
+            {message.toolCalls?.map((call, callIndex) => (
+              <div className="exchange-msg-call" key={callIndex}>
+                <span className="chip chip-accent mono">{call.name}</span>
+                <pre className="mono">{call.arguments}</pre>
+              </div>
+            ))}
+            {message.toolCallId && (
+              <span className="exchange-msg-tool-id mono">answers {message.toolCallId}</span>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ExchangeCard({
+  exchange,
+  index,
+  total,
+}: {
+  exchange: TurnExchange
+  index: number
+  total: number
+}) {
+  const [showContext, setShowContext] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    setShowContext(false)
+    setCopied(false)
+  }, [exchange.id])
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(exchange, null, 2))
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1600)
+    } catch {
+      // Clipboard access can be blocked outside a user gesture; the view stays intact.
+    }
+  }
+
+  const response = exchange.response
+  return (
+    <article className={cx('exchange-card', !exchange.ok && 'is-failed')} data-exchange-label={exchange.label}>
+      <header className="exchange-head">
+        <span className="exchange-index mono">
+          {index + 1}/{total}
+        </span>
+        <span className="chip chip-ghost mono">{exchange.role}</span>
+        <strong className="exchange-model">{exchange.model}</strong>
+        <span className="exchange-label mono">{exchange.label}</span>
+        <span className={cx('chip mono', exchange.ok ? 'chip-green' : 'chip-red')}>
+          {exchange.ok ? 'ok' : 'failed'}
+        </span>
+        <span className="mono">{Math.round(exchange.ms)} ms</span>
+        <button
+          type="button"
+          className="icon-button"
+          onClick={copy}
+          aria-label="Copy exchange JSON"
+          title="Copy exchange JSON"
+        >
+          {copied ? <CheckCheck size={12} /> : <Copy size={12} />}
+        </button>
+      </header>
+      <div className="exchange-meta mono">
+        <span className="exchange-url">{exchange.url}</span>
+        <span>temp {exchange.request.temperature}</span>
+        <span>max_tokens {exchange.request.maxTokens ?? '∞'}</span>
+        <span>{exchange.request.stream ? 'stream' : 'complete'}</span>
+        {exchange.request.tools && <span>tools {exchange.request.tools.join(' + ')}</span>}
+        {response && (
+          <span>
+            {response.promptTokens}→{response.outputTokens} tok
+          </span>
+        )}
+        {response?.finishReason && (
+          <span className={cx(response.finishReason === 'length' && 'is-truncated')}>
+            finish {response.finishReason}
+          </span>
+        )}
+      </div>
+      {exchange.error && <div className="exchange-error mono">{exchange.error}</div>}
+      {response?.reasoning && (
+        <div className="trace-thought">
+          <span className="trace-thought-label mono">
+            <Sparkles size={10} />
+            &lt;think&gt;
+          </span>
+          <p>{response.reasoning}</p>
+        </div>
+      )}
+      {response?.text && <pre className="exchange-reply mono">{response.text}</pre>}
+      {response && response.toolCalls.length > 0 && (
+        <div className="exchange-calls">
+          {response.toolCalls.map((call, callIndex) => (
+            <div className="exchange-call" key={callIndex}>
+              <span className="chip chip-accent mono">{call.name}</span>
+              <pre className="mono">{call.arguments}</pre>
+            </div>
+          ))}
+        </div>
+      )}
+      <button
+        type="button"
+        className="trace-note-toggle mono"
+        onClick={() => setShowContext((previous) => !previous)}
+      >
+        <Clipboard size={10} />
+        {showContext ? 'Hide' : 'Show'} context sent · {exchange.request.messages.length} messages
+      </button>
+      {showContext && <ExchangeMessagesView messages={exchange.request.messages} />}
+    </article>
+  )
+}
+
+
 export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectRun, onClose }: TraceDrawerProps) {
   const chatShort = chatModelShort(mode)
+  const [tab, setTab] = useState<'decision' | 'chat'>('decision')
   const [copied, setCopied] = useState(false)
   const [showNoteView, setShowNoteView] = useState(false)
 
@@ -152,6 +280,9 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectR
   useEffect(() => {
     setCopied(false)
     setShowNoteView(false)
+    // Conversational and failed turns have no decision content — open where
+    // the information is. Delegations and executed actions keep the classic view.
+    setTab(trace?.call || trace?.execution || !trace?.exchanges?.length ? 'decision' : 'chat')
   }, [trace?.id, open])
 
   const summary = useMemo(() => {
@@ -189,6 +320,7 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectR
           }
         : undefined,
       timings: trace.timings,
+      exchanges: trace.exchanges ?? [],
     }
   }, [trace])
 
@@ -299,6 +431,31 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectR
                 ))}
               </div>
             )}
+            <div className="trace-tabs" role="tablist" aria-label="Turn inspection">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === 'decision'}
+                className={cx('trace-tab', tab === 'decision' && 'is-active')}
+                onClick={() => setTab('decision')}
+              >
+                Decision
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === 'chat'}
+                className={cx('trace-tab', tab === 'chat' && 'is-active')}
+                onClick={() => setTab('chat')}
+              >
+                Chat
+                {!!trace.exchanges?.length && (
+                  <span className="trace-tab-count mono">{trace.exchanges.length}</span>
+                )}
+              </button>
+            </div>
+            {tab === 'decision' ? (
+              <>
             <div className="trace-summary-grid">
               <div className="trace-summary-cell">
                 <span className="mono">action</span>
@@ -775,6 +932,33 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectR
                 Download rejected · JSONL
               </button>
             </div>
+              </>
+            ) : (
+              <div className="exchange-list">
+                {trace.exchanges?.length ? (
+                  trace.exchanges.map((exchange, index) => (
+                    <ExchangeCard
+                      key={exchange.id}
+                      exchange={exchange}
+                      index={index}
+                      total={trace.exchanges!.length}
+                    />
+                  ))
+                ) : (
+                  <div className="exchange-empty">
+                    <div className="trace-empty-icon">
+                      <ScanSearch size={20} />
+                    </div>
+                    <h3>No model exchanges recorded</h3>
+                    <p>
+                      This turn predates the inspector, or never reached a model (offline
+                      pre-check, undo/redo directive). Every turn that calls a model — chat,
+                      worker decode, retry, failure — records its request and response here.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </aside>

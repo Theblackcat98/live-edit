@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatMessage, ChatResult, ChatStreamOptions } from './bridge'
+import type { TurnExchange } from '../types'
 import { NOTE_PATH } from '../data/note'
 import {
   buildWorkerChatMessages,
@@ -216,5 +217,62 @@ describe('runWorkerChatTurn outcomes', () => {
       kind: 'endpoint',
     })
     await expect(runWorkerChatTurn(baseInput({ chat }))).rejects.toBeInstanceOf(WorkerChatError)
+  })
+})
+
+describe('runWorkerChatTurn — exchange recording (inspector Chat tab)', () => {
+  it('records the context, uncapped sampler and reply of an answer', async () => {
+    const { chat } = fakeChat(completion({ text: '<think>privately deliberating</think>Hello there.' }))
+    const exchanges: TurnExchange[] = []
+    const result = await runWorkerChatTurn(
+      baseInput({ command: 'hello', chat, onExchange: (e) => exchanges.push(e) }),
+    )
+    expect(result.outcome).toBe('answer')
+    expect(exchanges).toHaveLength(1)
+    const exchange = exchanges[0]
+    expect(exchange.ok).toBe(true)
+    expect(exchange.role).toBe('worker')
+    expect(exchange.label).toBe('chat turn')
+    expect(exchange.model).toBe('LFM3-1.7B')
+    expect(exchange.url).toContain(':8080/v1/chat/completions')
+    expect(exchange.request.maxTokens).toBeNull()
+    expect(exchange.request.messages.at(-1)?.content).toContain('hello')
+    expect(exchange.response?.text).toContain('Hello there.')
+  })
+
+  it('labels the invalid-reply retry separately', async () => {
+    const { chat } = fakeChat(completion({ text: '<think>only thinking, no reply</think>' }))
+    const exchanges: TurnExchange[] = []
+    await runWorkerChatTurn(
+      baseInput({
+        chat,
+        retry: { attemptText: '<think>only thinking</think>', error: 'no visible text' },
+        onExchange: (e) => exchanges.push(e),
+      }),
+    )
+    expect(exchanges).toHaveLength(1)
+    expect(exchanges[0].label).toBe('invalid-reply retry')
+  })
+
+  it('marks an unusable reply as failed while keeping the raw response', async () => {
+    const { chat } = fakeChat(completion({ text: '<think>only thinking, nothing visible</think>' }))
+    const exchanges: TurnExchange[] = []
+    const result = await runWorkerChatTurn(baseInput({ chat, onExchange: (e) => exchanges.push(e) }))
+    expect(result.outcome).toBe('invalid')
+    expect(exchanges[0].ok).toBe(false)
+    expect(exchanges[0].error).toContain('no parseable tool call')
+    expect(exchanges[0].response?.text).toContain('<think>')
+  })
+
+  it('records the transport failure when the endpoint throws', async () => {
+    const { chat } = fakeChat(new Error('HTTP 503 nope'))
+    const exchanges: TurnExchange[] = []
+    await expect(
+      runWorkerChatTurn(baseInput({ chat, onExchange: (e) => exchanges.push(e) })),
+    ).rejects.toBeInstanceOf(WorkerChatError)
+    expect(exchanges).toHaveLength(1)
+    expect(exchanges[0].ok).toBe(false)
+    expect(exchanges[0].error).toContain('HTTP 503')
+    expect(exchanges[0].response).toBeUndefined()
   })
 })

@@ -1,4 +1,4 @@
-import { Keyboard, Mic } from 'lucide-react'
+import { Keyboard, Mic, ScanSearch } from 'lucide-react'
 import type { Message } from '../types'
 import { cx, pad } from '../lib/utils'
 import { LogoMark } from './LogoMark'
@@ -74,6 +74,18 @@ export function MessageBubble({ message, onAction, onOpenTrace, recent }: Messag
             <span className="message-tag message-tag-error mono">guardrail</span>
           )}
           <span className="message-time mono">{clockOf(message.at)}</span>
+          {message.runId && (
+            <button
+              type="button"
+              className="message-inspect"
+              onClick={() => onOpenTrace(message.runId)}
+              aria-label="Inspect this turn"
+              title="Inspect this turn — context, thinking, tool calls"
+            >
+              <ScanSearch size={10} />
+              <span className="mono">inspect</span>
+            </button>
+          )}
         </div>
         <p className="message-assistant-text">
           <TypewriterText text={message.text} />
