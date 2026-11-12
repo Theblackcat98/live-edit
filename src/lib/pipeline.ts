@@ -30,20 +30,10 @@ import type {
   Message,
   OmniTurnResult,
   PendingEdit,
-  PipelineStage,
   Probability,
-  RejectedTraceRecord,
-  RunStatus,
-  RuntimeHealth,
-  RuntimeSource,
-  Snapshot,
-  StageId,
-  StageState,
-  Toast,
   ToolName,
   Trace,
   TraceRuntime,
-  TurnExchange,
   TurnHold,
   WorkerCall,
 } from '../types'
@@ -79,141 +69,15 @@ import {
   endpointUp,
   type ChatResult,
 } from './bridge'
-import { estimateTokens, makeId } from './utils'
 import { splitLines } from './doc'
-import type { VoiceRecorder } from './speech'
 
-/** Result of a snapshot-stack restore, as the hook's restoreHistory reports it. */
-export interface RunResultSnapshot {
-  ok: boolean
-  message: string
-  snapshot?: Snapshot
-  note: string
-}
-
-/**
- * Every hook capability the turn pipeline uses, as explicit dependencies.
- * The hook owns the state; the pipeline reads and updates it only through
- * these.
- */
-export interface PipelineDeps {
-  // --- session refs (kept current by the hook across renders) ---------------
-  /** True while a turn is executing; the busy gate and the finally path read and write it. */
-  busyRef: { current: boolean }
-  /** Latest note text; the turn grounds against the value at its start. */
-  noteRef: { current: string }
-  /** Current snapshot-stack index; drives the undo/redo directive deltas. */
-  historyIndexRef: { current: number }
-  /** Completed runs (newest first); the conversational branch cites the latest. */
-  runsRef: { current: Trace[] }
-  /** Transcript messages; the conversational branch replays recent turns as memory. */
-  messagesRef: { current: Message[] }
-  /** Latest runtime health; decides which model paths go live instead of fallback. */
-  healthRef: { current: RuntimeHealth | null }
-  /**
-   * Active run mode, kept current by the hook. Read once at turn start: a
-   * switch mid-turn must never change the in-flight turn's models.
-   */
-  modeRef: { current: RunMode }
-  /** Where the last voice capture was transcribed; recorded on the run's trace. */
-  asrSourceRef: { current: RuntimeSource }
-  /** Duration of the last voice capture, recorded on the user message. */
-  lastVoiceSecondsRef: { current: number | undefined }
-  /** In-flight chat stream controller; aborted on barge-in, reassigned per stream. */
-  chatAbortRef: { current: AbortController | null }
-  /** Idle-stage reset timer; rescheduled when a run finishes. */
-  idleTimerRef: { current: number | null }
-  /** Latest trace, mirrored out of React state for synchronous readers. */
-  traceRef: { current: Trace | null }
-  /** Active microphone capture, stopped when a turn starts. */
-  recorderRef: { current: VoiceRecorder | null }
-
-  // --- state setters ----------------------------------------------------------
-  /** Busy flag for the UI while a turn runs. */
-  setBusy: (busy: boolean) => void
-  /** Composer text, cleared when a turn starts. */
-  setCommandInput: (value: string) => void
-  /** Source-edit pane, closed when a turn starts. */
-  setSourceMode: (value: boolean) => void
-  /** Execution diff highlight on the note. */
-  setDiff: (diff: ExecutionDiff | null) => void
-  /** Pipeline stage chip; finish() also uses the updater form. */
-  setStage: (stage: PipelineStage | ((current: PipelineStage) => PipelineStage)) => void
-  /** A/B/C stage chips. */
-  setStageStates: (states: Record<StageId, StageState>) => void
-  /** Which model currently owns the flow rail. */
-  setFlowModel: (model: 'omni' | 'd1' | 'worker' | null) => void
-  /** Live trace of the running turn. */
-  setTrace: (trace: Trace) => void
-  /** Completed-run list (newest first, capped at 24). */
-  setRuns: (runs: Trace[]) => void
-  /** Transcript updates: drops the empty bubble when a stream aborts before its first token. */
-  setMessages: (update: (previous: Message[]) => Message[]) => void
-  /** Rolling context-usage estimate after each branch. */
-  setContextUsage: (update: (previous: ContextUsage) => ContextUsage) => void
-  /** Rejected-call records shown in the trace drawer. */
-  setRejectedTraces: (update: (previous: RejectedTraceRecord[]) => RejectedTraceRecord[]) => void
-  /** Store a pending edit for user adjudication (design.md §9); the hook owns the queue. */
-  addPendingEdit: (pending: PendingEdit) => void
-
-  // --- message and history mutators -------------------------------------------
-  /** Append a transcript message; returns its id. */
-  addMessage: (message: Omit<Message, 'id' | 'at'> & { at?: number; id?: string }) => string
-  /** Patch a transcript message in place (streamed text, delegation cards). */
-  patchMessage: (id: string, patch: Partial<Message>) => void
-  /** Snapshot-stack rollback used by the undo/redo directives. */
-  restoreHistory: (targetIndex: number) => RunResultSnapshot
-  /** Commit a note edit as a new snapshot; returns the snapshot. */
-  commitNote: (nextNote: string, label: string, tool: string) => Snapshot
-  /** Toast notifications for rejections, stops and busy refusals. */
-  notify: (title: string, detail?: string, tone?: Toast['tone']) => void
-
-  // --- voice and highlight plumbing -------------------------------------------
-  /** Stop any spoken audio (model TTS fetch, audio element, browser voice). */
-  stopSpeech: () => void
-  /** Stop an active microphone capture when a turn starts. */
-  stopMic: () => void
-  /** Drop transient note highlights immediately when a turn starts. */
-  clearTransientHighlights: () => void
-  /** Speak an assistant reply when the speaker is on. */
-  speakReply: (text: string) => void
-  /** Fade the diff highlight out after a successful execution. */
-  scheduleHighlightClear: () => void
-}
-
-/**
- * Per-turn state shared by every stage: the trimmed command, the note as it
- * was when the turn started, the mutable trace the original closure updated
- * in place, the run's provenance labels, the measured live token usage, and
- * the trace publishers defined inside runPipelineTurn.
- */
-interface TurnContext {
-  command: string
-  noteAtStart: string
-  traceLocal: Trace
-  runtime: TraceRuntime
-  liveUsage: Partial<ContextUsage>
-  publish: () => void
-  finish: (status: RunStatus) => void
-  /** Records one model exchange on the trace (inspector Chat tab) and publishes. */
-  recordExchange: (exchange: TurnExchange) => void
-}
-
-function makeTrace(command: string, source: 'text' | 'voice' | 'demo', note: string): Trace {
-  return {
-    id: makeId('run'),
-    at: Date.now(),
-    command,
-    source,
-    timings: { route: 0, generate: 0, critic: 0, execute: 0, total: 0 },
-    status: 'running',
-    outputTokens: 0,
-    promptTokens: estimateTokens(note) + 180,
-    noteTokensAtStart: estimateTokens(note),
-    workerNoteView: '',
-    exchanges: [],
-  }
-}
+export type { PipelineDeps, RunResultSnapshot } from './flow/turnContext'
+import {
+  createTracePublisher,
+  makeTrace,
+  type PipelineDeps,
+  type TurnContext,
+} from './flow/turnContext'
 
 /**
  * Recent (user command, assistant reply) pairs replayed as chat turns.
@@ -302,43 +166,7 @@ export async function runPipelineTurn(
     durationSec: source === 'text' ? undefined : deps.lastVoiceSecondsRef.current,
   })
 
-  let closed = false
-  const publish = () => {
-    const copy: Trace = {
-      ...traceLocal,
-      timings: { ...traceLocal.timings },
-    }
-    deps.setTrace(copy)
-    deps.traceRef.current = copy
-  }
-  const finish = (status: RunStatus) => {
-    if (closed) return
-    closed = true
-    traceLocal.status = status
-    traceLocal.timings.total = Number(
-      (
-        traceLocal.timings.route +
-        traceLocal.timings.generate +
-        traceLocal.timings.critic +
-        traceLocal.timings.execute +
-        (traceLocal.timings.chat ?? 0)
-      ).toFixed(1),
-    )
-    const finished: Trace = { ...traceLocal, timings: { ...traceLocal.timings } }
-    deps.setTrace(finished)
-    deps.traceRef.current = finished
-    deps.runsRef.current = [finished, ...deps.runsRef.current].slice(0, 24)
-    deps.setRuns(deps.runsRef.current)
-    deps.setStage('complete')
-    deps.setFlowModel(null)
-    deps.setBusy(false)
-    deps.busyRef.current = false
-    if (deps.idleTimerRef.current) window.clearTimeout(deps.idleTimerRef.current)
-    deps.idleTimerRef.current = window.setTimeout(() => {
-      deps.setStage((current) => (current === 'complete' ? 'idle' : current))
-      deps.idleTimerRef.current = null
-    }, 1700)
-  }
+  const { publish, finish, recordExchange, isClosed } = createTracePublisher(deps, traceLocal)
 
   const runtime: TraceRuntime = {
     route: 'fallback',
@@ -350,11 +178,6 @@ export async function runPipelineTurn(
   deps.asrSourceRef.current = 'fallback'
   traceLocal.runtime = runtime
   const liveUsage: Partial<ContextUsage> = {}
-
-  const recordExchange = (exchange: TurnExchange) => {
-    traceLocal.exchanges = [...(traceLocal.exchanges ?? []), exchange]
-    publish()
-  }
 
   const ctx: TurnContext = {
     command,
@@ -381,7 +204,7 @@ export async function runPipelineTurn(
     return
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown orchestrator failure.'
-    if (!closed) {
+    if (!isClosed()) {
       traceLocal.status = 'failed'
       deps.addMessage({
         role: 'assistant',
