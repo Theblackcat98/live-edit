@@ -597,11 +597,10 @@ async function main() {
       const last = runs[0] ?? null // runs are stored newest-first
       return { count: runs.length, status: last ? last.status : null, command: last ? last.command : null,
                id: last ? last.id ?? null : null,
-               critic: last ? last.critic ?? null : null, runtime: last ? last.runtime ?? null : null,
-               span: last ? last.span ?? null : null, grounding: last ? last.grounding ?? null : null,
+               runtime: last ? last.runtime ?? null : null,
                directive: last ? last.directive ?? null : null, call: last ? last.call ?? null : null,
                omniRepair: last ? last.omniRepair ?? null : null,
-               d1Check: last ? last.d1Check ?? null : null, route: last ? last.route ?? null : null }
+               d1Check: last ? last.d1Check ?? null : null }
     })()`)
   }
 
