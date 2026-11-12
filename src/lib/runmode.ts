@@ -27,6 +27,8 @@
  * bumped.
  */
 
+import { MODES, isRunMode, modeDef } from './modes'
+
 export type RunMode = 'audio' | 'omni' | 'worker-d1' | 'lowram'
 
 export interface RunModeInfo {
@@ -38,48 +40,14 @@ export interface RunModeInfo {
   description: string
 }
 
-export const RUN_MODES: RunModeInfo[] = [
-  {
-    id: 'audio',
-    label: 'Audio-first',
-    short: 'Audio',
-    description:
-      'Audio 2B (:8086) answers, the 1.7B (:8080) authors tool calls, d1-Omni (:8085) checks ' +
-      'every edit. ASR and TTS use :8086.',
-  },
-  {
-    id: 'omni',
-    label: 'Omni-first (legacy)',
-    short: 'Omni',
-    description:
-      'Omni 2B (:8083) answers, the 1.7B (:8080) authors tool calls, d1-Omni (:8085) checks ' +
-      'every edit. ASR and TTS use :8083.',
-  },
-  {
-    id: 'worker-d1',
-    label: '1.7B + d1',
-    short: '1.7B + d1',
-    description:
-      'LFM3-1.7B (:8080) chats and authors tool calls; d1-Omni (:8085) decides edit safety. ' +
-      'No front-door model runs; ASR and TTS use :8085.',
-  },
-  {
-    id: 'lowram',
-    label: '1.7B',
-    short: '1.7B',
-    description:
-      'Low-RAM: only LFM3-1.7B (:8080). Tool calls pass the hard gates and are held for your approval; no d1. ' +
-      'Mic ASR is off — type instead; speech uses the browser voice.',
-  },
-]
+/** The catalog, derived from the registry — never a second copy. */
+export const RUN_MODES: RunModeInfo[] = Object.values(MODES).map((def) => def.info)
 
 export const RUN_MODE_STORAGE_KEY = 'liquidscribe.runmode.v1'
 
 export const DEFAULT_RUN_MODE: RunMode = 'audio'
 
-function isRunMode(value: unknown): value is RunMode {
-  return value === 'audio' || value === 'omni' || value === 'worker-d1' || value === 'lowram'
-}
+export { isRunMode }
 
 /** Absent, corrupt, or unknown persistent values all load as `audio`. */
 export function loadRunMode(): RunMode {
@@ -101,7 +69,7 @@ export function saveRunMode(mode: RunMode): void {
 }
 
 export function runModeInfo(mode: RunMode): RunModeInfo {
-  return RUN_MODES.find((info) => info.id === mode) ?? RUN_MODES[0]
+  return modeDef(mode).info
 }
 
 /**
@@ -111,11 +79,9 @@ export function runModeInfo(mode: RunMode): RunModeInfo {
  */
 export type SpeechEndpoint = 'audio' | 'omni' | 'd1omni' | null
 
+/** @deprecated Read `modeDef(mode).speech`; kept for the existing tests. */
 export function speechEndpointFor(mode: RunMode): SpeechEndpoint {
-  if (mode === 'audio') return 'audio'
-  if (mode === 'omni') return 'omni'
-  if (mode === 'worker-d1') return 'd1omni'
-  return null
+  return modeDef(mode).speech
 }
 
 /** Port for the mode's speech endpoint, for honest offline messages. */
@@ -133,16 +99,12 @@ export function speechPortFor(endpoint: SpeechEndpoint): number | null {
 
 /** The model that answers chat in a mode — the author label on its replies. */
 export function chatModelName(mode: RunMode): string {
-  if (mode === 'audio') return 'LFM3-Audio-2B'
-  if (mode === 'omni') return 'LFM3-Omni-2B'
-  return 'LFM3-1.7B'
+  return modeDef(mode).chat.author
 }
 
 /** Short chat-model label for compact status surfaces. */
 export function chatModelShort(mode: RunMode): string {
-  if (mode === 'audio') return 'Audio'
-  if (mode === 'omni') return 'Omni'
-  return '1.7B'
+  return modeDef(mode).chat.short
 }
 
 /**
@@ -150,8 +112,5 @@ export function chatModelShort(mode: RunMode): string {
  * mode; null in `lowram` (no audio server — the mic is honestly disabled).
  */
 export function transcribingModel(mode: RunMode): string | null {
-  if (mode === 'audio') return 'LFM3-Audio-2B'
-  if (mode === 'omni') return 'LFM3-Omni-2B'
-  if (mode === 'worker-d1') return 'd1-Omni-2B'
-  return null
+  return modeDef(mode).chat.transcriber
 }
