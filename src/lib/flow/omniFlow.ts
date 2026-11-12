@@ -76,6 +76,10 @@ export async function runOmniFirstTurn(
     runId: traceLocal.id,
   })
 
+  // Barge-in: the controller is registered so a new command can cut this
+  // stream mid-turn, exactly like the worker-chat flow.
+  const controller = new AbortController()
+  deps.chatAbortRef.current = controller
   let raw: OmniTurnResult | null
   try {
     raw = await runOmniTurn({
@@ -85,6 +89,7 @@ export async function runOmniFirstTurn(
       note: noteAtStart,
       lastRun,
       chatEndpoint,
+      signal: controller.signal,
       onText,
       onExchange: ctx.recordExchange,
     })
@@ -93,6 +98,8 @@ export async function runOmniFirstTurn(
     throw new Error(
       `Omni turn failed: ${error instanceof Error ? error.message : 'unknown error'}`,
     )
+  } finally {
+    if (deps.chatAbortRef.current === controller) deps.chatAbortRef.current = null
   }
   if (!raw) {
     retractStream()
