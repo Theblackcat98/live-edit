@@ -9,13 +9,15 @@ export const TOOL_DEFS: ToolDefinition[] = [
         name: 'position',
         type: 'enum: append | prepend | after_line | under_heading',
         required: true,
-        description: 'Where the content is inserted.',
+        description:
+          "where the content is inserted — under_heading inserts at the END of that heading's section (after its existing content); after_line inserts immediately after line N",
       },
       {
         name: 'anchor',
         type: 'string | integer',
         required: false,
-        description: 'Line number or exact heading supplied by the supervisor.',
+        description:
+          'line number or exact heading text to anchor the insertion (required for after_line and under_heading)',
       },
       { name: 'content', type: 'string', required: true, description: 'Markdown to insert.' },
     ],
