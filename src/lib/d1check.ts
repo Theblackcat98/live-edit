@@ -133,6 +133,20 @@ export async function runD1Check(input: D1CheckInput): Promise<D1CheckResult> {
     }
   }
 
+  // What d1 reported beyond the verdict inputs: the full choice distributions
+  // (the probability behind 'safe'/'supported') and the packet's token cost.
+  // Carried on every non-error result so the UI can show them.
+  const reported: Pick<D1CheckResult, 'probabilities' | 'promptTokens'> = {}
+  const safetyProbs = decision.answers[CHOICE_QUESTION_ID]
+  const targetProbs = decision.answers[TARGET_QUESTION_ID]
+  const probabilities: NonNullable<D1CheckResult['probabilities']> = {}
+  if (safetyProbs?.type === 'choice' && safetyProbs.probabilities && Object.keys(safetyProbs.probabilities).length)
+    probabilities.destructiveSafety = safetyProbs.probabilities
+  if (targetProbs?.type === 'choice' && targetProbs.probabilities && Object.keys(targetProbs.probabilities).length)
+    probabilities.targetSupport = targetProbs.probabilities
+  if (Object.keys(probabilities).length) reported.probabilities = probabilities
+  if (decision.usage?.promptTokens) reported.promptTokens = decision.usage.promptTokens
+
   const noulAnswer = decision.answers[NOUL_QUESTION_ID]
   const noul =
     noulAnswer !== undefined && noulAnswer.type === 'noul' && typeof noulAnswer.noul === 'number'
@@ -190,6 +204,7 @@ export async function runD1Check(input: D1CheckInput): Promise<D1CheckResult> {
       executionConfidence,
       reason: `d1 answer unusable: ${problems.join('; ')}`,
       ms: elapsedMs(),
+      ...reported,
     }
   }
 
@@ -215,6 +230,7 @@ export async function runD1Check(input: D1CheckInput): Promise<D1CheckResult> {
         `${CLARITY_QUESTION_ID} ${intentClarity} ≥ ${clarityThreshold}, ${TARGET_QUESTION_ID} = ${SUPPORTED_CHOICE}, ` +
         `${CONFIDENCE_QUESTION_ID} ${executionConfidence} ≥ ${confidenceThreshold}`,
       ms: elapsedMs(),
+      ...reported,
     }
   }
 
@@ -246,5 +262,6 @@ export async function runD1Check(input: D1CheckInput): Promise<D1CheckResult> {
     failingQuestion: first.id,
     reason: `disapproved: ${failures.map((failure) => `${failure.id} ${failure.detail}`).join('; ')}`,
     ms: elapsedMs(),
+    ...reported,
   }
 }

@@ -70,6 +70,8 @@ export interface D1RouteResult {
   routesToWorker: boolean
   /** Wall-clock duration of the route check, in ms. */
   ms: number
+  /** Prompt tokens d1 reported for the route packet; absent when unreported. */
+  promptTokens?: number
 }
 
 /** The routing state as d1 reads it: command, reply, outline, continuity. */
@@ -91,20 +93,24 @@ export function buildRouteState(input: Omit<D1RouteInput, 'd1Decide'>): string {
 export async function runD1Route(input: D1RouteInput): Promise<D1RouteResult> {
   const started = performance.now()
   const elapsedMs = () => Number((performance.now() - started).toFixed(1))
+  const usage = () => (promptTokens ? { promptTokens } : {})
   const toChat = (intent: RouteIntent, confidence: number | null): D1RouteResult => ({
     intent,
     confidence,
     routesToWorker: false,
     ms: elapsedMs(),
+    ...usage(),
   })
 
   let intent: RouteIntent = ROUTE_CONVERSATIONAL
   let confidence: number | null = null
+  let promptTokens = 0
   try {
     const decision = await input.d1Decide({
       state: buildRouteState(input),
       questions: D1_ROUTE_QUESTIONS,
     })
+    promptTokens = decision.usage?.promptTokens ?? 0
     const intentAnswer = decision.answers[ROUTE_INTENT_QUESTION_ID]
     const raw =
       intentAnswer !== undefined && intentAnswer.type === 'choice' ? intentAnswer.choice : null
@@ -129,5 +135,5 @@ export async function runD1Route(input: D1RouteInput): Promise<D1RouteResult> {
   if (confidence === null) return toChat(intent, null)
   if (intent === ROUTE_CONVERSATIONAL || intent === ROUTE_AMBIGUOUS) return toChat(intent, confidence)
   if (confidence < ROUTE_CONFIDENCE_MIN) return toChat(intent, confidence)
-  return { intent, confidence, routesToWorker: true, ms: elapsedMs() }
+  return { intent, confidence, routesToWorker: true, ms: elapsedMs(), ...usage() }
 }

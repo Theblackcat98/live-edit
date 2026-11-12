@@ -1,15 +1,12 @@
 import type { ContextUsage, Message } from '../types'
-import { INITIAL_NOTE } from '../data/note'
-import { estimateTokens, makeId } from '../lib/utils'
+import { makeId } from '../lib/utils'
 
-const initialNoteTokens = estimateTokens(INITIAL_NOTE)
-
-/** Context-usage estimate on a fresh session, before any turn runs. */
-export const INITIAL_CONTEXT: ContextUsage = {
-  omni: initialNoteTokens + 620,
-  d1: initialNoteTokens * 2 + 1450,
-  worker: Math.round(initialNoteTokens * 0.35) + 900,
-}
+/**
+ * Context usage on a fresh session: nothing measured yet. Each slot is
+ * filled from the prompt size a model server reports on its first call —
+ * the rail never shows an invented number as usage.
+ */
+export const INITIAL_CONTEXT: ContextUsage = { omni: 0, d1: 0, worker: 0 }
 
 /** The two messages a fresh session starts with. */
 export function initialMessages(): Message[] {
@@ -19,7 +16,7 @@ export function initialMessages(): Message[] {
       id: makeId('msg'),
       role: 'system',
       kind: 'notice',
-      text: 'Session ready · local runtime · audio input ready',
+      text: 'Session ready · local runtime',
       at: now - 800,
     },
     {

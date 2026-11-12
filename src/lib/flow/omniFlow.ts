@@ -10,7 +10,7 @@ import type { Directive, OmniTurnResult } from '../../types'
 import { d1Decide, endpointUp } from '../bridge'
 import { modeDef } from '../modes'
 import { runOmniTurn } from '../omni'
-import { runD1Route, ROUTE_AMBIGUOUS } from '../d1route'
+import { runD1Route, ROUTE_AMBIGUOUS, ROUTE_CONFIDENCE_MIN } from '../d1route'
 import { createStreamBubble } from './bubble'
 import { buildDictationCall, buildEffectiveDirective, buildPacketCall } from './buildCall'
 import { chatTurnFromOmni } from './chatTurn'
@@ -135,9 +135,20 @@ export async function runOmniFirstTurn(
   }
   const turn = chatTurnFromOmni(raw)
   runtime.chat = 'live'
-  runtime.route = 'live'
+  // Legacy Omni decides answer/clarify/delegate/action in the same call, so
+  // that call is the route. In audio mode Audio only chats; d1 routes below
+  // and records the route stage itself.
+  if (mode === 'omni') runtime.route = 'live'
   if (turn.repair) traceLocal.omniRepair = turn.repair
-  traceLocal.timings.route = turn.ms
+  // One model call is booked to exactly one timing bucket — never both route
+  // and chat, or the end-to-end total would count it twice. Answer/clarify
+  // (and every audio-mode turn) are chat time; legacy delegate/action are
+  // route time.
+  if (mode === 'audio' || turn.outcome === 'answer' || turn.outcome === 'clarify') {
+    traceLocal.timings.chat = turn.ms
+  } else {
+    traceLocal.timings.route = turn.ms
+  }
   if (turn.promptTokens) {
     traceLocal.promptTokens = turn.promptTokens
     liveUsage.omni = turn.promptTokens
@@ -148,7 +159,6 @@ export async function runOmniFirstTurn(
   // whether this turn wants an edit. Legacy omni continues below on the
   // tool-calling path.
   if (mode === 'audio') {
-    traceLocal.timings.chat = turn.ms
     await runAudioRouted(deps, ctx, {
       audioText: turn.text ?? '',
       lastRun,
@@ -160,7 +170,6 @@ export async function runOmniFirstTurn(
 
   if (turn.outcome === 'answer' || turn.outcome === 'clarify') {
     const text = turn.text ?? ''
-    traceLocal.timings.chat = turn.ms
     deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
     // No silent failures: a clarify that exists because the delegation
     // failed validation twice (turn.repair is set only on that path) must
@@ -261,6 +270,17 @@ async function runAudioRouted(
   })
   runtime.route = 'live'
   traceLocal.timings.route += route.ms
+  // The route verdict is first-class trace data: conversational turns would
+  // otherwise leave no record of what d1 decided.
+  traceLocal.d1Route = {
+    intent: route.intent,
+    confidence: route.confidence,
+    routesToWorker: route.routesToWorker,
+    threshold: ROUTE_CONFIDENCE_MIN,
+    ms: route.ms,
+    ...(route.promptTokens ? { promptTokens: route.promptTokens } : {}),
+  }
+  if (route.promptTokens) ctx.liveUsage.d1 = route.promptTokens
   publish()
 
   if (!route.routesToWorker) {

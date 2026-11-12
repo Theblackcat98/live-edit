@@ -1,6 +1,6 @@
 /**
  * d1 decision model (`POST /v1/systemone`): typed questions in, typed answers
- * out. Used by the safety check and by span grounding.
+ * out. Used by the audio-mode turn router and by the safety check.
  */
 
 import type { D1Answer } from '../types'

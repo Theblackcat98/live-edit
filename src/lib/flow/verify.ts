@@ -229,6 +229,7 @@ export async function verifyAndExecute(
   traceLocal.d1Check = check
   traceLocal.timings.critic = check.ms ?? 0
   runtime.critic = check.verdict === 'unavailable' ? 'fallback' : 'live'
+  if (check.promptTokens) ctx.liveUsage.d1 = check.promptTokens
   publish()
 
   if (check.verdict !== 'approved') {

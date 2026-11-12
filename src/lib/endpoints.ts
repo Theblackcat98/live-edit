@@ -2,18 +2,17 @@
  * Native LFM3 model bridge — endpoints and transport.
  *
  * Talks to the local llama.cpp family servers started by
- * ~/Documents/Models/lfm3.sh — the app runs on the three-model trinity:
+ * scripts/start-models.sh. Which of them a run mode needs is the mode's
+ * `endpoints` row in modes.ts:
  *
- *   LFM3-Omni-2B   :8083  chat + ASR (/v1/audio/transcriptions)
+ *   LFM3-Audio-2B  :8086  front door (default audio mode): chat + ASR + TTS
+ *   LFM3-Omni-2B   :8083  legacy front door (omni mode)
  *   LFM3-1.7B      :8080  worker XML tool calls (text mutations, -c 128000)
- *   d1-Omni-2B     :8085  safety-check decisions (/v1/systemone)
+ *   d1-Omni-2B     :8085  turn routing + safety-check decisions (/v1/systemone)
  *
- * LFM3-VL-2B (:8081) was removed from the runtime in 2026-11-08: the 1.7B plus
- * the deterministic emitter cover every tool, and probing an optional fourth
- * server left a permanent connection-refused error in the console.
- *
- * Every caller is live-first: on failure it falls back to the local
- * deterministic layer and the trace records which path ran.
+ * There is no deterministic stand-in for a model: when a server is down the
+ * affected stage degrades honestly (the turn fails, or the edit is held for
+ * the user) and the trace records which path ran (design.md §1).
  */
 
 import type { EndpointHealth, RuntimeHealth } from '../types'

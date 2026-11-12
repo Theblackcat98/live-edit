@@ -167,7 +167,8 @@ export async function runWorkerChatFirstTurn(
   // undo/redo pre-check above, so no model route call is claimed.
   const turn = chatTurnFromWorker(raw)
   runtime.chat = 'live'
-  runtime.route = 'fallback'
+  // Worker-chat modes have no model route: the 1.7B chats and calls tools itself.
+  runtime.route = 'skipped'
   traceLocal.timings.chat = raw.ms
   if (raw.promptTokens) {
     traceLocal.promptTokens = raw.promptTokens

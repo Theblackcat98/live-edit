@@ -187,8 +187,10 @@ export interface Trace {
   /** Omni's typed delegation directive (P2+; absent on legacy/supervisor-first traces). */
   directive?: Directive
   call?: WorkerCall
-  /** The d1 safety-check result (Omni-first traces; absent on worker-chat and legacy traces). */
+  /** The d1 safety-check result (present whenever the check ran, in any d1 mode). */
   d1Check?: D1CheckResult
+  /** The d1 routing verdict (audio mode only; absent when d1 did not route the turn). */
+  d1Route?: D1RouteRecord
   /** Omni tool-call repair diagnostics (Omni-first traces only; mirrors OmniTurnResult.repair). */
   omniRepair?: { error: string; rawArguments: string }
   execution?: ExecutionResult
@@ -305,6 +307,9 @@ export interface ModelInfo {
 
 export type RuntimeSource = 'live' | 'fallback'
 
+/** A pipeline stage's provenance on one run; `skipped` = the stage never ran this turn. */
+export type StageSource = RuntimeSource | 'skipped'
+
 export type D1Answer =
   | { type: 'choice'; choice: string; probabilities?: Record<string, number> }
   | { type: 'score'; score: number }
@@ -313,12 +318,16 @@ export type D1Answer =
 export interface TraceRuntime {
   /** Voice capture → Omni /v1/audio/transcriptions, or typed input. */
   asr?: RuntimeSource
-  /** Route decision: d1-Omni /v1/systemone, or local heuristics. */
-  route: RuntimeSource
-  /** Worker XML: LFM3-1.7B /v1/chat/completions, or the dictation exception (harness-built call, design.md §11). */
-  worker: RuntimeSource | 'dictation'
-  /** Safety check: d1-Omni's verdict, or local checks only when d1 is unavailable. */
-  critic: RuntimeSource
+  /**
+   * Route decision: d1 `turn_intent` (audio) or the front-door model's own
+   * outcome (legacy omni). `skipped` when no model routed the turn
+   * (worker-chat modes, undo/redo pre-check).
+   */
+  route: StageSource
+  /** Worker XML: LFM3-1.7B /v1/chat/completions, the dictation exception (harness-built call, design.md §11), or `skipped` when no edit was attempted. */
+  worker: StageSource | 'dictation'
+  /** Safety check: d1-Omni's verdict, `fallback` when d1 was unavailable, `skipped` when no call reached the check. */
+  critic: StageSource
   /** Conversational reply: the mode's front-door model, or the harness error path. */
   chat: RuntimeSource
 }
@@ -500,6 +509,31 @@ export interface D1CheckResult {
   reason?: string
   /** Wall-clock duration of the check, in ms. */
   ms?: number
+  /**
+   * The full answer distributions d1 reported for its choice questions
+   * (e.g. { safe: 0.97, unintended_data_loss: 0.03 }). Absent when d1 sent
+   * none or the check never reached d1.
+   */
+  probabilities?: {
+    destructiveSafety?: Record<string, number>
+    targetSupport?: Record<string, number>
+  }
+  /** Prompt tokens d1 reported for the check packet; absent when unreported. */
+  promptTokens?: number
+}
+
+/** The d1 turn-routing verdict (audio mode): what d1 decided this turn was. */
+export interface D1RouteRecord {
+  /** d1's `turn_intent` choice. */
+  intent: 'conversational' | 'ambiguous' | 'create' | 'insert' | 'edit' | 'remove'
+  /** d1's `intent_confidence` score; null when unreported. */
+  confidence: number | null
+  /** True when the turn was handed to the worker. */
+  routesToWorker: boolean
+  /** Minimum confidence required to route to the worker. */
+  threshold: number
+  ms: number
+  promptTokens?: number
 }
 
 /**

@@ -178,7 +178,11 @@ export interface TracePublisher {
  * the mutable local trace; `finish` closes it once, freezes the total timing,
  * appends it to the completed runs, and resets the UI/idle state.
  */
-export function createTracePublisher(deps: PipelineDeps, traceLocal: Trace): TracePublisher {
+export function createTracePublisher(
+  deps: PipelineDeps,
+  traceLocal: Trace,
+  liveUsage: Partial<ContextUsage> = {},
+): TracePublisher {
   let closed = false
   const publish = () => {
     const copy: Trace = {
@@ -201,6 +205,25 @@ export function createTracePublisher(deps: PipelineDeps, traceLocal: Trace): Tra
         (traceLocal.timings.chat ?? 0)
       ).toFixed(1),
     )
+    // Output tokens are the sum the model servers reported across every
+    // recorded exchange (chat, retries, worker attempts) — measured, not
+    // estimated. A turn with no reported usage keeps whatever the flow set.
+    const reported = (traceLocal.exchanges ?? []).reduce(
+      (sum, exchange) => sum + (exchange.response?.outputTokens ?? 0),
+      0,
+    )
+    if (reported > 0) traceLocal.outputTokens = reported
+    // The packet-decode worker (audio/omni modes) reports its own prompt size.
+    if (liveUsage.worker === undefined) {
+      const workerExchange = [...(traceLocal.exchanges ?? [])]
+        .reverse()
+        .find((exchange) => exchange.role === 'worker' && exchange.response?.promptTokens)
+      if (workerExchange?.response) liveUsage.worker = workerExchange.response.promptTokens
+    }
+    // Context budget: apply the prompt sizes the servers measured this turn.
+    if (Object.keys(liveUsage).length) {
+      deps.setContextUsage((previous) => ({ ...previous, ...liveUsage }))
+    }
     const finished: Trace = { ...traceLocal, timings: { ...traceLocal.timings } }
     deps.setTrace(finished)
     deps.traceRef.current = finished
