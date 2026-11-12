@@ -6,10 +6,11 @@
  * follow, and a disapproved or unavailable check becomes a pending edit.
  */
 
-import type { OmniTurnResult } from '../../types'
-import { endpointUp } from '../bridge'
+import type { Directive, OmniTurnResult } from '../../types'
+import { d1Decide, endpointUp } from '../bridge'
 import { modeDef } from '../modes'
 import { runOmniTurn } from '../omni'
+import { runD1Route, ROUTE_AMBIGUOUS } from '../d1route'
 import { createStreamBubble } from './bubble'
 import { buildDictationCall, buildEffectiveDirective, buildPacketCall } from './buildCall'
 import { chatTurnFromOmni } from './chatTurn'
@@ -96,6 +97,9 @@ export async function runOmniFirstTurn(
       signal: controller.signal,
       onText,
       onExchange: ctx.recordExchange,
+      // Routed Audio flow: Audio answers in plain chat, d1 routes below.
+      // Legacy omni keeps the tool-calling front door.
+      ...(mode === 'audio' ? { disableTools: true as const } : {}),
     })
   } catch (error) {
     retractStream()
@@ -139,6 +143,20 @@ export async function runOmniFirstTurn(
     liveUsage.omni = turn.promptTokens
   }
   publish()
+
+  // Routed Audio flow: Audio answered in plain chat (no tools) — d1 decides
+  // whether this turn wants an edit. Legacy omni continues below on the
+  // tool-calling path.
+  if (mode === 'audio') {
+    traceLocal.timings.chat = turn.ms
+    await runAudioRouted(deps, ctx, {
+      audioText: turn.text ?? '',
+      lastRun,
+      settleStream,
+      retractStream,
+    })
+    return
+  }
 
   if (turn.outcome === 'answer' || turn.outcome === 'clarify') {
     const text = turn.text ?? ''
@@ -203,13 +221,81 @@ export async function runOmniFirstTurn(
     return
   }
 
-  // --- delegate: worker authors + grounds from the §6 packet ---------------
+  // --- delegate: the worker authors + grounds from the directive ------------
+  // Legacy omni path only: Audio never reaches here (d1 routes instead).
   const directive = turn.directive
   if (!directive) {
     retractStream()
     throw new Error(`${chatAuthor} delegated without a directive.`)
   }
   retractStream()
+  await runWorkerFromDirective(deps, ctx, {
+    directive,
+    d1Check: def.decide === 'd1',
+  })
+}
+
+/**
+ * The routed Audio turn: Audio answered in plain chat (no tools); d1 reads
+ * the command, Audio's reply, and the note outline, and routes edit turns to
+ * the worker. Conversation (and ambiguity — never a guess) settles Audio's
+ * reply and speaks it.
+ */
+async function runAudioRouted(
+  deps: PipelineDeps,
+  ctx: TurnContext,
+  opts: {
+    audioText: string
+    lastRun: { command: string; status: string } | null
+    settleStream: (text: string) => void
+    retractStream: () => void
+  },
+): Promise<void> {
+  const { command, noteAtStart, traceLocal, runtime, publish, finish } = ctx
+  const route = await runD1Route({
+    command,
+    audioReply: opts.audioText,
+    note: noteAtStart,
+    lastRun: opts.lastRun,
+    d1Decide,
+  })
+  runtime.route = 'live'
+  traceLocal.timings.route += route.ms
+  publish()
+
+  if (!route.routesToWorker) {
+    deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
+    opts.settleStream(opts.audioText)
+    deps.speakReply(opts.audioText)
+    // Ambiguity settles the same way: Audio's reply stands (it asks when the
+    // request is unclear), the user rephrases, nothing executes.
+    finish(route.intent === ROUTE_AMBIGUOUS ? 'clarify' : 'conversational')
+    return
+  }
+
+  // Routed edit: the delegation stays silent like the legacy path — retract
+  // the ack bubble, then run the shared worker tail on a harness directive.
+  opts.retractStream()
+  // The directive is harness-built from the routed task — the worker grounds
+  // the span itself, exactly like the legacy delegation, minus Audio's
+  // model-authored brief (instruction is the verbatim command; the dictation
+  // backstop still recovers quoted spans from it).
+  const directive: Directive = { task: route.intent as Directive['task'], instruction: command }
+  await runWorkerFromDirective(deps, ctx, {
+    directive,
+    d1Check: true,
+    routedNote: `d1 routed this turn to the worker (intent ${route.intent}, confidence ${route.confidence}).`,
+  })
+}
+
+/** Shared worker tail: directive → call (dictation or packet decode) → verify. */
+async function runWorkerFromDirective(
+  deps: PipelineDeps,
+  ctx: TurnContext,
+  opts: { directive: Directive; d1Check: boolean; routedNote?: string },
+): Promise<void> {
+  const { command, noteAtStart, traceLocal, runtime, publish, finish } = ctx
+  const directive = opts.directive
   traceLocal.directive = directive
   publish()
   deps.setStageStates({ A: 'done', B: 'running', C: 'idle' })
@@ -242,7 +328,7 @@ export async function runOmniFirstTurn(
     traceLocal.workerNoteView = call.noteView
     publish()
     await verifyAndExecute(deps, ctx, effectiveDirective, call, {
-      d1Check: def.decide === 'd1',
+      d1Check: opts.d1Check,
     })
     return
   }
@@ -290,8 +376,11 @@ export async function runOmniFirstTurn(
   if (scaffoldNote) {
     call.promptHints.push(scaffoldNote)
   }
+  if (opts.routedNote) {
+    call.promptHints.push(opts.routedNote)
+  }
   await verifyAndExecute(deps, ctx, effectiveDirective, call, {
-    d1Check: def.decide === 'd1',
+    d1Check: opts.d1Check,
   })
 }
 

@@ -21,7 +21,11 @@ export function D1CheckSection({ check }: { check: NonNullable<Trace['d1Check']>
         <p>{check.reason}</p>
         <span className="trace-verdict-meta mono">
           match {check.noul === null ? 'unreported' : check.noul.toFixed(2)} ·
-          safety {check.destructiveSafety ?? 'unreported'} · pending edit · note untouched
+          safety {check.destructiveSafety ?? 'unreported'} ·
+          clarity {check.intentClarity === null ? 'unreported' : check.intentClarity.toFixed(2)} ·
+          target {check.targetSupport ?? 'unreported'} ·
+          confidence {check.executionConfidence === null ? 'unreported' : check.executionConfidence.toFixed(2)} ·
+          pending edit · note untouched
         </span>
       </div>
     </div>
