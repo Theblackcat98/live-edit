@@ -3,7 +3,7 @@
  * request/response pair a turn makes against a model server is captured
  * verbatim — the exact message array the model saw, the sampler sent, the
  * reasoning/reply/tool calls that came back, and the error when it failed.
- * omni.ts, workerChat.ts and the packet-worker loop in pipeline.ts all
+ * omni.ts, workerChat.ts and the packet-worker loop in flow/buildCall.ts all
  * funnel through captureExchange, so conversational turns, retries and
  * failures are as inspectable as verified tool-call turns.
  */
@@ -73,6 +73,11 @@ export interface ExchangeCapture {
    * server returned but the caller rejected — e.g. an unparseable tool call.
    */
   rejected?: boolean
+  /**
+   * Wall-clock the attempt took. Required for a failed attempt (no
+   * completion carries a duration then) — a timeout is not "0 ms".
+   */
+  elapsedMs?: number
 }
 
 /** Assemble one recorded exchange; ok is derived unless explicitly rejected. */
@@ -86,8 +91,9 @@ export function captureExchange(capture: ExchangeCapture): TurnExchange {
     model: capture.model,
     url: capture.url,
     at: Date.now(),
-    ms: completion?.ms ?? 0,
+    ms: completion?.ms ?? capture.elapsedMs ?? 0,
     ok,
+    ...(completion?.servedModel ? { servedModel: completion.servedModel } : {}),
     ...(capture.error ? { error: capture.error } : {}),
     request: {
       messages: projectExchangeMessages(capture.messages),
@@ -108,6 +114,7 @@ export function captureExchange(capture: ExchangeCapture): TurnExchange {
             promptTokens: completion.usage.promptTokens,
             outputTokens: completion.usage.outputTokens,
             finishReason: completion.finishReason,
+            ...(completion.serverTimings ? { timings: completion.serverTimings } : {}),
           },
         }
       : {}),

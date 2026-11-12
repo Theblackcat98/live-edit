@@ -58,3 +58,48 @@ export function measuredUsage(payload: unknown): TokenUsage | null {
   if (promptTokens == null || outputTokens == null) return null
   return { promptTokens, outputTokens }
 }
+
+/** llama.cpp's per-request performance figures (the `timings` object). */
+export interface ServerTimings {
+  /** Prompt processing time, ms. */
+  promptMs?: number
+  /** Generation time, ms. */
+  predictedMs?: number
+  /** Generation speed, tokens per second. */
+  tokensPerSecond?: number
+  /** Prompt tokens served from the server's prompt cache. */
+  cachedTokens?: number
+}
+
+/** The `timings` (and cached-token usage detail) a llama.cpp payload reports. */
+export function serverTimingsOf(payload: unknown): ServerTimings | undefined {
+  if (!isRecord(payload)) return undefined
+  const timings = isRecord(payload.timings) ? payload.timings : {}
+  const usage = isRecord(payload.usage) ? payload.usage : {}
+  const details = isRecord(usage.prompt_tokens_details) ? usage.prompt_tokens_details : {}
+  const out: ServerTimings = {}
+  const promptMs = readNumber(timings, 'prompt_ms')
+  const predictedMs = readNumber(timings, 'predicted_ms')
+  const tokensPerSecond = readNumber(timings, 'predicted_per_second')
+  const cachedTokens = readNumber(timings, 'cache_n') ?? readNumber(details, 'cached_tokens')
+  if (promptMs != null) out.promptMs = promptMs
+  if (predictedMs != null) out.predictedMs = predictedMs
+  if (tokensPerSecond != null) out.tokensPerSecond = tokensPerSecond
+  if (cachedTokens != null) out.cachedTokens = cachedTokens
+  return Object.keys(out).length ? out : undefined
+}
+
+/** The model id the server says produced this completion. */
+export function servedModelOf(payload: unknown): string | undefined {
+  return isRecord(payload) ? readString(payload, 'model') : undefined
+}
+
+/** servedModel + serverTimings from a payload, omitting what was not reported. */
+export function optionalServerFacts(payload: unknown): {
+  servedModel?: string
+  serverTimings?: ServerTimings
+} {
+  const servedModel = servedModelOf(payload)
+  const serverTimings = serverTimingsOf(payload)
+  return { ...(servedModel ? { servedModel } : {}), ...(serverTimings ? { serverTimings } : {}) }
+}

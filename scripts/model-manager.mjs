@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Model manager: the single source of truth for starting and stopping the
-// four llama.cpp servers LiquidScribe needs. `scripts/start-models.sh` and
+// four llama.cpp servers LiquidScribe can use (each run mode needs a subset —
+// src/lib/modes.ts). `scripts/start-models.sh` and
 // `scripts/stop-models.sh` are thin wrappers over this file; the `serve`
 // mode is a loopback-only HTTP daemon the app uses to auto-start a run
 // mode's models on switch (npm run models:manager).
@@ -332,17 +333,35 @@ async function cliStop(args) {
 }
 
 // --- HTTP daemon (loopback only — it spawns processes) -------------------------
+//
+// Binding to 127.0.0.1 keeps other machines out, but not other web pages: any
+// site open in the user's browser can send requests to loopback. So the
+// daemon (1) only grants CORS to pages served from loopback, (2) refuses a
+// browser request whose Origin is anything else, and (3) requires
+// `content-type: application/json` on mutations — which a cross-site page
+// cannot send without a CORS preflight that (1) denies.
 
-function jsonReply(response, status, payload) {
+const LOOPBACK_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i
+
+/** Requests with no Origin come from curl/scripts, not a web page. */
+function originAllowed(origin) {
+  return origin === undefined || LOOPBACK_ORIGIN.test(origin)
+}
+
+function jsonReply(response, status, payload, origin) {
   const body = JSON.stringify(payload)
-  response.writeHead(status, {
+  const headers = {
     'content-type': 'application/json',
     'content-length': Buffer.byteLength(body),
-    'access-control-allow-origin': '*',
-    'access-control-allow-methods': 'GET, POST, OPTIONS',
-    'access-control-allow-headers': 'content-type',
-  })
-  response.end(body)
+    vary: 'origin',
+  }
+  if (origin && LOOPBACK_ORIGIN.test(origin)) {
+    headers['access-control-allow-origin'] = origin
+    headers['access-control-allow-methods'] = 'GET, POST, OPTIONS'
+    headers['access-control-allow-headers'] = 'content-type'
+  }
+  response.writeHead(status, headers)
+  response.end(status === 204 ? undefined : body)
 }
 
 async function readJsonBody(request) {
@@ -368,31 +387,58 @@ function membersFromBody(payload) {
 
 function serve(port) {
   const server = http.createServer(async (request, response) => {
+    const origin = request.headers.origin
+    const reply = (status, payload) => jsonReply(response, status, payload, origin)
     try {
       const { pathname } = new URL(request.url ?? '/', 'http://127.0.0.1')
+      if (!originAllowed(origin)) {
+        reply(403, { ok: false, error: `origin ${origin} may not control local models` })
+        return
+      }
       if (request.method === 'OPTIONS') {
-        jsonReply(response, 204, {})
+        reply(204, {})
         return
       }
-      if (request.method === 'GET' && pathname === '/status') {
-        jsonReply(response, 200, { ok: true, members: await Promise.all(MODELS.map(memberState)) })
+      if (pathname === '/status') {
+        if (request.method !== 'GET') {
+          reply(405, { ok: false, error: `${request.method} /status — use GET` })
+          return
+        }
+        reply(200, { ok: true, members: await Promise.all(MODELS.map(memberState)) })
         return
       }
-      if ((request.method === 'POST' && pathname === '/start') || pathname === '/stop') {
-        const members = membersFromBody(await readJsonBody(request))
+      if (pathname === '/start' || pathname === '/stop') {
+        if (request.method !== 'POST') {
+          reply(405, { ok: false, error: `${request.method} ${pathname} — use POST` })
+          return
+        }
+        if (!/^application\/json\b/i.test(request.headers['content-type'] ?? '')) {
+          reply(415, { ok: false, error: 'content-type must be application/json' })
+          return
+        }
+        let body
+        try {
+          body = await readJsonBody(request)
+        } catch (error) {
+          reply(400, { ok: false, error: `invalid JSON body: ${error?.message ?? 'unreadable'}` })
+          return
+        }
+        const members = membersFromBody(body)
         if (!members) {
-          jsonReply(response, 400, { ok: false, error: `body must be {names: [${MODELS.map((m) => m.name).join('|')}] } or {all: true}` })
+          reply(400, { ok: false, error: `body must be {names: [${MODELS.map((m) => m.name).join('|')}]} or {all: true}` })
           return
         }
         const action = pathname === '/start' ? startMember : stopMember
         const results = []
         for (const model of members) results.push(await action(model))
-        jsonReply(response, 200, { ok: true, results })
+        // ok reflects the members, not just the request: a missing model file
+        // is an error the caller must see, not a 200 it can ignore.
+        reply(200, { ok: results.every((result) => result.action !== 'error'), results })
         return
       }
-      jsonReply(response, 404, { ok: false, error: `no such route: ${request.method} ${pathname}` })
+      reply(404, { ok: false, error: `no such route: ${request.method} ${pathname}` })
     } catch (error) {
-      jsonReply(response, 500, { ok: false, error: error?.message ?? 'internal error' })
+      reply(500, { ok: false, error: error?.message ?? 'internal error' })
     }
   })
   server.listen(port, '127.0.0.1', () => {

@@ -119,6 +119,8 @@ export interface TraceTimings {
   total: number
   /** Conversational reply generation (streamed chat), measured end-to-end. */
   chat?: number
+  /** Server transcription of a spoken command, before the turn started. */
+  asr?: number
 }
 
 /**
@@ -147,8 +149,10 @@ export interface TurnExchange {
   role: 'chat' | 'worker'
   /** Label within the turn: 'primary', 'repair retry', 'worker attempt 2', … */
   label: string
-  /** Model name that answered (e.g. 'LFM3-Audio-2B'). */
+  /** Model the app sent the request to (e.g. 'LFM3-Audio-2B'). */
   model: string
+  /** Model id the server reported in its reply, when it reported one. */
+  servedModel?: string
   /** URL the request hit. */
   url: string
   at: number
@@ -174,6 +178,13 @@ export interface TurnExchange {
     promptTokens: number
     outputTokens: number
     finishReason: string | null
+    /** llama.cpp performance figures (speed, prompt-cache hits), when reported. */
+    timings?: {
+      promptMs?: number
+      predictedMs?: number
+      tokensPerSecond?: number
+      cachedTokens?: number
+    }
   }
 }
 
@@ -187,8 +198,10 @@ export interface Trace {
   /** Omni's typed delegation directive (P2+; absent on legacy/supervisor-first traces). */
   directive?: Directive
   call?: WorkerCall
-  /** The d1 safety-check result (Omni-first traces; absent on worker-chat and legacy traces). */
+  /** The d1 safety-check result (present whenever the check ran, in any d1 mode). */
   d1Check?: D1CheckResult
+  /** The d1 routing verdict (audio mode only; absent when d1 did not route the turn). */
+  d1Route?: D1RouteRecord
   /** Omni tool-call repair diagnostics (Omni-first traces only; mirrors OmniTurnResult.repair). */
   omniRepair?: { error: string; rawArguments: string }
   execution?: ExecutionResult
@@ -205,6 +218,11 @@ export interface Trace {
    * traces; the inspector treats absent as empty.
    */
   exchanges?: TurnExchange[]
+  /**
+   * How the user resolved this run's pending edit, after the fact. The run's
+   * status moves to verified (applied) or rejected (discarded / stale) with it.
+   */
+  resolution?: 'applied' | 'discarded' | 'stale'
   /**
    * Why the turn stopped or was held before execution (hard-gate refusal,
    * blast-radius hold, engine refusal, outcome check, d1 verdict). Absent
@@ -305,6 +323,9 @@ export interface ModelInfo {
 
 export type RuntimeSource = 'live' | 'fallback'
 
+/** A pipeline stage's provenance on one run; `skipped` = the stage never ran this turn. */
+export type StageSource = RuntimeSource | 'skipped'
+
 export type D1Answer =
   | { type: 'choice'; choice: string; probabilities?: Record<string, number> }
   | { type: 'score'; score: number }
@@ -313,12 +334,16 @@ export type D1Answer =
 export interface TraceRuntime {
   /** Voice capture → Omni /v1/audio/transcriptions, or typed input. */
   asr?: RuntimeSource
-  /** Route decision: d1-Omni /v1/systemone, or local heuristics. */
-  route: RuntimeSource
-  /** Worker XML: LFM3-1.7B /v1/chat/completions, or the dictation exception (harness-built call, design.md §11). */
-  worker: RuntimeSource | 'dictation'
-  /** Safety check: d1-Omni's verdict, or local checks only when d1 is unavailable. */
-  critic: RuntimeSource
+  /**
+   * Route decision: d1 `turn_intent` (audio) or the front-door model's own
+   * outcome (legacy omni). `skipped` when no model routed the turn
+   * (worker-chat modes, undo/redo pre-check).
+   */
+  route: StageSource
+  /** Worker XML: LFM3-1.7B /v1/chat/completions, the dictation exception (harness-built call, design.md §11), or `skipped` when no edit was attempted. */
+  worker: StageSource | 'dictation'
+  /** Safety check: d1-Omni's verdict, `fallback` when d1 was unavailable, `skipped` when no call reached the check. */
+  critic: StageSource
   /** Conversational reply: the mode's front-door model, or the harness error path. */
   chat: RuntimeSource
 }
@@ -331,8 +356,18 @@ export interface EndpointHealth {
   url: string
   up: boolean
   latencyMs?: number
+  /** Model ids the server lists (OpenAI `data[].id`, plus llama.cpp's `models[]`). */
   models?: string[]
   error?: string
+  /** The server answered 503 "Loading model": it is starting, not down. */
+  loading?: boolean
+  /**
+   * Set when the server answers but lists none of the expected alias — the
+   * port is serving a different model than the app thinks.
+   */
+  unexpectedModel?: string
+  /** Runtime context window the server reports (llama.cpp /props n_ctx). */
+  contextTokens?: number
 }
 
 export interface RuntimeHealth {
@@ -435,6 +470,8 @@ export interface OmniTurnResult {
    * repair rescued — the evidence the next diagnosis works from, never UI copy.
    */
   repair?: { error: string; rawArguments: string }
+  /** The reply stopped at the max_tokens cap (finish_reason "length"). */
+  truncated?: boolean
   ms: number
   promptTokens?: number
   outputTokens?: number
@@ -500,6 +537,33 @@ export interface D1CheckResult {
   reason?: string
   /** Wall-clock duration of the check, in ms. */
   ms?: number
+  /**
+   * The full answer distributions d1 reported for its choice questions
+   * (e.g. { safe: 0.97, unintended_data_loss: 0.03 }). Absent when d1 sent
+   * none or the check never reached d1.
+   */
+  probabilities?: {
+    destructiveSafety?: Record<string, number>
+    targetSupport?: Record<string, number>
+  }
+  /** Prompt tokens d1 reported for the check packet; absent when unreported. */
+  promptTokens?: number
+}
+
+/** The d1 turn-routing verdict (audio mode): what d1 decided this turn was. */
+export interface D1RouteRecord {
+  /** d1's `turn_intent` choice. */
+  intent: 'conversational' | 'ambiguous' | 'create' | 'insert' | 'edit' | 'remove'
+  /** d1's `intent_confidence` score; null when unreported. */
+  confidence: number | null
+  /** True when the turn was handed to the worker. */
+  routesToWorker: boolean
+  /** Minimum confidence required to route to the worker. */
+  threshold: number
+  ms: number
+  promptTokens?: number
+  /** Why d1 produced no usable verdict; the turn then settled as conversation. */
+  error?: string
 }
 
 /**
@@ -560,4 +624,8 @@ export interface PendingEdit {
    * other pending.
    */
   overrideBlastRadius?: true
+  /** The run that produced this proposal; its trace is updated on adjudication. */
+  runId?: string
+  /** Why the run held it (d1 verdict, blast radius, no decision model in the mode). */
+  holdKind?: TurnHold['kind']
 }

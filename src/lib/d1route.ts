@@ -70,6 +70,14 @@ export interface D1RouteResult {
   routesToWorker: boolean
   /** Wall-clock duration of the route check, in ms. */
   ms: number
+  /** Prompt tokens d1 reported for the route packet; absent when unreported. */
+  promptTokens?: number
+  /**
+   * Set when d1 did not produce a usable verdict (bridge error, missing or
+   * unknown turn_intent, missing confidence). The turn still settles as
+   * conversation — but this says d1 never decided that.
+   */
+  error?: string
 }
 
 /** The routing state as d1 reads it: command, reply, outline, continuity. */
@@ -91,23 +99,30 @@ export function buildRouteState(input: Omit<D1RouteInput, 'd1Decide'>): string {
 export async function runD1Route(input: D1RouteInput): Promise<D1RouteResult> {
   const started = performance.now()
   const elapsedMs = () => Number((performance.now() - started).toFixed(1))
-  const toChat = (intent: RouteIntent, confidence: number | null): D1RouteResult => ({
+  const usage = () => (promptTokens ? { promptTokens } : {})
+  const toChat = (intent: RouteIntent, confidence: number | null, error?: string): D1RouteResult => ({
     intent,
     confidence,
     routesToWorker: false,
     ms: elapsedMs(),
+    ...usage(),
+    ...(error ? { error } : {}),
   })
 
   let intent: RouteIntent = ROUTE_CONVERSATIONAL
   let confidence: number | null = null
+  let promptTokens = 0
+  let rawIntent: string | null = null
   try {
     const decision = await input.d1Decide({
       state: buildRouteState(input),
       questions: D1_ROUTE_QUESTIONS,
     })
+    promptTokens = decision.usage?.promptTokens ?? 0
     const intentAnswer = decision.answers[ROUTE_INTENT_QUESTION_ID]
     const raw =
       intentAnswer !== undefined && intentAnswer.type === 'choice' ? intentAnswer.choice : null
+    rawIntent = raw
     if (
       raw === ROUTE_CONVERSATIONAL ||
       raw === ROUTE_AMBIGUOUS ||
@@ -122,12 +137,29 @@ export async function runD1Route(input: D1RouteInput): Promise<D1RouteResult> {
       typeof confidenceAnswer.noul === 'number'
         ? confidenceAnswer.noul
         : null
-  } catch {
-    return toChat(ROUTE_CONVERSATIONAL, null)
+  } catch (error) {
+    return toChat(
+      ROUTE_CONVERSATIONAL,
+      null,
+      `d1 did not answer: ${error instanceof Error ? error.message : String(error)}`,
+    )
   }
 
-  if (confidence === null) return toChat(intent, null)
+  const knownIntent =
+    rawIntent === ROUTE_CONVERSATIONAL ||
+    rawIntent === ROUTE_AMBIGUOUS ||
+    (ROUTE_TASKS as readonly string[]).includes(rawIntent ?? '')
+  if (!knownIntent) {
+    return toChat(
+      ROUTE_CONVERSATIONAL,
+      confidence,
+      rawIntent === null
+        ? 'd1 returned no turn_intent answer'
+        : `d1 returned an unknown turn_intent "${rawIntent}"`,
+    )
+  }
+  if (confidence === null) return toChat(intent, null, 'd1 returned no intent_confidence score')
   if (intent === ROUTE_CONVERSATIONAL || intent === ROUTE_AMBIGUOUS) return toChat(intent, confidence)
   if (confidence < ROUTE_CONFIDENCE_MIN) return toChat(intent, confidence)
-  return { intent, confidence, routesToWorker: true, ms: elapsedMs() }
+  return { intent, confidence, routesToWorker: true, ms: elapsedMs(), ...usage() }
 }

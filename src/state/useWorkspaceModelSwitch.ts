@@ -5,6 +5,13 @@ import { loadRunMode, saveRunMode, type RunMode } from '../lib/runmode'
 import { modeDef } from '../lib/modes'
 import { managerStart, managerStatus, managerStop } from '../lib/modelManager'
 import { managerNameFor, planModelSwitch, type ModelSwitchPlan } from '../lib/modelPlan'
+import { modelHost } from '../lib/endpoints'
+
+/** True when the page was loaded from this machine (where the manager listens). */
+function isLoopbackHost(): boolean {
+  const host = modelHost()
+  return host === 'localhost' || host === '127.0.0.1' || host === '[::1]'
+}
 import { sleep } from '../lib/utils'
 
 type AddMessage = (message: Omit<Message, 'id' | 'at'> & { at?: number; id?: string }) => string
@@ -83,8 +90,8 @@ export function useWorkspaceModelSwitch({
       if (micOnRef.current && modeDef(next).speech === null) {
         stopMicRef.current()
         notify(
-          'Voice needs an Omni server',
-          'Low-RAM mode runs only LFM3-1.7B — type instead.',
+          'Voice is off in this mode',
+          'Low-RAM mode runs only LFM3-1.7B — no speech server. Type instead.',
           'error',
         )
       }
@@ -106,8 +113,8 @@ export function useWorkspaceModelSwitch({
       if (next === modeRef.current) return
       if (busyRef.current) {
         notify(
-          'Worker is busy',
-          'Wait for the current call to finish before switching run mode.',
+          'Still working',
+          'Wait for the current turn to finish before switching run mode.',
           'neutral',
         )
         return
@@ -121,9 +128,13 @@ export function useWorkspaceModelSwitch({
       void (async () => {
         if ((await managerStatus()) === null) {
           applyMode(next)
+          // The daemon only accepts loopback connections: from another device
+          // it is unreachable even while running, so say which case this is.
           notify(
             'Models not managed',
-            'Run the model manager (npm run models:manager) so mode switches can start models themselves.',
+            isLoopbackHost()
+              ? 'The model manager is not running — start it (npm run models:manager) so mode switches can start models themselves.'
+              : `The model manager only accepts connections from its own machine, so it cannot be reached from ${modelHost()}. Start models on that machine.`,
             'neutral',
           )
           return
@@ -147,32 +158,61 @@ export function useWorkspaceModelSwitch({
       setSwitchingModels(true)
       void (async () => {
         try {
+          // The daemon reports each member's outcome; a member it could not
+          // start (missing GGUF, spawn error) will never come up, so it is
+          // reported now with the daemon's reason instead of after a 90s wait.
+          let failedToStart: string[] = []
           try {
-            if (plan.toStart.length) await managerStart(plan.toStart.map(managerNameFor))
-          } catch {
+            if (plan.toStart.length) {
+              const results = await managerStart(plan.toStart.map(managerNameFor))
+              const errors = results.filter((result) => result.action === 'error')
+              failedToStart = errors.map((result) => result.name)
+              if (errors.length) {
+                notify(
+                  errors.length === 1 ? `Could not start ${errors[0].name}` : 'Some models could not start',
+                  errors.map((result) => `${result.name}: ${result.detail ?? 'error'}`).join(' · '),
+                  'error',
+                )
+              }
+            }
+          } catch (error) {
             applyMode(plan.mode)
             notify(
               'Model manager unreachable',
-              'Switched anyway — start the missing models with scripts/start-models.sh.',
+              `${error instanceof Error ? error.message : 'No answer'} — switched anyway; start the missing models with scripts/start-models.sh.`,
               'error',
             )
             return
           }
           if (stopSpares && plan.spareLoaded.length) {
             try {
-              await managerStop(plan.spareLoaded.map(managerNameFor))
-            } catch {
-              // Non-fatal: the spares stay loaded; the mode still runs.
+              const results = await managerStop(plan.spareLoaded.map(managerNameFor))
+              const errors = results.filter((result) => result.action === 'error')
+              if (errors.length) {
+                notify(
+                  'Some models are still loaded',
+                  errors.map((result) => `${result.name}: ${result.detail ?? 'error'}`).join(' · '),
+                  'neutral',
+                )
+              }
+            } catch (error) {
+              // Non-fatal — the mode still runs — but the spares were not stopped.
+              notify(
+                'Spare models still loaded',
+                `The manager did not stop them (${error instanceof Error ? error.message : 'no answer'}).`,
+                'neutral',
+              )
             }
           }
           const deadline = Date.now() + 90_000
-          let missing = plan.toStart
+          let missing = plan.toStart.filter((id) => !failedToStart.includes(managerNameFor(id)))
           while (missing.length && Date.now() < deadline) {
             await sleep(2000)
             await refreshRuntime()
             missing = plan.toStart.filter((id) => !endpointUp(healthRef.current, id))
           }
           applyMode(plan.mode)
+          // Members already reported as failed to start are not repeated here.
           if (missing.length) {
             const names = missing
               .map((id) => ENDPOINTS.find((endpoint) => endpoint.id === id)?.name ?? id)

@@ -20,6 +20,7 @@ import { cx, formatElapsed } from '../lib/utils'
 import type { RunMode } from '../lib/runmode'
 import type { PendingEdit } from '../types'
 import { MessageBubble } from './MessageBubble'
+import { modelHostLabel } from '../lib/runView'
 import { PendingEditCard } from './PendingEditCard'
 
 interface SessionPanelProps {
@@ -71,11 +72,18 @@ interface SessionComposerProps {
 }
 
 /** Where voice/speech actually go in each mode — never a claim of an unused server. */
-const MODE_HINTS: Record<RunMode, string> = {
-  audio: 'Voice is transcribed by LFM3-Audio-2B on 127.0.0.1:8086',
-  omni: 'Voice is transcribed by LFM3-Omni-2B on 127.0.0.1:8083 (legacy)',
-  'worker-d1': 'Voice and speech use d1-Omni-2B on 127.0.0.1:8085 · LFM3-1.7B answers chat',
-  lowram: 'Voice needs an audio server — type instead',
+function modeHint(mode: RunMode): string {
+  const host = modelHostLabel()
+  switch (mode) {
+    case 'audio':
+      return `Voice is transcribed by LFM3-Audio-2B on ${host}:8086`
+    case 'omni':
+      return `Voice is transcribed by LFM3-Omni-2B on ${host}:8083 (legacy)`
+    case 'worker-d1':
+      return `Voice and speech use d1-Omni-2B on ${host}:8085 · LFM3-1.7B answers chat`
+    default:
+      return 'Voice needs an audio server — type instead'
+  }
 }
 
 const MODE_PLACEHOLDERS: Record<RunMode, string> = {
@@ -163,7 +171,7 @@ export function SessionPanel({
       <header className="card-header session-header">
         <div className="card-title">
           <span className={cx('status-dot', busy ? 'is-accent is-pulsing' : 'is-green')} />
-          Live session
+          Session
         </div>
         <span className="session-clock mono">{formatElapsed(elapsedSeconds)}</span>
         <div className="card-header-spacer" />
@@ -214,13 +222,14 @@ export function SessionPanel({
               onOpenTrace={onOpenTrace}
             />
           ) : (
-            <PendingEditCard
-              key={item.edit.id}
-              edit={item.edit}
-              busy={busy}
-              onApply={onApplyPending}
-              onDiscard={onDismissPending}
-            />
+            <div className="message-row message-pending" key={item.edit.id}>
+              <PendingEditCard
+                edit={item.edit}
+                busy={busy}
+                onApply={onApplyPending}
+                onDiscard={onDismissPending}
+              />
+            </div>
           ),
         )}
       </div>
@@ -264,7 +273,7 @@ export function SessionPanel({
         )}
 
         <div className="composer-hint">
-          <span>{MODE_HINTS[mode]}</span>
+          <span>{modeHint(mode)}</span>
           <span className="mono">Enter to send</span>
         </div>
       </div>
@@ -330,7 +339,7 @@ export function SessionComposer({
           !voiceAvailable
             ? 'Low-RAM mode runs only LFM3-1.7B — type instead'
             : asrBusy
-              ? `${MODE_HINTS[mode]} — transcribing…`
+              ? `${modeHint(mode)} — transcribing…`
               : micOn
                 ? 'Hands-free on — each utterance is transcribed; tap to stop listening'
                 : 'Start hands-free listening — every utterance is transcribed until you tap stop'
@@ -351,7 +360,7 @@ export function SessionComposer({
             : micActive
               ? 'Listening — speak, then pause. Tap the mic to turn off.'
               : busy
-                ? 'Worker is applying a verified edit…'
+                ? 'Working on your last turn…'
                 : micOn
                   ? 'Starting the microphone…'
                   : MODE_PLACEHOLDERS[mode]

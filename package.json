@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.9.0",
   "type": "module",
-  "description": "Local-first multimodal note workspace driven by the LFM3 model trinity.",
+  "description": "Local-first, voice-first note workspace driven by local LFM3 models.",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -11,6 +11,7 @@
     "typecheck": "tsc -b --pretty",
     "qa": "node scripts/qa-suite.mjs",
     "models:manager": "node scripts/model-manager.mjs serve",
+    "e2e:modes": "node scripts/e2e/modes-e2e.mjs",
     "test": "vitest run"
   },
   "dependencies": {

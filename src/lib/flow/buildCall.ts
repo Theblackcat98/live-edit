@@ -197,6 +197,7 @@ export async function buildPacketCall(input: PacketCallInput): Promise<PacketCal
           })
     const label = attemptText === '' ? 'packet decode · attempt 1' : 'packet decode · retry'
     let completion: ChatResult
+    const attemptStarted = performance.now()
     try {
       completion = await chatComplete('text', messages, sampler)
     } catch (error) {
@@ -215,6 +216,7 @@ export async function buildPacketCall(input: PacketCallInput): Promise<PacketCal
           tools: TOOL_DEFS.map((tool) => tool.name),
           completion: null,
           error: attemptError,
+          elapsedMs: Number((performance.now() - attemptStarted).toFixed(1)),
         }),
       )
       break
@@ -245,7 +247,10 @@ export async function buildPacketCall(input: PacketCallInput): Promise<PacketCal
     attemptedTool = parsed?.name ?? null
     attemptedParsed = parsed
     if (!parsed) {
-      attemptError = 'The reply did not contain one parseable tool call in the repo XML format.'
+      attemptError =
+        completion.finishReason === 'length'
+          ? `The reply hit the ${sampler.maxTokens}-token output limit before finishing a tool call.`
+          : 'The reply did not contain one parseable tool call in the repo XML format.'
       recordPacketExchange(attemptError)
       continue
     }

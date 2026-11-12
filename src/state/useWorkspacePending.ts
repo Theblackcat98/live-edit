@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ExecutionDiff, Message, PendingEdit, RejectedTraceRecord, Snapshot, Toast } from '../types'
+import type { ExecutionDiff, ExecutionResult, Message, PendingEdit, RejectedTraceRecord, Snapshot, Toast } from '../types'
 import type { PersistedWorkspace } from '../lib/storage'
 import {
   adjudicate,
@@ -23,6 +23,15 @@ interface PendingArgs {
   notify: (title: string, detail?: string, tone?: Toast['tone']) => void
   /** Append to the rejected-traces log; the trace module owns that state. */
   appendRejectedTrace: (record: RejectedTraceRecord) => void
+  /**
+   * Record the user's decision on the run that produced the edit, so its
+   * trace stops reading "held for you" once it is resolved.
+   */
+  onRunResolved: (
+    runId: string,
+    resolution: 'applied' | 'discarded' | 'stale',
+    execution?: ExecutionResult,
+  ) => void
 }
 
 export interface WorkspacePendingApi {
@@ -70,6 +79,7 @@ export function useWorkspacePending({
   addMessage,
   notify,
   appendRejectedTrace,
+  onRunResolved,
 }: PendingArgs): WorkspacePendingApi {
   // Reloaded pendings pass through pending.ts's defensive per-entry
   // validation — a malformed entry drops out instead of bricking the queue.
@@ -94,6 +104,9 @@ export function useWorkspacePending({
       setPendingEdits((previous) =>
         previous.map((entry) => (entry.id === id ? outcome.edit : entry)),
       )
+      // Every message about this decision links back to the run it came from.
+      const runId = edit.runId
+      const linked = runId ? { runId } : {}
       if (outcome.status === 'applied' && outcome.call) {
         const execution = executeTool(
           noteRef.current,
@@ -111,21 +124,29 @@ export function useWorkspacePending({
           appendRejectedTrace(
             pendingResolutionRecord(outcome.edit, `Engine refused at execution: ${execution.message}`),
           )
+          if (runId) onRunResolved(runId, 'stale')
           addMessage({
             role: 'assistant',
             author: 'harness',
             kind: 'error',
+            ...linked,
             text: `That pending edit passed the gates but the engine refused it: ${execution.message} Nothing was written.`,
           })
           return
         }
-        commitNote(execution.note, `Pending edit approved · ${outcome.call.name}`, outcome.call.name)
+        const snapshot = commitNote(
+          execution.note,
+          `Pending edit approved · ${outcome.call.name}`,
+          outcome.call.name,
+        )
+        if (runId) onRunResolved(runId, 'applied', { ...execution, snapshotId: snapshot.id })
         setDiff(execution.diff ?? null)
         scheduleHighlightClear()
         addMessage({
           role: 'assistant',
           author: 'harness',
           kind: 'result',
+          ...linked,
           text: `Applied the pending ${outcome.call.name} edit you approved.`,
         })
         notify('Pending edit applied', execution.message, 'success')
@@ -145,20 +166,22 @@ export function useWorkspacePending({
         role: 'assistant',
         author: 'harness',
         kind: 'notice',
+        ...linked,
         text:
           outcome.status === 'stale'
             ? `That pending edit went stale and was not applied. ${outcome.reason}`
             : 'Discarded the pending edit. The note was not touched.',
       })
+      if (runId) onRunResolved(runId, outcome.status === 'stale' ? 'stale' : 'discarded')
       if (outcome.status === 'stale') notify('Pending edit went stale', outcome.reason, 'error')
     },
-    [addMessage, appendRejectedTrace, commitNote, noteRef, notify, scheduleHighlightClear, setDiff],
+    [addMessage, appendRejectedTrace, commitNote, noteRef, notify, onRunResolved, scheduleHighlightClear, setDiff],
   )
 
   const applyPendingEdit = useCallback(
     (id: string) => {
       if (busyRef.current) {
-        notify('Worker is busy', 'Wait for the current turn to finish before applying a pending edit.', 'neutral')
+        notify('Still working', 'Wait for the current turn to finish before applying a pending edit.', 'neutral')
         return
       }
       resolvePending(id, 'apply')

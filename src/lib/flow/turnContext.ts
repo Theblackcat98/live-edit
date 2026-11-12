@@ -69,6 +69,8 @@ export interface PipelineDeps {
   asrSourceRef: { current: RuntimeSource }
   /** Duration of the last voice capture, recorded on the user message. */
   lastVoiceSecondsRef: { current: number | undefined }
+  /** Server transcription time of the last voice capture; consumed by the next voice turn. */
+  lastAsrMsRef: { current: number | undefined }
   /** In-flight chat stream controller; aborted on barge-in, reassigned per stream. */
   chatAbortRef: { current: AbortController | null }
   /** Idle-stage reset timer; rescheduled when a run finishes. */
@@ -178,7 +180,11 @@ export interface TracePublisher {
  * the mutable local trace; `finish` closes it once, freezes the total timing,
  * appends it to the completed runs, and resets the UI/idle state.
  */
-export function createTracePublisher(deps: PipelineDeps, traceLocal: Trace): TracePublisher {
+export function createTracePublisher(
+  deps: PipelineDeps,
+  traceLocal: Trace,
+  liveUsage: Partial<ContextUsage> = {},
+): TracePublisher {
   let closed = false
   const publish = () => {
     const copy: Trace = {
@@ -198,9 +204,29 @@ export function createTracePublisher(deps: PipelineDeps, traceLocal: Trace): Tra
         traceLocal.timings.generate +
         traceLocal.timings.critic +
         traceLocal.timings.execute +
-        (traceLocal.timings.chat ?? 0)
+        (traceLocal.timings.chat ?? 0) +
+        (traceLocal.timings.asr ?? 0)
       ).toFixed(1),
     )
+    // Output tokens are the sum the model servers reported across every
+    // recorded exchange (chat, retries, worker attempts) — measured, not
+    // estimated. A turn with no reported usage keeps whatever the flow set.
+    const reported = (traceLocal.exchanges ?? []).reduce(
+      (sum, exchange) => sum + (exchange.response?.outputTokens ?? 0),
+      0,
+    )
+    if (reported > 0) traceLocal.outputTokens = reported
+    // The packet-decode worker (audio/omni modes) reports its own prompt size.
+    if (liveUsage.worker === undefined) {
+      const workerExchange = [...(traceLocal.exchanges ?? [])]
+        .reverse()
+        .find((exchange) => exchange.role === 'worker' && exchange.response?.promptTokens)
+      if (workerExchange?.response) liveUsage.worker = workerExchange.response.promptTokens
+    }
+    // Context budget: apply the prompt sizes the servers measured this turn.
+    if (Object.keys(liveUsage).length) {
+      deps.setContextUsage((previous) => ({ ...previous, ...liveUsage }))
+    }
     const finished: Trace = { ...traceLocal, timings: { ...traceLocal.timings } }
     deps.setTrace(finished)
     deps.traceRef.current = finished

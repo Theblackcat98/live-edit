@@ -116,6 +116,8 @@ export async function runWorkerChatFirstTurn(
   const controller = new AbortController()
   deps.chatAbortRef.current = controller
   let raw: WorkerChatTurnResult
+  // Both attempts' wall time — a retry must not erase the first attempt's.
+  let attemptsMs = 0
   try {
     raw = await runWorkerChatTurn({
       command,
@@ -128,6 +130,7 @@ export async function runWorkerChatFirstTurn(
     })
     // One retry on an unusable reply: the rejected text and the exact parse
     // error are appended (the packet-worker retry pattern), never a guess.
+    attemptsMs += raw.ms
     if (raw.outcome === 'invalid') {
       const rejected = raw
       raw = await runWorkerChatTurn({
@@ -140,6 +143,7 @@ export async function runWorkerChatFirstTurn(
         onExchange: ctx.recordExchange,
         retry: { attemptText: rejected.raw, error: rejected.error ?? 'no usable reply' },
       })
+      attemptsMs += raw.ms
     }
   } catch (error) {
     retractStream()
@@ -167,8 +171,12 @@ export async function runWorkerChatFirstTurn(
   // undo/redo pre-check above, so no model route call is claimed.
   const turn = chatTurnFromWorker(raw)
   runtime.chat = 'live'
-  runtime.route = 'fallback'
-  traceLocal.timings.chat = raw.ms
+  // Worker-chat modes have no model route: the 1.7B chats and calls tools itself.
+  runtime.route = 'skipped'
+  // One 1.7B request answers OR authors the call: book it to exactly one
+  // bucket (chat for a reply, generate for a tool call) — never both.
+  attemptsMs = Number(attemptsMs.toFixed(1))
+  if (turn?.outcome !== 'delegate') traceLocal.timings.chat = attemptsMs
   if (raw.promptTokens) {
     traceLocal.promptTokens = raw.promptTokens
     liveUsage.worker = raw.promptTokens
@@ -224,7 +232,7 @@ export async function runWorkerChatFirstTurn(
     noteAtStart,
   )
   runtime.worker = 'live'
-  traceLocal.timings.generate = turn.ms
+  traceLocal.timings.generate = attemptsMs
   traceLocal.call = call
   traceLocal.workerNoteView = call.noteView
   publish()

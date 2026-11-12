@@ -17,8 +17,6 @@
 /* Wave band under the feed */
 
 .stage-waveband {
-  --wave-accent: #3d9aff;
-  --wave-muted: #a5a8ad;
   display: flex;
   align-items: center;
   gap: 10px;

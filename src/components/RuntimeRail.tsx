@@ -38,6 +38,8 @@ interface RuntimeRailProps {
   mode: RunMode
   /** Switches the run mode; the runtime-card control is the phone surface's entry point. */
   onSetMode: (mode: RunMode) => void
+  /** True when any run (current or persisted) can be opened in the trace drawer. */
+  canOpenTrace: boolean
 }
 
 function SnapshotsCard({
@@ -144,6 +146,7 @@ export function RuntimeRail({
   refreshRuntime,
   mode,
   onSetMode,
+  canOpenTrace,
 }: RuntimeRailProps) {
   return (
     <>
@@ -155,8 +158,14 @@ export function RuntimeRail({
         mode={mode}
         onSetMode={onSetMode}
       />
-      <SafetyCheckCard trace={trace} stageStates={stageStates} openTrace={openTrace} />
-      <ContextRows usage={contextUsage} trace={trace} mode={mode} />
+      <SafetyCheckCard
+        trace={trace}
+        stageStates={stageStates}
+        openTrace={openTrace}
+        mode={mode}
+        canOpenTrace={canOpenTrace}
+      />
+      <ContextRows usage={contextUsage} mode={mode} runtimeHealth={runtimeHealth} />
       <SnapshotsCard
         history={history}
         historyIndex={historyIndex}

@@ -430,3 +430,31 @@ describe('blast-radius override adjudication', () => {
     expect(restored[0]?.call.params.new_text).toBe('no')
   })
 })
+
+// --- run linkage and full d1 scores survive a reload ---------------------------
+
+describe('pending edits keep their run and every d1 score across a reload', () => {
+  it('round-trips runId, holdKind and the advisory scores', () => {
+    const edit = createPendingEdit({
+      directive: makeDirective('Fix the Redis cache line'),
+      call: CALL,
+      diff: DIFF,
+      noteHash: noteHash(NOTE),
+      d1: { ...D1, intentClarity: 0.72, targetSupport: 'supported', executionConfidence: 0.44 },
+      runId: 'run_abc',
+      holdKind: 'd1',
+    })
+    const [restored] = fromStorable(JSON.parse(JSON.stringify(toStorable([edit]))))
+    expect(restored.runId).toBe('run_abc')
+    expect(restored.holdKind).toBe('d1')
+    expect(restored.d1.intentClarity).toBe(0.72)
+    expect(restored.d1.targetSupport).toBe('supported')
+    expect(restored.d1.executionConfidence).toBe(0.44)
+  })
+
+  it('drops an unknown holdKind instead of trusting it', () => {
+    const edit = { ...makePendingEdit(), holdKind: 'made-up' } as unknown as PendingEdit
+    const [restored] = fromStorable(JSON.parse(JSON.stringify([edit])))
+    expect(restored.holdKind).toBeUndefined()
+  })
+})

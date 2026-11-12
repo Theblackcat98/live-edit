@@ -1,27 +1,66 @@
 import type { RuntimeHealth } from '../../types'
+import type { RunMode } from '../../lib/runmode'
 import { cx } from '../../lib/utils'
+import { modelHostLabel, usedByMode } from '../../lib/runView'
 
-/** The health-probe rows under Runtime truth: availability, not provenance. */
-export function EndpointRows({ runtimeHealth }: { runtimeHealth: RuntimeHealth | null }) {
+/**
+ * The health-probe rows under Runtime truth: availability, not provenance.
+ * Servers the active mode does not use are shown dimmed as "not used" — their
+ * state is irrelevant to this mode and must not read as a failure.
+ */
+export function EndpointRows({ runtimeHealth, mode }: { runtimeHealth: RuntimeHealth | null; mode: RunMode }) {
+  const endpoints = [...(runtimeHealth?.endpoints ?? [])].sort(
+    (a, b) => Number(usedByMode(b.id, mode)) - Number(usedByMode(a.id, mode)),
+  )
   return (
     <div className="wiring-endpoints">
-      {(runtimeHealth?.endpoints ?? []).map((endpoint) => (
-        <div
-          key={endpoint.id}
-          className={cx('wiring-endpoint', !endpoint.up && 'is-down')}
-          title={endpoint.error ?? endpoint.models?.join(', ')}
-        >
-          <span className={cx('status-dot', endpoint.up ? 'is-green' : 'is-red')} />
-          <span className="mono">{endpoint.port}</span>
-          <span className="wiring-endpoint-name">{endpoint.name}</span>
-          <span className="wiring-endpoint-meta mono">
-            {endpoint.up
-              ? `${endpoint.latencyMs ?? 0} ms${endpoint.models?.length ? ` · ${endpoint.models[0]}` : ''}`
-              : 'down'}
-          </span>
-        </div>
-      ))}
-      {!runtimeHealth && <div className="wiring-muted mono">Probing 127.0.0.1 :8080 · :8083 · :8085 · :8086…</div>}
+      {endpoints.map((endpoint) => {
+        const used = usedByMode(endpoint.id, mode)
+        return (
+          <div
+            key={endpoint.id}
+            className={cx('wiring-endpoint', !endpoint.up && 'is-down', !used && 'is-unused')}
+            title={
+              endpoint.unexpectedModel
+                ? `Expected ${endpoint.name}, but this port lists: ${endpoint.models?.join(', ')}`
+                : (endpoint.error ?? endpoint.models?.join(', '))
+            }
+          >
+            <span
+              className={cx(
+                'status-dot',
+                !used
+                  ? ''
+                  : endpoint.up
+                    ? endpoint.unexpectedModel
+                      ? 'is-orange'
+                      : 'is-green'
+                    : endpoint.loading
+                      ? 'is-orange is-pulsing'
+                      : 'is-red',
+              )}
+            />
+            <span className="mono">{endpoint.port}</span>
+            <span className="wiring-endpoint-name">{endpoint.name}</span>
+            <span className="wiring-endpoint-meta mono">
+              {!used
+                ? 'not used in this mode'
+                : endpoint.up
+                  ? endpoint.unexpectedModel
+                    ? `serving ${endpoint.unexpectedModel}`
+                    : `${endpoint.latencyMs ?? 0} ms${
+                        endpoint.contextTokens ? ` · ${Math.round(endpoint.contextTokens / 1000)}K ctx` : ''
+                      }`
+                  : endpoint.loading
+                    ? 'loading…'
+                    : 'down'}
+            </span>
+          </div>
+        )
+      })}
+      {!runtimeHealth && (
+        <div className="wiring-muted mono">Probing {modelHostLabel()} :8080 · :8083 · :8085 · :8086…</div>
+      )}
     </div>
   )
 }

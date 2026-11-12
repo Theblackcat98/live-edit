@@ -368,12 +368,6 @@
   line-height: 1.4;
 }
 
-.sup-chip-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 3px;
-}
 
 .sup-stage .chip {
   height: 17px;
@@ -382,35 +376,9 @@
   gap: 3px;
 }
 
-.sup-tools {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 3px;
-}
 
-.sup-tool {
-  display: flex;
-  align-items: baseline;
-  gap: 3px;
-  color: var(--ink-3);
-  font-size: 8.5px;
-}
 
-.sup-tool span {
-  color: var(--ink-2);
-  font-size: 8.5px;
-}
 
-.sup-excerpt {
-  margin-top: 2px;
-  color: var(--ink-2);
-  font-size: 9.5px;
-  line-height: 1.35;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 
 .sup-running {
   display: inline-flex;
@@ -434,34 +402,10 @@
   font-size: 9.5px;
 }
 
-.sup-prob-row {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
 
-.sup-prob {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 3px;
-  color: var(--ink-3);
-  font-size: 8.5px;
-}
 
-.sup-prob strong {
-  color: var(--ink);
-  font-size: 9.5px;
-}
 
-.sup-prob-row .chip {
-  margin-left: auto;
-}
 
-.sup-checks {
-  margin-top: 1px;
-  color: var(--ink-3);
-  font-size: 8.5px;
-}
 
 .supervisor-trace-button {
   display: flex;
@@ -722,7 +666,7 @@
 }
 
 .wiring-row:hover {
-  background: var(--surface-2, rgba(128, 128, 128, 0.07));
+  background: var(--hover);
 }
 
 .wiring-badge {
@@ -732,39 +676,39 @@
   text-align: center;
   padding: 2px 0;
   border-radius: 5px;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
 }
 
 .wiring-badge.is-live {
-  background: color-mix(in srgb, var(--success, #3f8f6f) 18%, transparent);
-  color: var(--success, #3f8f6f);
+  background: color-mix(in srgb, var(--green) 18%, transparent);
+  color: var(--green);
 }
 
 .wiring-badge.is-fallback {
-  background: color-mix(in srgb, var(--warning, #e0a63c) 18%, transparent);
-  color: var(--warning, #b0761e);
+  background: color-mix(in srgb, var(--orange) 18%, transparent);
+  color: var(--orange);
 }
 
 .wiring-badge.is-engine {
-  background: color-mix(in srgb, var(--accent, #5a6f8f) 16%, transparent);
-  color: var(--accent, #5a6f8f);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
 }
 
 .wiring-badge.is-idle {
-  background: color-mix(in srgb, var(--muted, #6b7686) 14%, transparent);
-  color: var(--muted, #6b7686);
+  background: color-mix(in srgb, var(--ink-3) 14%, transparent);
+  color: var(--ink-3);
 }
 
 .wiring-label {
   font-size: 11px;
   font-weight: 600;
-  color: var(--fg, inherit);
+  color: var(--ink);
   white-space: nowrap;
 }
 
 .wiring-target {
   font-size: 10px;
-  color: var(--muted, #6b7686);
+  color: var(--ink-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -784,7 +728,7 @@
 .wiring-endpoints {
   margin-top: 10px;
   padding-top: 10px;
-  border-top: 1px solid var(--border, rgba(128, 128, 128, 0.18));
+  border-top: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -804,7 +748,7 @@
 }
 
 .wiring-endpoint-name {
-  color: var(--fg, inherit);
+  color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -812,16 +756,16 @@
 
 .wiring-endpoint-meta {
   margin-left: auto;
-  color: var(--muted, #6b7686);
+  color: var(--ink-3);
   white-space: nowrap;
 }
 
 .wiring-endpoint.is-down .wiring-endpoint-name {
-  color: var(--muted, #6b7686);
+  color: var(--ink-3);
 }
 
 .wiring-muted {
   font-size: 10px;
-  color: var(--muted, #6b7686);
+  color: var(--ink-3);
   padding: 4px 6px;
 }

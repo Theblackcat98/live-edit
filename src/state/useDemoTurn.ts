@@ -33,7 +33,7 @@ export function useDemoTurn({ busyRef, notify, submitRef }: DemoTurnArgs): DemoT
       return
     }
     if (busyRef.current) {
-      notify('Worker is busy', 'Wait for the current call to finish before starting the demo.', 'neutral')
+      notify('Still working', 'Wait for the current turn to finish before starting the demo.', 'neutral')
       return
     }
     demoStopRef.current = false

@@ -56,7 +56,7 @@ export async function runSnapshotDirective(
   publish()
   const confirmation =
     action === 'undo'
-      ? `Reverted to “${restored.snapshot?.label}”. The note is back to the previous verified snapshot — no model inference needed.`
+      ? `Reverted to “${restored.snapshot?.label}”. The note is back to the previous snapshot — no model was involved.`
       : `Reapplied “${restored.snapshot?.label}”. Snapshot ${deps.historyIndexRef.current} is active again.`
   deps.addMessage({
     role: 'assistant',

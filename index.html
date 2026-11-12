@@ -6,10 +6,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="LiquidScribe — a local-first multimodal note workspace driven by the LFM3 model trinity."
+      content="LiquidScribe — a local-first, voice-first note workspace driven by local LFM3 models."
     />
-    <meta name="color-scheme" content="light" />
-    <title>LiquidScribe — Multimodal note workspace</title>
+    <meta name="color-scheme" content="light dark" />
+    <script>
+      // Apply the stored theme before first paint (see src/lib/theme.ts).
+      try {
+        var t = localStorage.getItem('liquidscribe.theme')
+        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t)
+      } catch (e) {}
+    </script>
+    <title>LiquidScribe — Voice-first note workspace</title>
   </head>
   <body>
     <div id="root"></div>

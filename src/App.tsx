@@ -12,6 +12,7 @@ import { ToastView } from './components/ToastView'
 import { AboutDialog } from './components/AboutDialog'
 import { ModelSwitchDialog } from './components/ModelSwitchDialog'
 import { cx } from './lib/utils'
+import { useTheme } from './state/useTheme'
 
 type PhoneView = 'session' | 'note' | 'runtime'
 
@@ -42,6 +43,7 @@ function usePhoneLayout(): boolean {
 
 export default function App() {
   const workspace = useWorkspace()
+  const { theme, cycleTheme } = useTheme()
   const workspaceRef = useRef(workspace)
   const [aboutOpen, setAboutOpen] = useState(false)
   const [phoneView, setPhoneView] = useState<PhoneView>('session')
@@ -128,13 +130,15 @@ export default function App() {
         elapsedSeconds={workspace.elapsedSeconds}
         speakerOn={workspace.speakerOn}
         micOn={workspace.micOn}
-        traceAvailable={Boolean(workspace.trace)}
+        traceAvailable={Boolean(workspace.trace) || workspace.runs.length > 0}
         mode={workspace.mode}
         onSetMode={workspace.setMode}
         onToggleSpeaker={workspace.toggleSpeaker}
         onToggleMic={workspace.toggleMic}
         onOpenTrace={() => handleOpenTrace()}
         onOpenHelp={() => setAboutOpen(true)}
+        theme={theme}
+        onCycleTheme={cycleTheme}
       />
 
       <main className="workspace-grid">
@@ -241,6 +245,7 @@ export default function App() {
             refreshRuntime={workspace.refreshRuntime}
             mode={workspace.mode}
             onSetMode={workspace.setMode}
+            canOpenTrace={Boolean(workspace.trace) || workspace.runs.length > 0}
           />
         </div>
 

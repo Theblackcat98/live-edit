@@ -55,47 +55,51 @@ function wiringSurfacesFor(mode: RunMode): WiringSurface[] {
       endpoint: chat.endpoint,
       fallback: 'turn fails honestly — no canned replies',
     },
-    omniFirst
+    // Who decides "edit or conversation": d1 in audio mode (turn_intent over
+    // /v1/systemone), the front-door model's own tool call in legacy omni,
+    // and nobody in the worker-chat modes (the 1.7B chats and calls tools).
+    mode === 'audio'
       ? {
           id: 'route',
           label: 'Routing',
-          target: `${chat.author} · typed directive`,
-          endpoint: def.speech,
-          fallback: 'turn fails honestly — no heuristic router',
+          target: 'd1-Omni-2B · turn_intent',
+          endpoint: 'd1omni',
+          fallback: 'd1 unreachable — treated as conversation',
         }
-      : {
-          id: 'route',
-          label: 'Routing',
-          target: 'deterministic undo/redo pre-check — no model route',
-          endpoint: null,
-          fallback: '',
-        },
-    {
-      id: 'ground',
-      label: 'Span grounding',
-      target: 'LFM3-1.7B grounds its own span',
-      endpoint: null,
-      fallback: '',
-    },
+      : omniFirst
+        ? {
+            id: 'route',
+            label: 'Routing',
+            target: `${chat.author} · typed directive`,
+            endpoint: def.speech,
+            fallback: 'turn fails honestly — no heuristic router',
+          }
+        : {
+            id: 'route',
+            label: 'Routing',
+            target: 'no model route — the 1.7B calls tools itself',
+            endpoint: null,
+            fallback: '',
+          },
     {
       id: 'worker',
       label: 'Worker call',
-      target: 'LFM3-1.7B /v1/chat/completions',
+      target: 'LFM3-1.7B · authors + grounds the edit',
       endpoint: 'text',
       fallback: 'turn fails honestly — no template authoring',
     },
     d1Endpoint
       ? {
           id: 'critic',
-          label: 'Critic',
-          target: 'd1-Omni + local gates',
+          label: 'Safety check',
+          target: 'd1-Omni-2B + hard gates',
           endpoint: d1Endpoint,
-          fallback: 'local gates only · held as a pending edit',
+          fallback: 'd1 unavailable · held for your decision',
         }
       : {
           id: 'critic',
-          label: 'Critic',
-          target: 'local gates + engine dry-run — no d1 in this mode',
+          label: 'Safety check',
+          target: 'hard gates only — every edit held for you',
           endpoint: null,
           fallback: '',
         },
@@ -105,7 +109,7 @@ function wiringSurfacesFor(mode: RunMode): WiringSurface[] {
 
 /** What actually ran for one surface on the latest run, from trace.runtime. */
 interface WiringVerdict {
-  badge: 'LIVE' | 'FALLBACK' | 'ENGINE' | 'TYPED' | 'OFF' | 'IDLE' | '—'
+  badge: 'LIVE' | 'FALLBACK' | 'ENGINE' | 'TYPED' | 'OFF' | 'IDLE' | 'SKIPPED' | 'DICTATED' | '—'
   tone: 'live' | 'fallback' | 'engine' | 'idle'
   detail: string
 }
@@ -128,9 +132,13 @@ function wiringVerdict(surface: WiringSurface, trace: Trace | null): WiringVerdi
         : { badge: 'FALLBACK', tone: 'fallback', detail: surface.fallback }
     default: {
       const stage = trace.runtime[surface.id as 'route' | 'worker' | 'critic' | 'chat']
-      return stage === 'live'
-        ? { badge: 'LIVE', tone: 'live', detail: surface.target }
-        : { badge: 'FALLBACK', tone: 'fallback', detail: surface.fallback }
+      if (stage === 'live') return { badge: 'LIVE', tone: 'live', detail: surface.target }
+      // The stage never ran this turn (chat-only turn, stopped earlier).
+      if (stage === 'skipped') return { badge: 'SKIPPED', tone: 'idle', detail: 'not needed this turn' }
+      // Dictated text: the harness built the call from your exact words.
+      if (stage === 'dictation')
+        return { badge: 'DICTATED', tone: 'engine', detail: 'your exact words — harness-built call, no decode' }
+      return { badge: 'FALLBACK', tone: 'fallback', detail: surface.fallback }
     }
   }
 }
@@ -226,7 +234,7 @@ export function RuntimeWiringCard({
         })}
       </div>
 
-      <EndpointRows runtimeHealth={runtimeHealth} />
+      <EndpointRows runtimeHealth={runtimeHealth} mode={mode} />
     </section>
   )
 }

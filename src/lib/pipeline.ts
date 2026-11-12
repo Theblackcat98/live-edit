@@ -55,7 +55,7 @@ export async function runPipelineTurn(
   deps.stopSpeech()
 
   if (deps.busyRef.current) {
-    deps.notify('Worker is busy', 'Wait for the current verified call to finish before queuing another.', 'neutral')
+    deps.notify('Still working', 'Wait for the current turn to finish before sending another.', 'neutral')
     return
   }
 
@@ -85,18 +85,26 @@ export async function runPipelineTurn(
     durationSec: source === 'text' ? undefined : deps.lastVoiceSecondsRef.current,
   })
 
-  const { publish, finish, recordExchange, isClosed } = createTracePublisher(deps, traceLocal)
+  const liveUsage: Partial<ContextUsage> = {}
+  const { publish, finish, recordExchange, isClosed } = createTracePublisher(deps, traceLocal, liveUsage)
 
+  // Stages start as `skipped` and are marked live/fallback only when they
+  // actually run — a chat-only turn must never show the worker or the safety
+  // check as a fallback. Chat starts as `fallback`: if the front door never
+  // answers, the harness error path is what the user saw.
   const runtime: TraceRuntime = {
-    route: 'fallback',
-    worker: 'fallback',
-    critic: 'fallback',
+    route: 'skipped',
+    worker: 'skipped',
+    critic: 'skipped',
     chat: 'fallback',
   }
-  if (source === 'voice') runtime.asr = deps.asrSourceRef.current
+  if (source === 'voice') {
+    runtime.asr = deps.asrSourceRef.current
+    if (deps.lastAsrMsRef.current) traceLocal.timings.asr = deps.lastAsrMsRef.current
+  }
   deps.asrSourceRef.current = 'fallback'
+  deps.lastAsrMsRef.current = undefined
   traceLocal.runtime = runtime
-  const liveUsage: Partial<ContextUsage> = {}
 
   const ctx: TurnContext = {
     command,

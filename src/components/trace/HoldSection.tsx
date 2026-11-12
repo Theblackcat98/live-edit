@@ -1,37 +1,60 @@
-import { Gauge, X } from 'lucide-react'
-import type { Trace, TurnHold } from '../../types'
-import { PendingEditSection } from './PendingEditSection'
+import { CircleAlert, Gauge, X } from 'lucide-react'
+import type { Trace } from '../../types'
+import { humanD1Reason } from '../../lib/d1reason'
+import { cx } from '../../lib/utils'
 
 /** Head-line for a turn that stopped or was held before execution (§8/§9). */
-const HOLD_TITLES: Record<TurnHold['kind'], string> = {
-  'hard-gate': 'Stopped by a hard gate — not overridable',
+const HOLD_TITLES: Record<NonNullable<Trace['hold']>['kind'], string> = {
+  'hard-gate': 'Stopped by a hard gate — cannot be overridden',
   'blast-radius': 'Blast-radius limit — held for your decision',
-  'blast-collapse': 'Section-scale collapse (§8) — held for your decision',
-  'no-decision-model': 'No decision model in this mode — held for your decision',
+  'blast-collapse': 'Section-scale removal — held for your decision',
+  'no-decision-model': 'No safety-check model in this mode — held for your decision',
   engine: 'The engine refused this call',
   outcome: 'Outcome check failed — nothing was written',
-  d1: 'Safety check — held for your decision',
+  d1: 'Safety check held this edit for your decision',
 }
 
 /**
- * Any hold except a d1 one: d1 already has its own verdict banner, and two
- * blocks describing one refusal would read as two refusals.
+ * The one banner that answers "what happened to my edit" for a turn that did
+ * not apply. Held turns (orange) wait under Pending edits; stopped turns (red)
+ * are over. d1 detail lives in the Safety check section — this is the summary.
  */
-export function HoldSection({ hold, status }: { hold: TurnHold; status: Trace['status'] }) {
-  if (hold.kind === 'd1') return null
+export function HoldSection({ trace }: { trace: Trace }) {
+  const hold = trace.hold
+  if (!hold) return null
+  const held = trace.status === 'pending'
+  const resolved = trace.resolution
+  const isD1 = hold.kind === 'd1'
+  const title = isD1 && trace.d1Check?.verdict === 'unavailable'
+    ? 'Safety check unavailable — held for your decision'
+    : HOLD_TITLES[hold.kind]
+  const reason = isD1 && trace.d1Check ? humanD1Reason(trace.d1Check) ?? hold.reason : hold.reason
+  const Icon = hold.kind === 'blast-radius' || hold.kind === 'blast-collapse' ? Gauge : held ? CircleAlert : X
   return (
-    <div className="trace-verdict">
-      <span className="trace-verdict-icon" aria-hidden="true">
-        {hold.kind === 'blast-radius' || hold.kind === 'blast-collapse' ? (
-          <Gauge size={11} />
-        ) : (
-          <X size={11} />
-        )}
+    <div
+      className={cx(
+        'trace-banner',
+        resolved === 'applied' ? 'is-applied' : held || resolved === 'discarded' ? 'is-held' : 'is-stopped',
+      )}
+      role="status"
+    >
+      <span className="trace-banner-icon" aria-hidden="true">
+        <Icon size={12} />
       </span>
-      <div>
-        <strong>{HOLD_TITLES[hold.kind]}</strong>
-        <p>{hold.reason}</p>
-        <PendingEditSection pending={status === 'pending'} />
+      <div className="trace-banner-main">
+        <strong>{title}</strong>
+        {reason && <p>{reason}</p>}
+        <span className="trace-banner-meta">
+          {resolved === 'applied'
+            ? 'You approved it — applied to the note'
+            : resolved === 'discarded'
+              ? 'You discarded it — note untouched'
+              : resolved === 'stale'
+                ? 'Went stale before it could apply — note untouched'
+                : held
+                  ? 'Waiting under Pending edits · note untouched'
+                  : 'Note untouched'}
+        </span>
       </div>
     </div>
   )

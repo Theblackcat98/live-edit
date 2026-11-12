@@ -2,13 +2,19 @@
  * OpenAI-style chat completions against a local llama.cpp family server.
  *
  * `chatComplete` is the single-shot call; `chatCompleteStream` parses SSE
- * `data:` chunks and forwards deltas. Both are live-first: any transport
- * failure surfaces as a `BridgeError` and the caller falls back.
+ * `data:` chunks and forwards deltas. Any transport failure surfaces as a
+ * `BridgeError`; callers fail the stage honestly — there is no stand-in model.
  */
 
 import type { EndpointHealth } from '../types'
 import { BridgeError, ENDPOINTS, fetchJson, modelUrl } from './endpoints'
-import { readCompletionChoice, usageOf, type TokenUsage } from './completion'
+import {
+  optionalServerFacts,
+  readCompletionChoice,
+  usageOf,
+  type ServerTimings,
+  type TokenUsage,
+} from './completion'
 
 export { chatCompleteStream } from './chatStream'
 export { measuredUsage, readCompletionChoice, usageOf, type TokenUsage } from './completion'
@@ -67,6 +73,10 @@ export interface ChatResult {
   toolCalls: ToolCallRequest[]
   /** Last non-null finish_reason the server reported ("stop", "length", …). */
   finishReason: string | null
+  /** The model id the server reported for this completion. */
+  servedModel?: string
+  /** llama.cpp's performance figures for this completion, when reported. */
+  serverTimings?: ServerTimings
 }
 
 export interface ChatOptions {
@@ -119,5 +129,7 @@ export async function chatComplete(
     usage: usageOf(payload),
     toolCalls,
     finishReason,
+    ...optionalServerFacts(payload),
   }
 }
+

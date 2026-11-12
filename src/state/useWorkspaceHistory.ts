@@ -131,7 +131,7 @@ export function useWorkspaceHistory({
 
   const undo = useCallback(() => {
     if (busyRef.current) {
-      notify('Worker is busy', 'Wait for the current verified call to finish.', 'neutral')
+      notify('Still working', 'Wait for the current turn to finish.', 'neutral')
       return
     }
     const result = restoreHistory(historyIndexRef.current - 1)
@@ -144,7 +144,7 @@ export function useWorkspaceHistory({
 
   const redo = useCallback(() => {
     if (busyRef.current) {
-      notify('Worker is busy', 'Wait for the current verified call to finish.', 'neutral')
+      notify('Still working', 'Wait for the current turn to finish.', 'neutral')
       return
     }
     const result = restoreHistory(historyIndexRef.current + 1)
@@ -158,7 +158,7 @@ export function useWorkspaceHistory({
   const restoreSnapshot = useCallback(
     (id: string) => {
       if (busyRef.current) {
-        notify('Worker is busy', 'Wait for the current verified call to finish.', 'neutral')
+        notify('Still working', 'Wait for the current turn to finish.', 'neutral')
         return
       }
       const index = historyRef.current.findIndex((snapshot) => snapshot.id === id)
@@ -172,7 +172,7 @@ export function useWorkspaceHistory({
   const applySourceEdit = useCallback(
     (nextNote: string): boolean => {
       if (busyRef.current) {
-        notify('Worker is busy', 'Wait for the verified call to finish before editing.', 'neutral')
+        notify('Still working', 'Wait for the current turn to finish before editing.', 'neutral')
         return false
       }
       if (nextNote === noteRef.current) return false
@@ -192,8 +192,8 @@ export function useWorkspaceHistory({
   const newNote = useCallback(() => {
     if (busyRef.current) {
       notify(
-        'Worker is busy',
-        'Wait for the current verified call to finish before starting a new note.',
+        'Still working',
+        'Wait for the current turn to finish before starting a new note.',
         'neutral',
       )
       return

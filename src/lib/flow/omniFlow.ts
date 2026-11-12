@@ -9,8 +9,8 @@
 import type { Directive, OmniTurnResult } from '../../types'
 import { d1Decide, endpointUp } from '../bridge'
 import { modeDef } from '../modes'
-import { runOmniTurn } from '../omni'
-import { runD1Route, ROUTE_AMBIGUOUS } from '../d1route'
+import { OmniTurnError, runOmniTurn } from '../omni'
+import { runD1Route, ROUTE_AMBIGUOUS, ROUTE_CONFIDENCE_MIN, ROUTE_CONVERSATIONAL } from '../d1route'
 import { createStreamBubble } from './bubble'
 import { buildDictationCall, buildEffectiveDirective, buildPacketCall } from './buildCall'
 import { chatTurnFromOmni } from './chatTurn'
@@ -108,8 +108,11 @@ export async function runOmniFirstTurn(
       finish('conversational')
       return
     }
+    // OmniTurnError messages already name the model ("LFM3-Audio-2B turn
+    // failed: …"); only an unexpected error needs the prefix.
+    if (error instanceof OmniTurnError) throw error
     throw new Error(
-      `Omni turn failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+      `${chatAuthor} turn failed: ${error instanceof Error ? error.message : 'unknown error'}`,
     )
   } finally {
     if (deps.chatAbortRef.current === controller) deps.chatAbortRef.current = null
@@ -135,9 +138,20 @@ export async function runOmniFirstTurn(
   }
   const turn = chatTurnFromOmni(raw)
   runtime.chat = 'live'
-  runtime.route = 'live'
+  // Legacy Omni decides answer/clarify/delegate/action in the same call, so
+  // that call is the route. In audio mode Audio only chats; d1 routes below
+  // and records the route stage itself.
+  if (mode === 'omni') runtime.route = 'live'
   if (turn.repair) traceLocal.omniRepair = turn.repair
-  traceLocal.timings.route = turn.ms
+  // One model call is booked to exactly one timing bucket — never both route
+  // and chat, or the end-to-end total would count it twice. Answer/clarify
+  // (and every audio-mode turn) are chat time; legacy delegate/action are
+  // route time.
+  if (mode === 'audio' || turn.outcome === 'answer' || turn.outcome === 'clarify') {
+    traceLocal.timings.chat = turn.ms
+  } else {
+    traceLocal.timings.route = turn.ms
+  }
   if (turn.promptTokens) {
     traceLocal.promptTokens = turn.promptTokens
     liveUsage.omni = turn.promptTokens
@@ -148,8 +162,9 @@ export async function runOmniFirstTurn(
   // whether this turn wants an edit. Legacy omni continues below on the
   // tool-calling path.
   if (mode === 'audio') {
-    traceLocal.timings.chat = turn.ms
     await runAudioRouted(deps, ctx, {
+      truncated: turn.truncated === true,
+      author: chatAuthor,
       audioText: turn.text ?? '',
       lastRun,
       settleStream,
@@ -160,7 +175,6 @@ export async function runOmniFirstTurn(
 
   if (turn.outcome === 'answer' || turn.outcome === 'clarify') {
     const text = turn.text ?? ''
-    traceLocal.timings.chat = turn.ms
     deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
     // No silent failures: a clarify that exists because the delegation
     // failed validation twice (turn.repair is set only on that path) must
@@ -178,6 +192,7 @@ export async function runOmniFirstTurn(
     }
     settleStream(text)
     deps.speakReply(text)
+    if (turn.truncated) addCutOffNotice(deps, traceLocal.id, chatAuthor)
     finish(turn.outcome === 'answer' ? 'conversational' : 'clarify')
     return
   }
@@ -187,7 +202,9 @@ export async function runOmniFirstTurn(
     deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
     deps.setStage('executing')
     const delta = turn.action === 'undo' ? -1 : 1
+    const restoreStarted = performance.now()
     const restored = deps.restoreHistory(deps.historyIndexRef.current + delta)
+    traceLocal.timings.execute = Number((performance.now() - restoreStarted).toFixed(1))
     if (!restored.ok) {
       deps.addMessage({
         role: 'assistant',
@@ -207,7 +224,7 @@ export async function runOmniFirstTurn(
       message: restored.message,
       tool: turn.action!,
       note: restored.note,
-      durationMs: 0,
+      durationMs: traceLocal.timings.execute,
       snapshotId: restored.snapshot?.id,
     }
     publish()
@@ -249,6 +266,9 @@ async function runAudioRouted(
     lastRun: { command: string; status: string } | null
     settleStream: (text: string) => void
     retractStream: () => void
+    /** Audio's reply stopped at max_tokens. */
+    truncated: boolean
+    author: string
   },
 ): Promise<void> {
   const { command, noteAtStart, traceLocal, runtime, publish, finish } = ctx
@@ -259,16 +279,43 @@ async function runAudioRouted(
     lastRun: opts.lastRun,
     d1Decide,
   })
-  runtime.route = 'live'
+  // A route d1 never decided is a fallback, not a live verdict.
+  runtime.route = route.error ? 'fallback' : 'live'
   traceLocal.timings.route += route.ms
+  // The route verdict is first-class trace data: conversational turns would
+  // otherwise leave no record of what d1 decided.
+  traceLocal.d1Route = {
+    intent: route.intent,
+    confidence: route.confidence,
+    routesToWorker: route.routesToWorker,
+    threshold: ROUTE_CONFIDENCE_MIN,
+    ms: route.ms,
+    ...(route.promptTokens ? { promptTokens: route.promptTokens } : {}),
+    ...(route.error ? { error: route.error } : {}),
+  }
+  if (route.promptTokens) ctx.liveUsage.d1 = route.promptTokens
   publish()
 
   if (!route.routesToWorker) {
     deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
     opts.settleStream(opts.audioText)
     deps.speakReply(opts.audioText)
-    // Ambiguity settles the same way: Audio's reply stands (it asks when the
-    // request is unclear), the user rephrases, nothing executes.
+    if (opts.truncated) addCutOffNotice(deps, traceLocal.id, opts.author)
+    // Audio answers before d1 routes, and it is prompted to acknowledge
+    // change requests. Whenever the turn may have been an edit request but
+    // did not reach the worker, that acknowledgement must not be the last
+    // word — say plainly that nothing changed and why.
+    const notice = unroutedEditNotice(route)
+    if (notice) {
+      deps.addMessage({
+        role: 'assistant',
+        author: 'harness',
+        kind: 'notice',
+        text: notice,
+        runId: traceLocal.id,
+      })
+      if (route.error) deps.notify('Router unavailable', route.error, 'error')
+    }
     finish(route.intent === ROUTE_AMBIGUOUS ? 'clarify' : 'conversational')
     return
   }
@@ -286,6 +333,40 @@ async function runAudioRouted(
     d1Check: true,
     routedNote: `d1 routed this turn to the worker (intent ${route.intent}, confidence ${route.confidence}).`,
   })
+}
+
+/** A reply the server stopped at max_tokens must not pass as complete. */
+function addCutOffNotice(deps: PipelineDeps, runId: string, author: string): void {
+  deps.addMessage({
+    role: 'assistant',
+    author: 'harness',
+    kind: 'notice',
+    text: `${author}'s reply above was cut off at its length limit — it is incomplete.`,
+    runId,
+  })
+}
+
+/**
+ * The harness notice for a turn that may have asked for an edit but was not
+ * routed to the worker; null for a clear conversational verdict.
+ */
+export function unroutedEditNotice(route: {
+  intent: string
+  confidence: number | null
+  error?: string
+}): string | null {
+  if (route.error) {
+    return `Nothing was changed: the router (d1) gave no usable answer (${route.error}), so this turn was handled as conversation only. If you asked for an edit, try again once d1 is back.`
+  }
+  if (route.intent === ROUTE_AMBIGUOUS) {
+    return 'Nothing was changed: d1 could not tell whether you wanted the note edited. If you did, say exactly what to change.'
+  }
+  if (route.intent !== ROUTE_CONVERSATIONAL) {
+    const conf = route.confidence === null ? 'unreported' : route.confidence.toFixed(2)
+    const article = /^[aeiou]/.test(route.intent) ? 'an' : 'a'
+    return `Nothing was changed: d1 read this as ${article} ${route.intent} request but with low confidence (${conf}, needs ${ROUTE_CONFIDENCE_MIN.toFixed(2)}). Say exactly what to change to try again.`
+  }
+  return null
 }
 
 /** Shared worker tail: directive → call (dictation or packet decode) → verify. */

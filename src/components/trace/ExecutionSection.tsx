@@ -6,7 +6,7 @@ import { TraceSection } from './TraceSection'
 /** What the engine wrote: the atomic line diff and the snapshot it left. */
 export function ExecutionSection({ execution }: { execution: Trace['execution'] }) {
   return (
-    <TraceSection index="E" title="Execution & snapshot" caption="atomic line diff">
+    <TraceSection index="E" title="Execution" caption="line diff + snapshot">
       {execution ? (
         <div className="trace-execution">
           <div className="trace-execution-head">
@@ -40,7 +40,7 @@ export function ExecutionSection({ execution }: { execution: Trace['execution'] 
           )}
           <div className="trace-execution-meta mono">
             {execution.snapshotId && <span>snapshot {execution.snapshotId.slice(-6)}</span>}
-            <span>{execution.durationMs.toFixed(1)} ms engine</span>
+            <span>{execution.durationMs.toFixed(1)} ms in the engine</span>
           </div>
         </div>
       ) : (

@@ -52,7 +52,13 @@ export interface PendingVerdictChip {
  * unavailable d1 are different situations — the latter hands the decision to
  * the user without the safety model's opinion, and the card says so.
  */
-export function verdictChip(verdict: PendingEdit['d1']['verdict']): PendingVerdictChip {
+export function verdictChip(
+  verdict: PendingEdit['d1']['verdict'],
+  holdKind?: PendingEdit['holdKind'],
+): PendingVerdictChip {
+  // Holds that never reached d1 must not be described as a d1 verdict.
+  if (holdKind === 'no-decision-model') return { label: 'No safety check in this mode — your call', tone: 'orange' }
+  if (holdKind === 'blast-radius') return { label: 'Over the removal limit — your call', tone: 'orange' }
   if (verdict === 'approved') {
     // Reachable only via the §8 blast-radius hold (issue #58): d1 approved,
     // but a section-scale collapse never executes silently.
@@ -110,7 +116,7 @@ export function diffSummary(diff: ExecutionDiff): string {
  * like undo today). Null when the card is actionable.
  */
 export function busyReason(busy: boolean): string | null {
-  return busy ? 'A worker run is active — decide once the turn finishes.' : null
+  return busy ? 'A turn is running — decide once it finishes.' : null
 }
 
 /** Head-line copy per card state; the pending state is the live decision. */
@@ -163,7 +169,7 @@ export function PendingEditCard({ edit, busy, onApply, onDiscard }: PendingEditC
   // reopened stays open, one they closed stays closed.
   const [collapseOverride, setCollapseOverride] = useState<boolean | null>(null)
   const collapsed = collapseOverride ?? defaultCollapsed(edit.status)
-  const chip = verdictChip(edit.d1.verdict)
+  const chip = verdictChip(edit.d1.verdict, edit.holdKind)
   const scores = scoreSummary(edit.d1)
   const reason = reasonLine(edit.d1)
   const explanation = statusExplanation(edit.status)
@@ -190,7 +196,7 @@ export function PendingEditCard({ edit, busy, onApply, onDiscard }: PendingEditC
           </span>
           <span className="pending-title">{statusTitle(edit.status)}</span>
           <span className={cx('pending-verdict', `is-${chip.tone}`)}>
-            {edit.d1.verdict === 'disapproved' ? <X size={10} /> : <CircleAlert size={10} />}
+            {edit.d1.verdict === 'disapproved' && chip.tone === 'red' ? <X size={10} /> : <CircleAlert size={10} />}
             {chip.label}
           </span>
         </button>

@@ -10,8 +10,12 @@ import { isRecord, readString } from './utils'
 import { BridgeError, ENDPOINTS, modelUrl } from './endpoints'
 import {
   measuredUsage,
+  optionalServerFacts,
   readCompletionChoice,
+  servedModelOf,
+  serverTimingsOf,
   usageOf,
+  type ServerTimings,
   type TokenUsage,
 } from './completion'
 import type {
@@ -79,6 +83,7 @@ export async function chatCompleteStream(
         usage: usageOf(payload),
         toolCalls,
         finishReason,
+        ...optionalServerFacts(payload),
       }
     }
 
@@ -90,6 +95,8 @@ export async function chatCompleteStream(
     let usage: TokenUsage = { promptTokens: 0, outputTokens: 0 }
     let finished = false
     let finishReason: string | null = null
+    let servedModel: string | undefined
+    let serverTimings: ServerTimings | undefined
     // Tool-call deltas arrive fragmented, keyed by `index` — accumulate the
     // fragments per slot and assemble the complete calls at stream end.
     const toolCallSlots = new Map<number, { id: string; name: string; arguments: string }>()
@@ -118,6 +125,8 @@ export async function chatCompleteStream(
         }
         const timings = measuredUsage(chunk)
         if (timings) usage = timings
+        servedModel = servedModelOf(chunk) ?? servedModel
+        serverTimings = serverTimingsOf(chunk) ?? serverTimings
         if (isRecord(chunk) && isRecord(chunk.usage)) usage = usageOf(chunk)
         const choices = isRecord(chunk) && Array.isArray(chunk.choices) ? chunk.choices : []
         const first = isRecord(choices[0]) ? choices[0] : {}
@@ -171,6 +180,8 @@ export async function chatCompleteStream(
       usage,
       toolCalls,
       finishReason,
+      ...(servedModel ? { servedModel } : {}),
+      ...(serverTimings ? { serverTimings } : {}),
     }
   } catch (error) {
     if (error instanceof BridgeError) throw error

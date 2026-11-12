@@ -714,7 +714,7 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
     const detail = error instanceof Error ? error.message : String(error)
     return new OmniTurnError(
       'endpoint',
-      `Omni turn failed: ${detail}`,
+      `${endpointState.name} turn failed: ${detail}`,
       endpointState,
       undefined,
       detail,
@@ -740,7 +740,7 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
       ...(options.tools ? { tools: options.tools } : {}),
       onToken: streamingOnToken(options.streamDeltas === true),
     }
-    const report = (completion: ChatResult | null, error?: string) => {
+    const report = (completion: ChatResult | null, error?: string, elapsedMs?: number) => {
       input.onExchange?.(
         captureExchange({
           role: 'chat',
@@ -754,16 +754,22 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
           ...(options.tools ? { tools: options.tools.map((tool) => tool.function.name) } : {}),
           completion,
           ...(error ? { error } : {}),
+          ...(elapsedMs !== undefined ? { elapsedMs } : {}),
         }),
       )
     }
     const attempt = async (): Promise<ChatResult> => {
+      const attemptStarted = performance.now()
       try {
         const completion = await chat(messages, requestOptions)
         report(completion)
         return completion
       } catch (error) {
-        report(null, error instanceof Error ? error.message : String(error))
+        report(
+          null,
+          error instanceof Error ? error.message : String(error),
+          Number((performance.now() - attemptStarted).toFixed(1)),
+        )
         throw error
       }
     }
@@ -787,7 +793,7 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
           if (retryError instanceof Error && /^HTTP 500/.test(retryError.message)) {
             throw new OmniTurnError(
               'server-tool-parse',
-              'Omni server refused the generated tool call twice (HTTP 500 tool-parse)',
+              `${endpointState.name} server refused the generated tool call twice (HTTP 500 tool-parse)`,
               endpointState,
               500,
               detail,
@@ -818,14 +824,20 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
     // No tool call → answer. Deltas already streamed provisionally; the
     // sanitized result.text is authoritative and replaces them.
     const text = sanitizeOmniText(primary.text)
+    const cutOff = primary.finishReason === 'length'
     if (!text) {
       throw new OmniTurnError(
         'empty-reply',
-        'Omni reply contained only unusable tool markup (no tool call, no visible text)',
+        cutOff
+          ? `${endpointState.name} used its whole ${OMNI_MAX_TOKENS}-token budget${primary.reasoning ? ' thinking' : ''} and produced no visible reply`
+          : primary.text.trim()
+            ? `${endpointState.name} reply contained only tool markup (no tool call, no visible text)`
+            : `${endpointState.name} returned no visible reply`,
         endpointState,
       )
     }
-    return result('answer', { text })
+    // finish_reason "length": the server stopped at max_tokens mid-reply.
+    return result('answer', { text, ...(cutOff ? { truncated: true } : {}) })
   }
   if (firstEvaluation.kind === 'delegate') return result('delegate', { directive: firstEvaluation.directive })
   if (firstEvaluation.kind === 'action') return result('action', { action: firstEvaluation.action })
@@ -895,7 +907,7 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
   if (!question) {
     throw new OmniTurnError(
       'empty-reply',
-      'Omni clarify follow-up returned no usable text',
+      `${endpointState.name} clarify follow-up returned no usable text`,
       endpointState,
     )
   }

@@ -4,6 +4,7 @@ import { rosterMemoryGB, MEMORY_BUDGET_GB } from '../../data/models'
 import { modeDef } from '../../lib/modes'
 import type { RunMode } from '../../lib/runmode'
 import { cx } from '../../lib/utils'
+import { modeHealth, modelHostLabel } from '../../lib/runView'
 
 /** The model roster and the unified-memory budget it fits in. */
 export function RuntimeCard({
@@ -17,10 +18,7 @@ export function RuntimeCard({
 }) {
   const models = modeDef(mode).roster
   const rosterMemory = rosterMemoryGB(models)
-  const upCount = runtimeHealth
-    ? runtimeHealth.endpoints.filter((endpoint) => endpoint.up).length
-    : null
-  const allUp = upCount !== null && upCount === runtimeHealth?.endpoints.length
+  const health = modeHealth(runtimeHealth, mode)
   return (
     <section className="rail-card runtime-card">
       <header className="rail-header">
@@ -29,17 +27,14 @@ export function RuntimeCard({
           Model roster · {modeDef(mode).info.short}
         </div>
         <span
-          className={cx(
-            'chip',
-            !runtimeHealth ? 'chip-ghost' : allUp ? 'chip-green' : 'chip-orange',
-          )}
+          className={cx('chip', !health ? 'chip-ghost' : health.allUp ? 'chip-green' : 'chip-orange')}
           title={
-            runtimeHealth
-              ? `${upCount}/${runtimeHealth.endpoints.length} local model servers answering on 127.0.0.1`
+            health
+              ? `${health.up}/${health.needed.length} of this mode's model servers answering on ${modelHostLabel()}`
               : 'Probing local model servers…'
           }
         >
-          {runtimeHealth ? `${allUp ? 'LIVE' : `${upCount}/${runtimeHealth.endpoints.length} up`}` : '…'}
+          {health ? (health.allUp ? 'all up' : `${health.up}/${health.needed.length} up`) : '…'}
         </span>
       </header>
 
