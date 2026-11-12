@@ -167,7 +167,6 @@ export function pendingResolutionRecord(edit: PendingEdit, reason: string): Reje
     at: Date.now(),
     command: edit.directive.instruction,
     route: { tool: edit.call.name, provenance: 'pending edit adjudication' },
-    spanCandidates: [],
     grounding: { source: 'pending-adjudication' },
     workerXml: edit.call.xml,
     critic: { verdict: 'rejected', reason, pCorrect: edit.d1.noul },

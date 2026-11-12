@@ -40,7 +40,6 @@ const rejectedTrace: RejectedTraceRecord = {
   at: AT,
   command: 'Delete the Q3 block.',
   route: { tool: 'remove_text', provenance: 'local-router' },
-  spanCandidates: [{ startLine: 3, endLine: 4, excerpt: '## Q3' }],
   grounding: { source: 'fallback-keyword', chosenLine: 3 },
   workerXml: '<tool name="remove_text"><param name="startLine">3</param></tool>',
   critic: { verdict: 'rejected', reason: 'row-count check failed', pCorrect: null },

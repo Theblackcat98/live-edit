@@ -523,7 +523,6 @@ function recordOmniRejection(
             ? 'worker-chat run mode'
             : 'audio-first pipeline',
       },
-      spanCandidates: [],
       grounding: { source: 'worker-self' },
       workerXml: call.xml,
       critic: { verdict: 'rejected', reason, pCorrect },

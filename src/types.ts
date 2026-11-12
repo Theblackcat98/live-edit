@@ -168,7 +168,6 @@ export interface RejectedTraceRecord {
   at: number
   command: string
   route: { tool?: ToolName; provenance: string }
-  spanCandidates: Array<{ startLine: number; endLine: number; excerpt: string }>
   grounding: { source: GroundingSource; chosenLine?: number; p?: Probability }
   workerXml: string
   critic: { verdict: 'rejected'; reason?: string; pCorrect: Probability }
