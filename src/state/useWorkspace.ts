@@ -41,6 +41,7 @@ import {
 import { noteHash } from '../lib/context'
 import { executeTool } from '../lib/tools'
 import { useRuntimeHealth } from './useRuntimeHealth'
+import { useSessionClock } from './useSessionClock'
 import { useToasts } from './useToasts'
 
 const initialNoteTokens = estimateTokens(INITIAL_NOTE)
@@ -221,9 +222,7 @@ export function useWorkspace(): WorkspaceApi {
   const [traceOpen, setTraceOpen] = useState(false)
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null)
   const [demoRunning, setDemoRunning] = useState(false)
-  const [elapsedSeconds, setElapsedSeconds] = useState(0)
-  const [nowTick, setNowTick] = useState(Date.now())
-  const [sessionStart] = useState(() => Date.now())
+  const { elapsedSeconds, nowTick } = useSessionClock()
   const { runtimeHealth, healthRef, refreshRuntime } = useRuntimeHealth()
   const [pendingSwitch, setPendingSwitch] = useState<ModelSwitchPlan | null>(null)
   const [switchingModels, setSwitchingModels] = useState(false)
@@ -314,15 +313,6 @@ export function useWorkspace(): WorkspaceApi {
   useEffect(() => {
     modeRef.current = mode
   }, [mode])
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setElapsedSeconds(Math.floor((Date.now() - sessionStart) / 1000))
-      setNowTick(Date.now())
-    }, 1000)
-    setElapsedSeconds(Math.floor((Date.now() - sessionStart) / 1000))
-    return () => window.clearInterval(timer)
-  }, [sessionStart])
 
   const addMessage = useCallback(
     (message: Omit<Message, 'id' | 'at'> & { at?: number; id?: string }) => {
