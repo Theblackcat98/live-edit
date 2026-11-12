@@ -441,27 +441,6 @@ export interface PendingClarification {
   options: MessageAction[]
 }
 
-export interface WorkspaceState {
-  note: string
-  title: string
-  path: string
-  history: Snapshot[]
-  historyIndex: number
-  messages: Message[]
-  trace: Trace | null
-  runs: Trace[]
-  stage: PipelineStage
-  stageStates: Record<StageId, StageState>
-  busy: boolean
-  span: SpanTarget | null
-  diff: ExecutionDiff | null
-  contextUsage: ContextUsage
-  sourceMode: boolean
-  speakerOn: boolean
-  micOn: boolean
-  activityTab: 'supervisor' | 'context'
-}
-
 // --- Phase-1 pipeline contracts (architecture-refactor.md §5.1) ----------------
 // Additive only: these types describe the Omni-first pipeline (design.md) so
 // later phases are type-led. Nothing produces or consumes them yet; the legacy

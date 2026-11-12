@@ -22,27 +22,6 @@ export function pAdopted(p: number | null | undefined, threshold: number): boole
   return p == null ? true : p > threshold
 }
 
-/**
- * Decisive gate: can this score overturn another path's result (e.g. d1
- * overriding a local grounding miss)? An unreported score is never decisive —
- * only a measured probability above the threshold is.
- */
-export function pDecisive(p: number | null | undefined, threshold: number): boolean {
-  return p != null && p >= threshold
-}
-
-/**
- * Floor a measured score at a deterministic repair's heuristic floor. A
- * measured value above the floor passes through verbatim; one below it is
- * replaced by the flat floor (a local heuristic adoption, documented by the
- * repair reason); an unreported score stays unreported — no number is invented
- * for a choice nobody measured.
- */
-export function pFloor(p: number | null | undefined, floor: number): number | null {
-  if (p == null) return null
-  return Number(Math.max(floor, p).toFixed(3))
-}
-
 export function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
