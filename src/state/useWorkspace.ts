@@ -19,16 +19,10 @@ import { DEMO_SEQUENCE, INITIAL_NOTE, NOTE_PATH, NOTE_TITLE } from '../data/note
 import { speak, stopSpeaking, cleanSpeechText, speechSynthesisAvailable, VoiceRecorder } from '../lib/speech'
 import { buildSuggestions } from '../lib/suggestions'
 import { loadWorkspaceState, saveWorkspaceState, type PersistedWorkspace } from '../lib/storage'
-import { ENDPOINTS, endpointUp, synthesizeSpeech, transcribeAudio } from '../lib/bridge'
-import {
-  loadRunMode,
-  saveRunMode,
-  speechPortFor,
-  type RunMode,
-} from '../lib/runmode'
+import { endpointUp, synthesizeSpeech, transcribeAudio } from '../lib/bridge'
+import { speechPortFor, type RunMode } from '../lib/runmode'
 import { modeDef } from '../lib/modes'
-import { managerStart, managerStatus, managerStop } from '../lib/modelManager'
-import { managerNameFor, planModelSwitch, type ModelSwitchPlan } from '../lib/modelPlan'
+import type { ModelSwitchPlan } from '../lib/modelPlan'
 import { estimateTokens, makeId, sleep } from '../lib/utils'
 import { runPipelineTurn, type PipelineDeps } from '../lib/pipeline'
 import {
@@ -38,6 +32,7 @@ import { useRuntimeHealth } from './useRuntimeHealth'
 import { useSessionClock } from './useSessionClock'
 import { useToasts } from './useToasts'
 import { useWorkspaceHistory } from './useWorkspaceHistory'
+import { useWorkspaceModelSwitch } from './useWorkspaceModelSwitch'
 import { useWorkspacePending } from './useWorkspacePending'
 import { useWorkspaceTraces } from './useWorkspaceTraces'
 
@@ -192,9 +187,6 @@ export function useWorkspace(): WorkspaceApi {
   const [demoRunning, setDemoRunning] = useState(false)
   const { elapsedSeconds, nowTick } = useSessionClock()
   const { runtimeHealth, healthRef, refreshRuntime } = useRuntimeHealth()
-  const [pendingSwitch, setPendingSwitch] = useState<ModelSwitchPlan | null>(null)
-  const [switchingModels, setSwitchingModels] = useState(false)
-  const [mode, setModeState] = useState<RunMode>(() => loadRunMode())
   const [asrBusy, setAsrBusy] = useState(false)
   const [ttsBusy, setTtsBusy] = useState(false)
   const busyRef = useRef(false)
@@ -206,7 +198,6 @@ export function useWorkspace(): WorkspaceApi {
   const speechTokenRef = useRef(0)
   const demoRunningRef = useRef(false)
   const demoStopRef = useRef(false)
-  const modeRef = useRef<RunMode>(mode)
   /** Hands-free toggle mirror: capture callbacks outlive the render they began in. */
   const micOnRef = useRef(false)
   const asrBusyRef = useRef(false)
@@ -236,10 +227,6 @@ export function useWorkspace(): WorkspaceApi {
   useEffect(() => {
     messagesRef.current = messages
   }, [messages])
-  useEffect(() => {
-    modeRef.current = mode
-  }, [mode])
-
   const addMessage = useCallback(
     (message: Omit<Message, 'id' | 'at'> & { at?: number; id?: string }) => {
       const id = message.id ?? makeId('msg')
@@ -278,139 +265,23 @@ export function useWorkspace(): WorkspaceApi {
     notify,
   })
 
-  /** The mode-switch application itself: persist, announce, honest mic stop. */
-  const applyMode = useCallback(
-    (next: RunMode) => {
-      modeRef.current = next
-      setModeState(next)
-      saveRunMode(next)
-      const info = modeDef(next).info
-      addMessage({
-        role: 'system',
-        kind: 'notice',
-        text: `Mode: ${info.short} — ${info.description}`,
-      })
-      notify(`Run mode: ${info.short}`, info.description, 'neutral')
-      // Hands-free listening needs an Omni-architecture speech server. If the
-      // new mode has none, stop honestly now — the same stop path as a reset —
-      // rather than recording into a void until the next VAD stop.
-      if (micOnRef.current && modeDef(next).speech === null) {
-        stopMicRef.current()
-        notify(
-          'Voice needs an Omni server',
-          'Low-RAM mode runs only LFM3-1.7B — type instead.',
-          'error',
-        )
-      }
-    },
-    [addMessage, notify],
-  )
-
-  /**
-   * Run-mode switch: blocked while a turn runs (the in-flight turn keeps the
-   * models it started with), persisted immediately, and announced in the
-   * transcript so the active configuration is never implicit. When the target
-   * mode's models differ from what is loaded — missing members, or loaded
-   * members it would not use — the switch asks first through the
-   * model-manager dialog (npm run models:manager); without the daemon it
-   * falls back to the old behavior: switch now, degrade honestly.
-   */
-  const setMode = useCallback(
-    (next: RunMode) => {
-      if (next === modeRef.current) return
-      if (busyRef.current) {
-        notify(
-          'Worker is busy',
-          'Wait for the current call to finish before switching run mode.',
-          'neutral',
-        )
-        return
-      }
-      if (pendingSwitch) return // already asking about a switch
-      const plan = planModelSwitch(next, healthRef.current)
-      if (!plan.toStart.length && !plan.spareLoaded.length) {
-        applyMode(next)
-        return
-      }
-      void (async () => {
-        if ((await managerStatus()) === null) {
-          applyMode(next)
-          notify(
-            'Models not managed',
-            'Run the model manager (npm run models:manager) so mode switches can start models themselves.',
-            'neutral',
-          )
-          return
-        }
-        setPendingSwitch(plan)
-      })()
-    },
-    [applyMode, notify, pendingSwitch],
-  )
-
-  /**
-   * Confirmed switch: start the missing members, optionally stop the spares,
-   * poll health until the mode's roster answers (d1-Omni Q8_0 is the slowest
-   * to load), then apply the mode. A member that never comes up degrades
-   * honestly — the switch still lands, with an error toast naming it.
-   */
-  const confirmPendingSwitch = useCallback(
-    (stopSpares: boolean) => {
-      const plan = pendingSwitch
-      if (!plan || switchingModels) return
-      setSwitchingModels(true)
-      void (async () => {
-        try {
-          try {
-            if (plan.toStart.length) await managerStart(plan.toStart.map(managerNameFor))
-          } catch {
-            applyMode(plan.mode)
-            notify(
-              'Model manager unreachable',
-              'Switched anyway — start the missing models with scripts/start-models.sh.',
-              'error',
-            )
-            return
-          }
-          if (stopSpares && plan.spareLoaded.length) {
-            try {
-              await managerStop(plan.spareLoaded.map(managerNameFor))
-            } catch {
-              // Non-fatal: the spares stay loaded; the mode still runs.
-            }
-          }
-          const deadline = Date.now() + 90_000
-          let missing = plan.toStart
-          while (missing.length && Date.now() < deadline) {
-            await sleep(2000)
-            await refreshRuntime()
-            missing = plan.toStart.filter((id) => !endpointUp(healthRef.current, id))
-          }
-          applyMode(plan.mode)
-          if (missing.length) {
-            const names = missing
-              .map((id) => ENDPOINTS.find((endpoint) => endpoint.id === id)?.name ?? id)
-              .join(', ')
-            notify(
-              'Some models did not answer',
-              `${names} never came up — those stages degrade honestly until started.`,
-              'error',
-            )
-          }
-        } finally {
-          setSwitchingModels(false)
-          setPendingSwitch(null)
-        }
-      })()
-    },
-    [pendingSwitch, switchingModels, applyMode, notify],
-  )
-
-  /** Discard the pending switch without touching any model. */
-  const cancelPendingSwitch = useCallback(() => {
-    if (switchingModels) return
-    setPendingSwitch(null)
-  }, [switchingModels])
+  const {
+    mode,
+    modeRef,
+    pendingSwitch,
+    switchingModels,
+    setMode,
+    confirmPendingSwitch,
+    cancelPendingSwitch,
+  } = useWorkspaceModelSwitch({
+    notify,
+    addMessage,
+    busyRef,
+    healthRef,
+    refreshRuntime,
+    micOnRef,
+    stopMicRef,
+  })
 
   const clearTransientHighlights = useCallback(() => {
     if (highlightTimerRef.current) {
