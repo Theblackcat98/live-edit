@@ -50,7 +50,6 @@ import { recoverDictatedText } from './dictation'
 import { scaffoldTemplateBrief } from './templateScaffold'
 import { sectionScaleCollapse } from './blastGate'
 import { checkExecutionOutcome } from './executionCheck'
-import { detectSnapshotDirective } from './snapshotDirective'
 import { runOmniTurn } from './omni'
 import { runWorkerChatTurn, WORKER_CHAT_SAMPLER, type WorkerChatTurnResult } from './workerChat'
 import { chatModelName } from './runmode'
@@ -77,6 +76,7 @@ import {
   type TurnContext,
 } from './flow/turnContext'
 import { createStreamBubble } from './flow/bubble'
+import { runSnapshotDirective, snapshotPrecheck } from './flow/snapshotStage'
 
 /**
  * Runs one user turn through the stage machine. This is the single entry
@@ -302,7 +302,7 @@ async function runOmniFirstTurn(
   // harness_action, which is how 'redo it' got answered conversationally
   // while 'undo that' happened to be classified. Same detector, same
   // rationale (design.md §2/§9).
-  const snapshotAction = detectSnapshotDirective(command)
+  const snapshotAction = snapshotPrecheck(command)
   if (snapshotAction) {
     await runSnapshotDirective(deps, ctx, snapshotAction)
     return
@@ -703,7 +703,7 @@ async function runWorkerChatFirstTurn(
 
   // Deterministic undo/redo pre-check: same pipeline-directive rationale as
   // the Audio-first path.
-  const snapshotAction = detectSnapshotDirective(command)
+  const snapshotAction = snapshotPrecheck(command)
   if (snapshotAction) {
     await runSnapshotDirective(deps, ctx, snapshotAction)
     return
@@ -1257,57 +1257,4 @@ function anchorCorrectionFor(
     .join('\n')
   if (!actualText || actualText === parsed.params.old_text_anchor) return null
   return { startLine, endLine, actualText }
-}
-
-/** Undo/redo: snapshot rollback short-circuits the model stages. */
-async function runSnapshotDirective(
-  deps: PipelineDeps,
-  ctx: TurnContext,
-  action: 'undo' | 'redo',
-): Promise<void> {
-  const { traceLocal, publish, finish } = ctx
-  deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
-  deps.setStage('executing')
-  deps.setFlowModel(null)
-  const directiveStarted = performance.now()
-  const delta = action === 'undo' ? -1 : 1
-  const restored = deps.restoreHistory(deps.historyIndexRef.current + delta)
-  traceLocal.timings.execute = Number((performance.now() - directiveStarted).toFixed(1))
-  if (!restored.ok) {
-    traceLocal.status = 'conversational'
-    deps.addMessage({
-      role: 'assistant',
-      author: 'harness',
-      kind: 'result',
-      text:
-        action === 'undo'
-          ? 'There is nothing to undo yet — the note is at its first snapshot.'
-          : 'There is nothing to redo. The note is already at the latest snapshot.',
-      runId: traceLocal.id,
-    })
-    finish('conversational')
-    return
-  }
-  traceLocal.execution = {
-    ok: true,
-    message: restored.message,
-    tool: action,
-    note: restored.note,
-    durationMs: traceLocal.timings.execute,
-    snapshotId: restored.snapshot?.id,
-  }
-  publish()
-  const confirmation =
-    action === 'undo'
-      ? `Reverted to “${restored.snapshot?.label}”. The note is back to the previous verified snapshot — no model inference needed.`
-      : `Reapplied “${restored.snapshot?.label}”. Snapshot ${deps.historyIndexRef.current} is active again.`
-  deps.addMessage({
-    role: 'assistant',
-    author: 'harness',
-    kind: 'result',
-    text: confirmation,
-    runId: traceLocal.id,
-  })
-  deps.speakReply(confirmation)
-  finish('verified')
 }
