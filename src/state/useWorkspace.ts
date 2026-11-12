@@ -30,7 +30,7 @@ import { modeDef } from '../lib/modes'
 import { managerStart, managerStatus, managerStop } from '../lib/modelManager'
 import { managerNameFor, planModelSwitch, type ModelSwitchPlan } from '../lib/modelPlan'
 import { estimateTokens, makeId, sleep } from '../lib/utils'
-import { runPipelineTurn, type PipelineDeps, type RunResultSnapshot } from '../lib/pipeline'
+import { runPipelineTurn, type PipelineDeps } from '../lib/pipeline'
 import {
   adjudicate,
   enqueue,
@@ -43,6 +43,7 @@ import { executeTool } from '../lib/tools'
 import { useRuntimeHealth } from './useRuntimeHealth'
 import { useSessionClock } from './useSessionClock'
 import { useToasts } from './useToasts'
+import { useWorkspaceHistory } from './useWorkspaceHistory'
 
 const initialNoteTokens = estimateTokens(INITIAL_NOTE)
 const INITIAL_CONTEXT: ContextUsage = {
@@ -72,17 +73,6 @@ function initialMessages(): Message[] {
       at: now - 400,
     },
   ]
-}
-
-function initialSnapshot(): Snapshot {
-  return {
-    id: makeId('snap'),
-    at: Date.now(),
-    label: 'Session start',
-    note: INITIAL_NOTE,
-    tool: 'baseline',
-    automatic: false,
-  }
 }
 
 export interface WorkspaceApi {
@@ -179,26 +169,16 @@ export function pendingResolutionRecord(edit: PendingEdit, reason: string): Reje
 }
 
 export function useWorkspace(): WorkspaceApi {
-  const initialSnapshotRef = useRef<Snapshot | null>(null)
-  if (!initialSnapshotRef.current) initialSnapshotRef.current = initialSnapshot()
-
   // Hydrate persisted workspace once, during first render (before paint).
   const persistedRef = useRef<PersistedWorkspace | null>(null)
   if (!persistedRef.current) persistedRef.current = loadWorkspaceState()
   const persisted = persistedRef.current
 
-  const [note, setNote] = useState(persisted?.note ?? INITIAL_NOTE)
   const [messages, setMessages] = useState<Message[]>(() =>
     (persisted?.messages ?? initialMessages()).map((message) =>
       // A stream cut off by a reload must not leave a permanent caret.
       message.streaming ? { ...message, streaming: false } : message,
     ),
-  )
-  const [history, setHistory] = useState<Snapshot[]>(() =>
-    persisted?.snapshots.length ? persisted.snapshots : [initialSnapshotRef.current as Snapshot],
-  )
-  const [historyIndex, setHistoryIndex] = useState(() =>
-    persisted?.snapshots.length ? persisted.snapshots.length - 1 : 0,
   )
   const [trace, setTrace] = useState<Trace | null>(null)
   const [runs, setRuns] = useState<Trace[]>(persisted?.runs ?? [])
@@ -239,9 +219,6 @@ export function useWorkspace(): WorkspaceApi {
   )
   const pendingEditsRef = useRef<PendingEdit[]>(pendingEdits)
 
-  const noteRef = useRef(note)
-  const historyRef = useRef(history)
-  const historyIndexRef = useRef(historyIndex)
   const runsRef = useRef<Trace[]>(runs)
   const traceRef = useRef<Trace | null>(null)
   const busyRef = useRef(false)
@@ -272,32 +249,8 @@ export function useWorkspace(): WorkspaceApi {
   const messagesRef = useRef<Message[]>(messages)
 
   useEffect(() => {
-    noteRef.current = note
-  }, [note])
-  useEffect(() => {
-    historyRef.current = history
-  }, [history])
-  useEffect(() => {
     pendingEditsRef.current = pendingEdits
   }, [pendingEdits])
-  // Debounced workspace persistence — best-effort, never breaks the UI.
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      saveWorkspaceState({
-        note,
-        snapshots: history,
-        messages,
-        runs,
-        rejectedTraces,
-        // D3: only unresolved pendings persist, capped by the store.
-        pendingEdits: toStorable(pendingEdits),
-      })
-    }, 500)
-    return () => window.clearTimeout(timer)
-  }, [note, history, messages, runs, rejectedTraces, pendingEdits])
-  useEffect(() => {
-    historyIndexRef.current = historyIndex
-  }, [historyIndex])
   useEffect(() => {
     traceRef.current = trace
   }, [trace])
@@ -329,6 +282,44 @@ export function useWorkspace(): WorkspaceApi {
       previous.map((message) => (message.id === id ? { ...message, ...patch } : message)),
     )
   }, [])
+
+  const {
+    note,
+    noteRef,
+    history,
+    historyIndex,
+    historyIndexRef,
+    commitNote,
+    restoreHistory,
+    undo,
+    redo,
+    restoreSnapshot,
+    applySourceEdit,
+    newNote,
+  } = useWorkspaceHistory({
+    persisted,
+    busyRef,
+    addMessage,
+    setDiff,
+    setSourceMode,
+    notify,
+  })
+
+  // Debounced workspace persistence — best-effort, never breaks the UI.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      saveWorkspaceState({
+        note,
+        snapshots: history,
+        messages,
+        runs,
+        rejectedTraces,
+        // D3: only unresolved pendings persist, capped by the store.
+        pendingEdits: toStorable(pendingEdits),
+      })
+    }, 500)
+    return () => window.clearTimeout(timer)
+  }, [note, history, messages, runs, rejectedTraces, pendingEdits])
 
   /** The mode-switch application itself: persist, announce, honest mic stop. */
   const applyMode = useCallback(
@@ -478,51 +469,6 @@ export function useWorkspace(): WorkspaceApi {
     }, 7200)
   }, [clearTransientHighlights])
 
-  const commitNote = useCallback(
-    (nextNote: string, label: string, tool: string): Snapshot => {
-      const base = historyRef.current
-      const index = historyIndexRef.current
-      const snapshot: Snapshot = {
-        id: makeId('snap'),
-        at: Date.now(),
-        label,
-        note: nextNote,
-        tool,
-        automatic: true,
-      }
-      const nextHistory = [...base.slice(0, index + 1), snapshot].slice(-40)
-      const nextIndex = nextHistory.length - 1
-      historyRef.current = nextHistory
-      historyIndexRef.current = nextIndex
-      setHistory(nextHistory)
-      setHistoryIndex(nextIndex)
-      noteRef.current = nextNote
-      setNote(nextNote)
-      return snapshot
-    },
-    [],
-  )
-
-  const restoreHistory = useCallback((targetIndex: number): RunResultSnapshot => {
-    const currentHistory = historyRef.current
-    const target = currentHistory[targetIndex]
-    if (!target) {
-      return { ok: false, message: 'No snapshot exists at that position.', note: noteRef.current }
-    }
-    historyIndexRef.current = targetIndex
-    setHistoryIndex(targetIndex)
-    noteRef.current = target.note
-    setNote(target.note)
-    setDiff(null)
-    setSourceMode(false)
-    return {
-      ok: true,
-      message: `Restored “${target.label}”.`,
-      snapshot: target,
-      note: target.note,
-    }
-  }, [])
-
   // --- Pending-edit adjudication (design.md §9) ------------------------------
   // Adjudication is not a turn: it respects the same busy gate as undo and
   // never runs the pipeline. The store (lib/pending) decides; this hook
@@ -618,66 +564,6 @@ export function useWorkspace(): WorkspaceApi {
       resolvePending(id, 'discard')
     },
     [resolvePending],
-  )
-
-  const undo = useCallback(() => {
-    if (busyRef.current) {
-      notify('Worker is busy', 'Wait for the current verified call to finish.', 'neutral')
-      return
-    }
-    const result = restoreHistory(historyIndexRef.current - 1)
-    if (!result.ok) {
-      notify('Nothing to undo', 'The note is already at its first snapshot.')
-      return
-    }
-    notify('Snapshot restored', result.message, 'success')
-  }, [notify, restoreHistory])
-
-  const redo = useCallback(() => {
-    if (busyRef.current) {
-      notify('Worker is busy', 'Wait for the current verified call to finish.', 'neutral')
-      return
-    }
-    const result = restoreHistory(historyIndexRef.current + 1)
-    if (!result.ok) {
-      notify('Nothing to redo', 'The note is already at its latest snapshot.')
-      return
-    }
-    notify('Snapshot reapplied', result.message, 'success')
-  }, [notify, restoreHistory])
-
-  const restoreSnapshot = useCallback(
-    (id: string) => {
-      if (busyRef.current) {
-        notify('Worker is busy', 'Wait for the current verified call to finish.', 'neutral')
-        return
-      }
-      const index = historyRef.current.findIndex((snapshot) => snapshot.id === id)
-      if (index < 0) return
-      const result = restoreHistory(index)
-      if (result.ok) notify('Snapshot restored', result.message, 'success')
-    },
-    [notify, restoreHistory],
-  )
-
-  const applySourceEdit = useCallback(
-    (nextNote: string): boolean => {
-      if (busyRef.current) {
-        notify('Worker is busy', 'Wait for the verified call to finish before editing.', 'neutral')
-        return false
-      }
-      if (nextNote === noteRef.current) return false
-      commitNote(nextNote, 'Manual source edit', 'manual')
-        setDiff(null)
-      addMessage({
-        role: 'system',
-        kind: 'notice',
-        text: 'Manual source edit committed · new snapshot',
-      })
-      notify('Source edit committed', 'A local snapshot was added to the history rail.', 'success')
-      return true
-    },
-    [addMessage, commitNote, notify],
   )
 
   const stopSpeech = useCallback(() => {
@@ -1068,25 +954,6 @@ export function useWorkspace(): WorkspaceApi {
   ])
 
   const getMicLevel = useCallback(() => recorderRef.current?.getLevel() ?? 0, [])
-
-  const newNote = useCallback(() => {
-    if (busyRef.current) {
-      notify(
-        'Worker is busy',
-        'Wait for the current verified call to finish before starting a new note.',
-        'neutral',
-      )
-      return
-    }
-    commitNote('# Untitled\n\n', 'New note', 'manual')
-    setDiff(null)
-    setSourceMode(false)
-    notify(
-      'New note',
-      'A blank note replaced the document. Undo restores the previous note.',
-      'success',
-    )
-  }, [commitNote, notify, setSourceMode])
 
   const resetChat = useCallback(() => {
     if (busyRef.current) {
