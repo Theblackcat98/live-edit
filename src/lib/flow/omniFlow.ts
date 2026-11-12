@@ -103,6 +103,20 @@ export async function runOmniFirstTurn(
   }
   if (!raw) {
     retractStream()
+    if (controller.signal.aborted) {
+      // Barge-in: the next command already owns the session.
+      finish('conversational')
+      return
+    }
+    // No silent failure: an empty turn must say so, not just stop.
+    deps.addMessage({
+      role: 'assistant',
+      author: 'harness',
+      kind: 'error',
+      text: 'The model turn produced no result, so nothing was written to the note.',
+      runId: traceLocal.id,
+    })
+    deps.notify('Chat turn failed', 'The model returned no result.', 'error')
     finish('failed')
     return
   }
