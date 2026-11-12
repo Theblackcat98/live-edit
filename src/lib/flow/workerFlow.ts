@@ -7,7 +7,7 @@
 
 import type { Directive, ToolName, WorkerCall } from '../../types'
 import { endpointUp } from '../bridge'
-import { type RunMode } from '../runmode'
+import { chatModelName, type RunMode } from '../runmode'
 import { numberNoteLines, renderToolCallXml } from '../worker'
 import { runWorkerChatTurn, WORKER_CHAT_SAMPLER, type WorkerChatTurnResult } from '../workerChat'
 import type { ParsedToolCall } from '../xml'
@@ -70,6 +70,8 @@ export async function runWorkerChatFirstTurn(
   mode: Exclude<RunMode, 'omni'>,
 ): Promise<void> {
   const { command, noteAtStart, traceLocal, runtime, liveUsage, publish, finish } = ctx
+  // The reply author follows the captured mode, never a hardcoded label.
+  const chatAuthor = chatModelName(mode)
   traceLocal.runMode = mode
   deps.setFlowModel('worker')
   deps.setStage('routing')
@@ -105,7 +107,7 @@ export async function runWorkerChatFirstTurn(
   // deltas land here live; a call outcome retracts it, an answer settles the
   // authoritative text.
   const { onText, retractStream, settleStream } = createStreamBubble(deps, {
-    author: 'LFM3-1.7B',
+    author: chatAuthor,
     runId: traceLocal.id,
   })
 
