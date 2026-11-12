@@ -102,6 +102,22 @@ export function SafetyCheckCard({
       </header>
       <div className="supervisor-model mono">d1-Omni-2B · 128K · Q8_0 · single pass</div>
 
+      {/* What the safety check saw and decided, straight from the trace.
+          These fields were recorded but never surfaced on the rail. */}
+      {trace?.directive && (
+        <div className="supervisor-model mono">brief · {trace.directive.task}</div>
+      )}
+      {trace?.d1Check && (
+        <div className="supervisor-model mono">
+          safety {trace.d1Check.verdict}
+          {trace.d1Check.noul === null ? '' : ` · match ${trace.d1Check.noul.toFixed(2)}`}
+          {` · ${trace.d1Check.destructiveSafety ?? 'unreported'}`}
+        </div>
+      )}
+      {trace?.hold && (
+        <div className="supervisor-model mono">held · {trace.hold.reason}</div>
+      )}
+
       <div className="sup-stages">
         <Stage
           letter="A"
