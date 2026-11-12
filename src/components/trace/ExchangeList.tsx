@@ -61,13 +61,12 @@ function ExchangeCard({
         <span className="exchange-index mono">
           {index + 1}/{total}
         </span>
-        <span className="chip chip-ghost mono">{exchange.role}</span>
         <strong className="exchange-model">{exchange.model}</strong>
-        <span className="exchange-label mono">{exchange.label}</span>
-        <span className={cx('chip mono', exchange.ok ? 'chip-green' : 'chip-red')}>
+        <span className="exchange-label">{exchange.role === 'chat' ? 'chat' : 'worker'} · {exchange.label}</span>
+        <span className={cx('chip', exchange.ok ? 'chip-green' : 'chip-red')}>
           {exchange.ok ? 'ok' : 'failed'}
         </span>
-        <span className="mono">{Math.round(exchange.ms)} ms</span>
+        <span className="exchange-ms mono">{Math.round(exchange.ms)} ms</span>
         <button
           type="button"
           className="icon-button"
@@ -81,12 +80,12 @@ function ExchangeCard({
       <div className="exchange-meta mono">
         <span className="exchange-url">{exchange.url}</span>
         <span>temp {exchange.request.temperature}</span>
-        <span>max_tokens {exchange.request.maxTokens ?? '∞'}</span>
+        <span>max_tokens {exchange.request.maxTokens ?? 'uncapped'}</span>
         <span>{exchange.request.stream ? 'stream' : 'complete'}</span>
         {exchange.request.tools && <span>tools {exchange.request.tools.join(' + ')}</span>}
         {response && (
-          <span>
-            {response.promptTokens}→{response.outputTokens} tok
+          <span title="prompt tokens → output tokens, as reported by the server">
+            {response.promptTokens} in → {response.outputTokens} out
           </span>
         )}
         {response?.finishReason && (
@@ -98,9 +97,9 @@ function ExchangeCard({
       {exchange.error && <div className="exchange-error mono">{exchange.error}</div>}
       {response?.reasoning && (
         <div className="trace-thought">
-          <span className="trace-thought-label mono">
-            <Sparkles size={10} />
-            &lt;think&gt;
+          <span className="trace-thought-label">
+            <Sparkles size={11} />
+            Reasoning
           </span>
           <p>{response.reasoning}</p>
         </div>
@@ -121,18 +120,27 @@ function ExchangeCard({
         className="trace-note-toggle mono"
         onClick={() => setShowContext((previous) => !previous)}
       >
-        <Clipboard size={10} />
-        {showContext ? 'Hide' : 'Show'} context sent · {exchange.request.messages.length} messages
+        <Clipboard size={11} />
+        {showContext ? 'Hide' : 'Show'} the {exchange.request.messages.length} messages sent
       </button>
       {showContext && <ExchangeMessagesView messages={exchange.request.messages} />}
     </article>
   )
 }
 
-/** The Chat tab: every model request/response pair this turn recorded. */
-export function ExchangeList({ exchanges }: { exchanges: TurnExchange[] }) {
+/**
+ * The Model calls tab: every chat-completion request/response this turn
+ * recorded. d1 calls return typed scores, not messages — they are shown on
+ * the Decision tab (Routing, Safety check), and the list says so.
+ */
+export function ExchangeList({ exchanges, hasD1 }: { exchanges: TurnExchange[]; hasD1: boolean }) {
   return (
     <div className="exchange-list">
+      {hasD1 && (
+        <p className="trace-footnote exchange-note">
+          d1 calls (routing, safety check) return scores rather than messages — see the Decision tab.
+        </p>
+      )}
       {exchanges.length ? (
         exchanges.map((exchange, index) => (
           <ExchangeCard
@@ -147,11 +155,10 @@ export function ExchangeList({ exchanges }: { exchanges: TurnExchange[] }) {
           <div className="trace-empty-icon">
             <ScanSearch size={20} />
           </div>
-          <h3>No model exchanges recorded</h3>
+          <h3>No chat-completion calls recorded</h3>
           <p>
-            This turn predates the inspector, or never reached a model (offline
-            pre-check, undo/redo directive). Every turn that calls a model — chat,
-            worker decode, retry, failure — records its request and response here.
+            This turn never called a chat model (undo/redo, an offline stop), or it predates
+            the inspector. Chat replies, worker decodes, retries and failures are recorded here.
           </p>
         </div>
       )}

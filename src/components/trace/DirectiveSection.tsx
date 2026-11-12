@@ -1,73 +1,82 @@
-import type { Directive } from '../../types'
+import type { Directive, Trace } from '../../types'
 import { TraceSection } from './TraceSection'
 
 /**
- * Audio's typed delegation directive (design.md §5), recorded on the trace
- * from P2 on. Legacy supervisor-first traces have no directive field — for
- * them this section simply does not render.
+ * The typed delegation brief the worker received (design.md §5). In audio
+ * mode the harness builds it from the routed task and the verbatim command;
+ * in legacy omni the front-door model writes it.
  */
 export function DirectiveSection({
   directive,
   chatShort,
+  routed,
+  repair,
 }: {
   directive: Directive
   chatShort: string
+  /** True when d1 routed the turn (audio mode): the harness built the brief. */
+  routed: boolean
+  repair?: Trace['omniRepair']
 }) {
   return (
-    <TraceSection index="D" title="Delegation directive" caption={`${chatShort} → worker · typed brief`}>
-      <div className="trace-route">
-        <div className="trace-query-row">
-          <div className="trace-query-name mono">task</div>
-          <div className="trace-query-value">
-            <span className="chip chip-accent mono">{directive.task}</span>
-          </div>
-        </div>
-        <div className="trace-query-row">
-          <div className="trace-query-name mono">instruction</div>
-          <div className="trace-query-value">
-            <div className="trace-tool-list">
-              <p className="trace-reason">{directive.instruction}</p>
-            </div>
-          </div>
-        </div>
+    <TraceSection
+      index="D"
+      title="Delegation brief"
+      caption={routed ? 'harness → worker · built from your command' : `${chatShort} → worker · typed brief`}
+    >
+      <div className="trace-kv">
+        <span className="trace-kv-key">task</span>
+        <span className="trace-kv-value">
+          <span className="chip chip-accent">{directive.task}</span>
+        </span>
+        <span className="trace-kv-key">instruction</span>
+        <span className="trace-kv-value trace-body">{directive.instruction}</span>
         {directive.verbatim && (
-          // The one case where content legitimately travels inside the
-          // directive: the user dictated exact words (§5).
-          <div className="trace-query-row">
-            <div className="trace-query-name mono">verbatim</div>
-            <div className="trace-query-value">
-              <div className="trace-tool-list">
-                <p className="trace-reason mono">{directive.verbatim}</p>
-              </div>
-            </div>
-          </div>
+          <>
+            <span className="trace-kv-key">verbatim</span>
+            <span className="trace-kv-value">
+              <code className="trace-code-inline mono">{directive.verbatim}</code>
+            </span>
+          </>
         )}
         {directive.target && (
-          <div className="trace-query-row">
-            <div className="trace-query-name mono">target</div>
-            <div className="trace-query-value">
-              <div className="trace-tool-list">
-                <p className="trace-reason">{directive.target.description}</p>
+          <>
+            <span className="trace-kv-key">target</span>
+            <span className="trace-kv-value trace-body">
+              <span>
+                {directive.target.description}
                 {directive.target.heading && (
-                  <p className="trace-muted">under {directive.target.heading}</p>
+                  <span className="trace-muted"> · under “{directive.target.heading}”</span>
                 )}
-              </div>
-            </div>
-          </div>
+              </span>
+            </span>
+          </>
         )}
         {directive.constraints && directive.constraints.length > 0 && (
-          <div className="trace-query-row">
-            <div className="trace-query-name mono">constraints</div>
-            <div className="trace-query-value">
-              <div className="trace-tool-list">
-                {directive.constraints.map((constraint) => (
-                  <span className="chip chip-ghost mono" key={constraint}>
-                    {constraint}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </div>
+          <>
+            <span className="trace-kv-key">constraints</span>
+            <span className="trace-kv-value trace-chip-row">
+              {directive.constraints.map((constraint) => (
+                <span className="chip chip-ghost" key={constraint}>
+                  {constraint}
+                </span>
+              ))}
+            </span>
+          </>
+        )}
+        {repair && (
+          <>
+            <span className="trace-kv-key">repair</span>
+            <span className="trace-kv-value">
+              <span className="trace-body">
+                The first tool call failed validation and was retried: {repair.error}
+              </span>
+              <details className="trace-raw">
+                <summary>Rejected arguments</summary>
+                <pre className="mono">{repair.rawArguments}</pre>
+              </details>
+            </span>
+          </>
         )}
       </div>
     </TraceSection>

@@ -1,50 +1,66 @@
-import { Gauge } from 'lucide-react'
 import type { Trace } from '../../types'
-import { cx } from '../../lib/utils'
+import { measuredOutputTokens } from '../../lib/runView'
 import { TraceSection } from './TraceSection'
 
-/** Per-stage wall-clock, shown as a proportional strip and an exact grid. */
-export function TimingSection({ trace }: { trace: Trace }) {
+type Stage = { key: string; label: string; ms: number; tone: string }
+
+/**
+ * Per-stage wall-clock as a proportional strip plus exact values. Every
+ * bucket that feeds the total is listed — including the chat reply — so the
+ * parts visibly add up to the end-to-end figure. Colours follow the model
+ * that owned the stage (interface, d1, worker) and grey for the engine.
+ */
+export function TimingSection({ trace, chatShort }: { trace: Trace; chatShort: string }) {
+  const t = trace.timings
+  const stages: Stage[] = [
+    { key: 'chat', label: `${chatShort} reply`, ms: t.chat ?? 0, tone: 'green' },
+    { key: 'route', label: 'Routing', ms: t.route, tone: 'accent' },
+    { key: 'generate', label: 'Worker', ms: t.generate, tone: 'orange' },
+    { key: 'critic', label: 'Safety check', ms: t.critic, tone: 'accent' },
+    { key: 'execute', label: 'Apply', ms: t.execute, tone: 'neutral' },
+  ]
+  const ran = stages.filter((stage) => stage.ms > 0)
+  const tokens = measuredOutputTokens(trace)
+  const fmt = (ms: number) => (ms < 10 ? `${ms.toFixed(1)} ms` : `${Math.round(ms)} ms`)
+
   return (
-    <TraceSection index="T" title="Timing" caption="measured runtime">
-      <div className="trace-timeline">
-        {(
-          [
-            ['route', trace.timings.route, 'accent'],
-            ['generate', trace.timings.generate, 'orange'],
-            ['critic', trace.timings.critic, 'accent'],
-            ['execute', trace.timings.execute, 'green'],
-          ] as const
-        ).map(([label, value, tone]) => (
-          <span
-            key={label}
-            className={cx('trace-timeline-segment', `tone-${tone}`)}
-            style={{ flexGrow: Math.max(value, 1) }}
-            title={`${label}: ${value.toFixed(1)} ms`}
-          />
-        ))}
-      </div>
-      <div className="trace-timings-grid">
-        {(
-          [
-            ['route', trace.timings.route],
-            ['generate', trace.timings.generate],
-            ['critic', trace.timings.critic],
-            ['execute', trace.timings.execute],
-          ] as const
-        ).map(([label, value]) => (
-          <span key={label} className="trace-timing">
-            <span className="mono">{label}</span>
-            <strong className="mono">{value ? `${value.toFixed(1)} ms` : '—'}</strong>
-          </span>
-        ))}
-      </div>
-      <div className="trace-total mono">
-        <Gauge size={11} />
-        end-to-end {trace.timings.total ? `${Math.round(trace.timings.total)} ms` : '—'} ·{' '}
-        {trace.runtime?.worker === 'live' || trace.runtime?.chat === 'live' ? '' : '≈'}
-        {trace.outputTokens} output tokens
-      </div>
+    <TraceSection
+      index="T"
+      title="Timing"
+      caption={t.total ? `${fmt(t.total)} end-to-end` : 'not measured'}
+    >
+      {ran.length > 0 ? (
+        <>
+          <div className="trace-timeline" aria-hidden="true">
+            {ran.map((stage) => (
+              <span
+                key={stage.key}
+                className={`trace-timeline-segment tone-${stage.tone}`}
+                style={{ flexGrow: stage.ms }}
+                title={`${stage.label}: ${fmt(stage.ms)}`}
+              />
+            ))}
+          </div>
+          <div className="trace-timings">
+            {ran.map((stage) => (
+              <div key={stage.key} className="trace-timing">
+                <span className={`trace-timing-swatch tone-${stage.tone}`} />
+                <span className="trace-timing-label">{stage.label}</span>
+                <span className="trace-timing-value mono">{fmt(stage.ms)}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <p className="trace-muted">No stage recorded a duration.</p>
+      )}
+      {tokens.tokens > 0 && (
+        <p className="trace-footnote">
+          {tokens.measured
+            ? `${tokens.tokens} output tokens, as reported by the model servers.`
+            : `≈${tokens.tokens} output tokens — not reported by a server.`}
+        </p>
+      )}
     </TraceSection>
   )
 }

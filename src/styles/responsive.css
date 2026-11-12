@@ -232,13 +232,13 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .trace-query-row {
+  .trace-kv {
     grid-template-columns: 1fr;
-    gap: 3px;
+    row-gap: 2px;
   }
 
-  .trace-checks .trace-check {
-    grid-template-columns: 15px 100px minmax(0, 1fr);
+  .trace-kv-key {
+    padding-top: 6px;
   }
 
   .about-shortcuts {
@@ -301,7 +301,6 @@
 @media (hover: none) {
   .icon-button:hover,
   .button:hover,
-  .source-tab:hover,
   .message-action:hover,
   .suggestion-chip:hover,
   .snapshot-row:hover,
