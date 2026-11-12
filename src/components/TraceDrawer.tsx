@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Braces,
@@ -22,6 +21,7 @@ import { TraceSummaryCells } from './trace/TraceSummaryCells'
 import { D1CheckSection } from './trace/D1CheckSection'
 import { HoldSection } from './trace/HoldSection'
 import { ExchangeList } from './trace/ExchangeList'
+import { TraceSection } from './trace/TraceSection'
 
 interface TraceDrawerProps {
   rejectedTraces: RejectedTraceRecord[]
@@ -54,29 +54,6 @@ function statusTone(trace: Trace): string {
   if (trace.status === 'clarify' || trace.status === 'pending') return 'chip-orange'
   if (trace.status === 'rejected' || trace.status === 'failed') return 'chip-red'
   return 'chip-accent'
-}
-
-function TraceSection({
-  index,
-  title,
-  caption,
-  children,
-}: {
-  index: string
-  title: string
-  caption: string
-  children: ReactNode
-}) {
-  return (
-    <section className="trace-section">
-      <header className="trace-section-head">
-        <span className="trace-section-index mono">{index}</span>
-        <h3>{title}</h3>
-        <span className="trace-section-caption mono">{caption}</span>
-      </header>
-      <div className="trace-section-body">{children}</div>
-    </section>
-  )
 }
 
 function XmlView({ xml }: { xml: string }) {
