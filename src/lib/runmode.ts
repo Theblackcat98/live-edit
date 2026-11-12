@@ -91,26 +91,3 @@ export function speechPortFor(endpoint: SpeechEndpoint): number | null {
   if (endpoint === 'd1omni') return 8085
   return null
 }
-
-// --- per-mode model naming -------------------------------------------------------
-// UI honesty: a surface names the model that actually serves the mode, never a
-// hardcoded one. The interface model is Audio by default; Omni only in the
-// legacy mode; the 1.7B itself in the worker-chat modes.
-
-/** The model that answers chat in a mode — the author label on its replies. */
-export function chatModelName(mode: RunMode): string {
-  return modeDef(mode).chat.author
-}
-
-/** Short chat-model label for compact status surfaces. */
-export function chatModelShort(mode: RunMode): string {
-  return modeDef(mode).chat.short
-}
-
-/**
- * The model whose `/v1/audio/transcriptions` endpoint serves the mic in this
- * mode; null in `lowram` (no audio server — the mic is honestly disabled).
- */
-export function transcribingModel(mode: RunMode): string | null {
-  return modeDef(mode).chat.transcriber
-}
