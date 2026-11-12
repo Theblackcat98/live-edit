@@ -10,6 +10,10 @@ import {
 } from 'lucide-react'
 import type { StageId, StageState, Trace } from '../../types'
 import { cx } from '../../lib/utils'
+import { modeDef } from '../../lib/modes'
+import type { RunMode } from '../../lib/runmode'
+import { measuredOutputTokens } from '../../lib/runView'
+import { D1_CHECK } from '../../data/models'
 
 function formatTiming(value: number | undefined): string {
   if (!value) return '—'
@@ -70,12 +74,30 @@ export function SafetyCheckCard({
   trace,
   stageStates,
   openTrace,
+  mode,
+  canOpenTrace,
 }: {
   trace: Trace | null
   stageStates: Record<StageId, StageState>
   openTrace: () => void
+  mode: RunMode
+  /** True when any run (current or persisted) can be inspected. */
+  canOpenTrace: boolean
 }) {
   const running = Object.values(stageStates).some((state) => state === 'running')
+  const def = modeDef(mode)
+  const hasD1 = def.decide === 'd1'
+  const tokens = trace ? measuredOutputTokens(trace) : null
+  // What routed the turn, in this mode's terms.
+  const routeDone = (() => {
+    if (!trace) return 'Awaiting a command'
+    if (trace.d1Route) {
+      const conf = trace.d1Route.confidence === null ? 'unreported' : trace.d1Route.confidence.toFixed(2)
+      return `d1: ${trace.d1Route.intent} · confidence ${conf}`
+    }
+    if (trace.directive) return `${def.chat.short} delegated a ${trace.directive.task} brief`
+    return 'Routed'
+  })()
 
   return (
     <section className="rail-card supervisor-card">
@@ -85,22 +107,25 @@ export function SafetyCheckCard({
           Safety check
           <span className={cx('status-dot', running ? 'is-accent is-pulsing' : 'is-accent')} />
         </div>
-        <span
-          className="chip chip-ghost mono"
-          title={
-            trace && (trace.runtime?.worker === 'live' || trace.runtime?.chat === 'live')
-              ? 'token usage reported by the model server'
-              : 'estimated from local text — no model decode reported usage'
-          }
-        >
-          {trace?.outputTokens
-            ? `${
-                trace.runtime?.worker === 'live' || trace.runtime?.chat === 'live' ? '' : '≈'
-              }${trace.outputTokens} output tokens`
-            : '0 output tokens'}
-        </span>
+        {tokens && tokens.tokens > 0 && (
+          <span
+            className="chip chip-ghost mono"
+            title={
+              tokens.measured
+                ? 'Output tokens the model servers reported for this turn'
+                : 'No server reported usage for this turn — figure not measured'
+            }
+          >
+            {tokens.measured ? '' : '≈'}
+            {tokens.tokens} out tok
+          </span>
+        )}
       </header>
-      <div className="supervisor-model mono">d1-Omni-2B · 128K · Q8_0 · single pass</div>
+      <div className="supervisor-model mono">
+        {hasD1
+          ? `${D1_CHECK.name} · ${D1_CHECK.contextK}K · ${D1_CHECK.quant} · zero-output-token verdict`
+          : 'No d1 in this mode — hard gates run, then every edit is held for you'}
+      </div>
 
       {/* What the safety check saw and decided, straight from the trace.
           These fields were recorded but never surfaced on the rail. */}
@@ -129,6 +154,8 @@ export function SafetyCheckCard({
             <span className="sup-running">Reading the command…</span>
           ) : stageStates.A === 'skipped' ? (
             <span className="sup-muted">No routing pass for this turn.</span>
+          ) : stageStates.A === 'done' ? (
+            <span className="sup-muted">{routeDone}</span>
           ) : (
             <span className="sup-muted">Awaiting a command</span>
           )}
@@ -143,6 +170,12 @@ export function SafetyCheckCard({
             <span className="sup-running">Worker is grounding the span…</span>
           ) : stageStates.B === 'skipped' ? (
             <span className="sup-muted">No edit this turn.</span>
+          ) : stageStates.B === 'done' && trace?.call ? (
+            <span className="sup-muted">
+              {trace.runtime?.worker === 'dictation'
+                ? `Dictated text · ${trace.call.name}`
+                : `1.7B wrote ${trace.call.name}`}
+            </span>
           ) : (
             <span className="sup-muted">The worker grounds its own span</span>
           )}
@@ -159,8 +192,12 @@ export function SafetyCheckCard({
             <span className="sup-running">Running the safety check…</span>
           ) : stageStates.C === 'skipped' ? (
             <span className="sup-muted">No worker call to check.</span>
+          ) : stageStates.C === 'done' && trace?.d1Check ? (
+            <span className="sup-muted">d1 {trace.d1Check.verdict}</span>
           ) : (
-            <span className="sup-muted">Local hard gates · d1 safety check</span>
+            <span className="sup-muted">
+              {hasD1 ? 'Hard gates · d1 safety check' : 'Hard gates · held for your decision'}
+            </span>
           )}
         </Stage>
       </div>
@@ -169,7 +206,7 @@ export function SafetyCheckCard({
         type="button"
         className="supervisor-trace-button"
         onClick={openTrace}
-        disabled={!trace}
+        disabled={!canOpenTrace}
       >
         Open decision trace
         <ArrowUpRight size={11} />

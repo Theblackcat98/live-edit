@@ -1,4 +1,4 @@
-import { ArrowUpRight, Braces, Check, LoaderCircle, X } from 'lucide-react'
+import { ArrowUpRight, Braces, Check, CircleAlert, LoaderCircle, X } from 'lucide-react'
 import type { DelegationInfo } from '../types'
 import { TOOL_LABELS } from '../data/tools'
 import { cx } from '../lib/utils'
@@ -9,25 +9,22 @@ interface DelegationCardProps {
 }
 
 export function DelegationCard({ delegation, onOpenTrace }: DelegationCardProps) {
-  // `checking` (Phase-2 contract): the worker's proposed call is inside the
-  // deterministic hard gates and the d1 safety check — in flight, nothing
-  // decided yet (design.md §7/§8). `pending` is Phase 5's (design.md §9,
-  // user adjudication): nothing produces it yet, so it deliberately falls
-  // through to the neutral chip below until PendingEditCard lands.
-  const statusLabel =
-    delegation.status === 'generating'
-      ? 'Generating XML'
-      : delegation.status === 'checking'
-        ? 'Gates + d1 check'
-        : delegation.status === 'verified'
-          ? 'Verified by d1'
-          : delegation.status === 'executed'
-            ? 'Executed'
-            : 'Held by critic'
+  // `checking`: the proposed call is inside the hard gates and (in d1 modes)
+  // the safety check. `pending`: held for the user's ✓ / ✗ (design.md §9) —
+  // by d1, the blast-radius rule, or a mode with no d1. `rejected`: a hard
+  // gate, the engine dry-run or the outcome check stopped it before writing.
+  const statusLabel = {
+    generating: 'Writing call',
+    checking: 'Checking',
+    pending: 'Held for you',
+    verified: 'Approved',
+    executed: 'Applied',
+    rejected: 'Stopped',
+  }[delegation.status]
+  const inFlight = delegation.status === 'generating' || delegation.status === 'checking'
 
   return (
     <div className={cx('delegation-card', `is-${delegation.status}`)}>
-      <div className="delegation-rail" aria-hidden="true" />
       <div className="delegation-main">
         <div className="delegation-head">
           <span className="delegation-icon">
@@ -38,15 +35,17 @@ export function DelegationCard({ delegation, onOpenTrace }: DelegationCardProps)
             className={cx(
               'delegation-status',
               delegation.status === 'executed' && 'is-green',
-              (delegation.status === 'generating' || delegation.status === 'checking') &&
-                'is-accent',
+              inFlight && 'is-accent',
+              delegation.status === 'pending' && 'is-orange',
               delegation.status === 'rejected' && 'is-red',
             )}
           >
-            {delegation.status === 'generating' || delegation.status === 'checking' ? (
+            {inFlight ? (
               <LoaderCircle size={10} className="spin" />
             ) : delegation.status === 'rejected' ? (
               <X size={10} />
+            ) : delegation.status === 'pending' ? (
+              <CircleAlert size={10} />
             ) : (
               <Check size={10} />
             )}
@@ -57,8 +56,11 @@ export function DelegationCard({ delegation, onOpenTrace }: DelegationCardProps)
           <span className="delegation-tool-name mono">{TOOL_LABELS[delegation.tool]}</span>
           <span className="delegation-tool-raw mono">{delegation.tool}</span>
           {typeof delegation.confidence === 'number' && (
-            <span className="delegation-confidence mono">
-              P {delegation.confidence.toFixed(2)}
+            <span
+              className="delegation-confidence mono"
+              title="d1's does_call_match_directive score (0–1); 0.50 is the approval threshold"
+            >
+              match {delegation.confidence.toFixed(2)}
             </span>
           )}
         </div>
@@ -71,7 +73,7 @@ export function DelegationCard({ delegation, onOpenTrace }: DelegationCardProps)
           </p>
         )}
         <div className="delegation-foot">
-          <span className="mono">{delegation.runId.slice(-7).toUpperCase()}</span>
+          <span className="mono">#{delegation.runId.slice(-4).toUpperCase()}</span>
           <button type="button" className="delegation-trace" onClick={onOpenTrace}>
             Open trace
             <ArrowUpRight size={10} />

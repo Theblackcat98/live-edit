@@ -3,6 +3,7 @@ import type { PipelineStage, RuntimeHealth, Trace } from '../types'
 import { modeDef } from '../lib/modes'
 import type { RunMode } from '../lib/runmode'
 import { cx } from '../lib/utils'
+import { modeHealth, modelHostLabel } from '../lib/runView'
 interface StatusBarProps {
   stage: PipelineStage
   trace: Trace | null
@@ -31,7 +32,7 @@ function statusLabel(stage: PipelineStage, trace: Trace | null): string {
     if (trace.status === 'pending') return 'Waiting for your decision'
     if (trace.status === 'rejected') return 'Held before writing'
     if (trace.status === 'failed') return 'Run stopped'
-    return 'Committed · verified'
+    return 'Applied · checked'
   }
   return STAGE_LABEL[stage]
 }
@@ -53,10 +54,11 @@ function formatMs(value: number | undefined): string {
 
 export function StatusBar({ stage, trace, micOn, micActive, asrBusy, runtimeHealth, mode }: StatusBarProps) {
   const active = stage !== 'idle' && stage !== 'complete'
-  const upCount = runtimeHealth?.endpoints.filter((endpoint) => endpoint.up).length ?? 0
-  const totalEndpoints = runtimeHealth?.endpoints.length ?? 4
-  const liveTone =
-    !runtimeHealth ? 'statusbar-muted' : upCount === totalEndpoints ? 'is-green' : 'is-orange'
+  // Only the servers this mode needs count — an unused legacy server being
+  // off is not a degraded runtime.
+  const health = modeHealth(runtimeHealth, mode)
+  const liveTone = !health ? 'statusbar-muted' : health.allUp ? 'is-green' : 'is-orange'
+  const host = modelHostLabel()
   const asrModel = modeDef(mode).chat.transcriber
   // Honest three-state: a turn between utterances is not a live capture.
   const micLabel = asrBusy
@@ -69,7 +71,7 @@ export function StatusBar({ stage, trace, micOn, micActive, asrBusy, runtimeHeal
   return (
     <footer className="statusbar">
       <div className="statusbar-left">
-        <span className="statusbar-item" title={`The UI, tool engine and snapshots run in this tab. ${asrModel ? `Voice is transcribed by ${asrModel} on 127.0.0.1.` : 'No audio server in this mode — typing only.'}`}>
+        <span className="statusbar-item" title={`The UI, tool engine and snapshots run in this tab. ${asrModel ? `Voice is transcribed by ${asrModel} on ${host}.` : 'No audio server in this mode — typing only.'}`}>
           <ShieldCheck size={12} />
           Local only
         </span>
@@ -77,17 +79,17 @@ export function StatusBar({ stage, trace, micOn, micActive, asrBusy, runtimeHeal
         <span
           className={cx('statusbar-item', liveTone)}
           title={
-            runtimeHealth
-              ? runtimeHealth.endpoints
-                  .map((endpoint) => `${endpoint.name} (:${endpoint.port}) — ${endpoint.up ? 'up' : 'down'}`)
+            health
+              ? health.needed
+                  .map((endpoint) => `${endpoint.name} (${host}:${endpoint.port}) — ${endpoint.up ? 'up' : 'down'}`)
                   .join(' · ')
               : 'Probing local model servers…'
           }
         >
-          {runtimeHealth
-            ? upCount === totalEndpoints
-              ? `Live models ${upCount}/${totalEndpoints}`
-              : `Fallback · ${totalEndpoints - upCount} model${totalEndpoints - upCount === 1 ? '' : 's'} down`
+          {health
+            ? health.allUp
+              ? `Models up ${health.up}/${health.needed.length}`
+              : `${health.down.length} of ${health.needed.length} models down`
             : 'Probing models…'}
         </span>
         <span className="statusbar-sep">/</span>

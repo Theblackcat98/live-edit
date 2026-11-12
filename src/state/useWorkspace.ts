@@ -311,8 +311,8 @@ export function useWorkspace(): WorkspaceApi {
   const resetChat = useCallback(() => {
     if (busyRef.current) {
       notify(
-        'Worker is busy',
-        'Wait for the current verified call to finish before starting a new chat.',
+        'Still working',
+        'Wait for the current turn to finish before starting a new chat.',
         'neutral',
       )
       return

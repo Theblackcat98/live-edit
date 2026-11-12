@@ -268,7 +268,7 @@ export function useWorkspaceVoice({
       return
     }
     if (busyRef.current) {
-      notify('Worker is busy', 'Wait for the current call to finish before speaking.', 'neutral')
+      notify('Still working', 'Wait for the current turn to finish before speaking.', 'neutral')
       return
     }
     const endpoint = modeDef(modeRef.current).speech

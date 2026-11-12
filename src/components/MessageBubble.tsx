@@ -69,7 +69,7 @@ export function MessageBubble({ message, onAction, onOpenTrace, recent }: Messag
         <div className="message-assistant-meta">
           <span className="message-author">{message.author ?? 'Assistant'}</span>
           {message.kind === 'error' && (
-            <span className="message-tag message-tag-error mono">guardrail</span>
+            <span className="message-tag message-tag-error mono">error</span>
           )}
           <span className="message-time mono">{clockOf(message.at)}</span>
           {message.runId && (

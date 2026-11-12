@@ -1,5 +1,5 @@
 import { History } from 'lucide-react'
-import type { ContextUsage, Trace } from '../../types'
+import type { ContextUsage } from '../../types'
 import { modeDef } from '../../lib/modes'
 import type { RunMode } from '../../lib/runmode'
 import { cx } from '../../lib/utils'
@@ -13,11 +13,9 @@ function formatContext(value: number): string {
 /** Context budget, one row per model the active mode actually runs. */
 export function ContextRows({
   usage,
-  trace,
   mode,
 }: {
   usage: ContextUsage
-  trace: Trace | null
   mode: RunMode
 }) {
   // One row per model the mode actually runs, in registry roster order; limits
@@ -49,7 +47,9 @@ export function ContextRows({
           <History size={13} />
           Context budget
         </div>
-        <span className="chip chip-ghost">{rows.length} {rows.length === 1 ? 'view' : 'views'}</span>
+        <span className="chip chip-ghost">
+          {rows.length} {rows.length === 1 ? 'model' : 'models'}
+        </span>
       </header>
       <div className="context-rows">
         {rows.map((row) => {
@@ -68,7 +68,7 @@ export function ContextRows({
               <div className="context-bar">
                 <span
                   className={cx('context-fill', `fill-${row.color}`)}
-                  style={{ width: `${Math.max(2, percent)}%` }}
+                  style={{ width: `${row.value > 0 ? Math.max(2, percent) : 0}%` }}
                 />
               </div>
             </div>
@@ -76,8 +76,9 @@ export function ContextRows({
         })}
       </div>
       <div className="context-foot mono">
-        30s audio ring · ToC cached
-        {trace?.promptTokens ? ` · ${formatContext(trace.promptTokens)} prompt` : ''}
+        {rows.some((row) => row.value > 0)
+          ? 'Last prompt size each server reported'
+          : 'Not measured yet — fills in after the first turn'}
       </div>
     </section>
   )

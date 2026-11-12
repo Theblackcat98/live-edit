@@ -46,7 +46,9 @@ export function useWorkspaceTraces({ persisted }: TracesArgs): WorkspaceTracesAp
   }, [trace])
 
   const openTrace = useCallback((id?: string) => {
-    setSelectedTraceId(id ?? traceRef.current?.id ?? null)
+    // After a reload there is no live trace, but persisted runs are still
+    // inspectable — fall back to the newest one instead of an empty drawer.
+    setSelectedTraceId(id ?? traceRef.current?.id ?? runsRef.current[0]?.id ?? null)
     setTraceOpen(true)
   }, [])
 
@@ -56,7 +58,7 @@ export function useWorkspaceTraces({ persisted }: TracesArgs): WorkspaceTracesAp
     if (selectedTraceId) {
       return runs.find((run) => run.id === selectedTraceId) ?? (trace?.id === selectedTraceId ? trace : null)
     }
-    return trace
+    return trace ?? runs[0] ?? null
   }, [runs, selectedTraceId, trace])
 
   const resetTraces = useCallback(() => {

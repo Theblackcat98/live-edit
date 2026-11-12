@@ -55,7 +55,7 @@ export async function runPipelineTurn(
   deps.stopSpeech()
 
   if (deps.busyRef.current) {
-    deps.notify('Worker is busy', 'Wait for the current verified call to finish before queuing another.', 'neutral')
+    deps.notify('Still working', 'Wait for the current turn to finish before sending another.', 'neutral')
     return
   }
 

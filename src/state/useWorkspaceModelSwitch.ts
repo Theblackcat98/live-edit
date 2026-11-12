@@ -106,8 +106,8 @@ export function useWorkspaceModelSwitch({
       if (next === modeRef.current) return
       if (busyRef.current) {
         notify(
-          'Worker is busy',
-          'Wait for the current call to finish before switching run mode.',
+          'Still working',
+          'Wait for the current turn to finish before switching run mode.',
           'neutral',
         )
         return

@@ -128,7 +128,7 @@ export default function App() {
         elapsedSeconds={workspace.elapsedSeconds}
         speakerOn={workspace.speakerOn}
         micOn={workspace.micOn}
-        traceAvailable={Boolean(workspace.trace)}
+        traceAvailable={Boolean(workspace.trace) || workspace.runs.length > 0}
         mode={workspace.mode}
         onSetMode={workspace.setMode}
         onToggleSpeaker={workspace.toggleSpeaker}
@@ -241,6 +241,7 @@ export default function App() {
             refreshRuntime={workspace.refreshRuntime}
             mode={workspace.mode}
             onSetMode={workspace.setMode}
+            canOpenTrace={Boolean(workspace.trace) || workspace.runs.length > 0}
           />
         </div>
 

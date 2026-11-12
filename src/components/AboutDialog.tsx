@@ -4,6 +4,7 @@ import { Boxes, CloudOff, Keyboard, ShieldCheck, X } from 'lucide-react'
 import { modeDef } from '../lib/modes'
 import type { RunMode } from '../lib/runmode'
 import { LogoMark } from './LogoMark'
+import { modelHostLabel } from '../lib/runView'
 
 interface AboutDialogProps {
   open: boolean
@@ -34,6 +35,7 @@ export function AboutDialog({ open, onClose, mode }: AboutDialogProps) {
   if (!open) return null
 
   const def = modeDef(mode)
+  const host = modelHostLabel()
 
   return createPortal(
     <div className="about-overlay">
@@ -60,7 +62,10 @@ export function AboutDialog({ open, onClose, mode }: AboutDialogProps) {
         <div className="about-body">
           <p className="about-lede">
             A local-first note workspace where you talk to {def.chat.author} and watch the
-            1.7B author each edit, checked by d1 before it touches a line.
+            1.7B author each edit,{' '}
+            {def.decide === 'd1'
+              ? 'checked by d1 before it touches a line.'
+              : 'held for your approval before it touches a line.'}
           </p>
 
           <div className="about-callout">
@@ -72,7 +77,7 @@ export function AboutDialog({ open, onClose, mode }: AboutDialogProps) {
               <p>
                 Chat replies ({def.chat.author}), worker XML calls (LFM3-1.7B) and the d1
                 safety check (d1-Omni-2B over /v1/systemone) run against local llama.cpp servers
-                on 127.0.0.1, started by scripts/start-models.sh. The Runtime truth card in the
+                on {host}, started by scripts/start-models.sh. The Runtime truth card in the
                 rail probes them live. The worker grounds its own span; the diff engine,
                 snapshots and trace format run entirely in this tab. If a model server is down,
                 the affected stage degrades honestly — the trace labels it, nothing fakes a call.
@@ -82,7 +87,7 @@ export function AboutDialog({ open, onClose, mode }: AboutDialogProps) {
 
           <div className="about-section-title">
             <Boxes size={12} />
-            <span className="mono">The trinity</span>
+            <span className="mono">Models in this mode</span>
           </div>
           <div className="about-models">
             {def.roster.map((model) => (
@@ -115,7 +120,7 @@ export function AboutDialog({ open, onClose, mode }: AboutDialogProps) {
           <div className="about-footer">
             <ShieldCheck size={12} />
             <span>
-              The app does not upload audio or note state: every model call stays on 127.0.0.1.
+              The app does not upload audio or note state: every model call goes to {host}.
               Active mode: {def.info.label}. LFM Open License v1.0 applies to the model
               family; this interface is a local demonstration build.
             </span>

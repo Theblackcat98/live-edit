@@ -158,7 +158,7 @@ export function useWorkspacePending({
   const applyPendingEdit = useCallback(
     (id: string) => {
       if (busyRef.current) {
-        notify('Worker is busy', 'Wait for the current turn to finish before applying a pending edit.', 'neutral')
+        notify('Still working', 'Wait for the current turn to finish before applying a pending edit.', 'neutral')
         return
       }
       resolvePending(id, 'apply')

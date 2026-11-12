@@ -44,6 +44,8 @@ export function TopBar({
   onOpenTrace,
   onOpenHelp,
 }: TopBarProps) {
+  const roster = modeDef(mode).roster
+  const memory = rosterMemoryGB(roster).toFixed(1)
   return (
     <header className="topbar">
       <div className="brand">
@@ -62,9 +64,12 @@ export function TopBar({
           {title}
           <span className="workspace-file-path mono">{path}</span>
         </span>
-        <span className="local-status">
+        <span
+          className="local-status"
+          title="Nothing leaves your network: the note and audio go only to the local model servers."
+        >
           <CloudOff size={11} />
-          No server
+          No cloud
         </span>
       </div>
 
@@ -74,21 +79,25 @@ export function TopBar({
 
       <div className="topbar-divider" />
 
-      <div className="trinity-summary" title="Simulated LFM3 residency · three models sharing a 24-layer tri-hybrid backbone">
+      <div
+        className="trinity-summary"
+        title={`Models this mode runs: ${roster.map((model) => model.name).join(', ')} — ${memory} GB of weights`}
+      >
         <span className="trinity-pips" aria-hidden="true">
-          <span className="trinity-pip pip-green" />
-          <span className="trinity-pip pip-accent" />
-          <span className="trinity-pip pip-orange" />
+          {roster.map((model) => (
+            <span key={model.id} className={`trinity-pip pip-${model.color}`} />
+          ))}
         </span>
-        <span className="trinity-label">Trinity</span>
-        <span className="trinity-memory mono">{rosterMemoryGB(modeDef(mode).roster).toFixed(1)} GB</span>
+        <span className="trinity-label">
+          {roster.length} {roster.length === 1 ? 'model' : 'models'}
+        </span>
+        <span className="trinity-memory mono">{memory} GB</span>
       </div>
 
       <div className="topbar-divider" />
 
       <div className="live-clock" title="Session elapsed time">
-        <span className="status-dot is-green is-pulsing" />
-        <span className="live-label mono">LIVE</span>
+        <span className="live-label mono">SESSION</span>
         <span className="live-time mono">{formatElapsed(elapsedSeconds)}</span>
       </div>
 

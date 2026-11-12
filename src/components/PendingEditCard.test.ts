@@ -176,7 +176,7 @@ describe('busy reason (§9.4 — no adjudication during a worker run)', () => {
   it('gives the reason while a run is active', () => {
     const reason = busyReason(true)
     expect(reason).not.toBeNull()
-    expect(reason).toMatch(/worker run/)
+    expect(reason).toMatch(/turn is running/)
   })
 
   it('gives no reason when the card is actionable', () => {

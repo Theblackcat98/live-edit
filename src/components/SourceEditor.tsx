@@ -130,7 +130,7 @@ export function SourceEditor({
           {dirty ? 'Draft not committed' : 'Source matches the active snapshot'}
         </span>
         <span className="source-status-note">
-          {busy ? 'Worker is busy — apply is paused' : '⌘/Ctrl + Enter to apply'}
+          {busy ? 'A turn is running — apply is paused' : '⌘/Ctrl + Enter to apply'}
         </span>
         <span className="mono">
           {note === draft ? 'No changes' : `${draft.length - note.length >= 0 ? '+' : ''}${draft.length - note.length} chars`}

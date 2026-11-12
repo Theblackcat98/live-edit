@@ -110,7 +110,7 @@ export function diffSummary(diff: ExecutionDiff): string {
  * like undo today). Null when the card is actionable.
  */
 export function busyReason(busy: boolean): string | null {
-  return busy ? 'A worker run is active — decide once the turn finishes.' : null
+  return busy ? 'A turn is running — decide once it finishes.' : null
 }
 
 /** Head-line copy per card state; the pending state is the live decision. */
