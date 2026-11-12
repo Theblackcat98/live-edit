@@ -95,6 +95,11 @@ export async function runOmniFirstTurn(
     })
   } catch (error) {
     retractStream()
+    if (controller.signal.aborted) {
+      // Barge-in: the next command already owns the session.
+      finish('conversational')
+      return
+    }
     throw new Error(
       `Omni turn failed: ${error instanceof Error ? error.message : 'unknown error'}`,
     )
