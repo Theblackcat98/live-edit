@@ -2,10 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Braces,
-  Check,
   CheckCheck,
   Copy,
-  Gauge,
   ScanSearch,
   ShieldCheck,
   X,
@@ -19,9 +17,10 @@ import { TraceSummaryCells } from './trace/TraceSummaryCells'
 import { D1CheckSection } from './trace/D1CheckSection'
 import { HoldSection } from './trace/HoldSection'
 import { ExchangeList } from './trace/ExchangeList'
-import { TraceSection } from './trace/TraceSection'
 import { DirectiveSection } from './trace/DirectiveSection'
 import { WorkerSection } from './trace/WorkerSection'
+import { ExecutionSection } from './trace/ExecutionSection'
+import { TimingSection } from './trace/TimingSection'
 
 interface TraceDrawerProps {
   rejectedTraces: RejectedTraceRecord[]
@@ -249,93 +248,9 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectR
 
             <WorkerSection key={trace.id} trace={trace} />
 
-            <TraceSection index="E" title="Execution & snapshot" caption="atomic line diff">
-              {trace.execution ? (
-                <div className="trace-execution">
-                  <div className="trace-execution-head">
-                    <span
-                      className={cx(
-                        'trace-execution-icon',
-                        trace.execution.ok ? 'is-ok' : 'is-fail',
-                      )}
-                    >
-                      {trace.execution.ok ? <Check size={12} /> : <X size={12} />}
-                    </span>
-                    <p>{trace.execution.message}</p>
-                  </div>
-                  {trace.execution.diff && (
-                    <div className="trace-diff">
-                      <div className="trace-diff-meta mono">
-                        <span>start line {trace.execution.diff.startLine}</span>
-                        <span className="trace-diff-added">+{trace.execution.diff.added}</span>
-                        <span className="trace-diff-removed">−{trace.execution.diff.removed}</span>
-                      </div>
-                      <div className="trace-diff-body">
-                        {trace.execution.diff.before.map((line, index) => (
-                          <div className="trace-diff-line is-before" key={`before-${index}`}>
-                            <span className="mono">−</span>
-                            <code className="mono">{line || ' '}</code>
-                          </div>
-                        ))}
-                        {trace.execution.diff.after.map((line, index) => (
-                          <div className="trace-diff-line is-after" key={`after-${index}`}>
-                            <span className="mono">+</span>
-                            <code className="mono">{line || ' '}</code>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  <div className="trace-execution-meta mono">
-                    {trace.execution.snapshotId && <span>snapshot {trace.execution.snapshotId.slice(-6)}</span>}
-                    <span>{trace.execution.durationMs.toFixed(1)} ms engine</span>
-                  </div>
-                </div>
-              ) : (
-                <p className="trace-muted">No line was written. The note is unchanged.</p>
-              )}
-            </TraceSection>
+            <ExecutionSection execution={trace.execution} />
 
-            <TraceSection index="T" title="Timing" caption="measured runtime">
-              <div className="trace-timeline">
-                {(
-                  [
-                    ['route', trace.timings.route, 'accent'],
-                    ['generate', trace.timings.generate, 'orange'],
-                    ['critic', trace.timings.critic, 'accent'],
-                    ['execute', trace.timings.execute, 'green'],
-                  ] as const
-                ).map(([label, value, tone]) => (
-                  <span
-                    key={label}
-                    className={cx('trace-timeline-segment', `tone-${tone}`)}
-                    style={{ flexGrow: Math.max(value, 1) }}
-                    title={`${label}: ${value.toFixed(1)} ms`}
-                  />
-                ))}
-              </div>
-              <div className="trace-timings-grid">
-                {(
-                  [
-                    ['route', trace.timings.route],
-                    ['generate', trace.timings.generate],
-                    ['critic', trace.timings.critic],
-                    ['execute', trace.timings.execute],
-                  ] as const
-                ).map(([label, value]) => (
-                  <span key={label} className="trace-timing">
-                    <span className="mono">{label}</span>
-                    <strong className="mono">{value ? `${value.toFixed(1)} ms` : '—'}</strong>
-                  </span>
-                ))}
-              </div>
-              <div className="trace-total mono">
-                <Gauge size={11} />
-                end-to-end {trace.timings.total ? `${Math.round(trace.timings.total)} ms` : '—'} ·{' '}
-                {trace.runtime?.worker === 'live' || trace.runtime?.chat === 'live' ? '' : '≈'}
-                {trace.outputTokens} output tokens
-              </div>
-            </TraceSection>
+            <TimingSection trace={trace} />
 
             <div className="trace-footer">
               <ShieldCheck size={11} />
