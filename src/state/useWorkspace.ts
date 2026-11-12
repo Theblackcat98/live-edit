@@ -32,18 +32,13 @@ import { managerNameFor, planModelSwitch, type ModelSwitchPlan } from '../lib/mo
 import { estimateTokens, makeId, sleep } from '../lib/utils'
 import { runPipelineTurn, type PipelineDeps } from '../lib/pipeline'
 import {
-  adjudicate,
-  enqueue,
-  fromStorable,
   toStorable,
-  type PendingAdjudication,
 } from '../lib/pending'
-import { noteHash } from '../lib/context'
-import { executeTool } from '../lib/tools'
 import { useRuntimeHealth } from './useRuntimeHealth'
 import { useSessionClock } from './useSessionClock'
 import { useToasts } from './useToasts'
 import { useWorkspaceHistory } from './useWorkspaceHistory'
+import { useWorkspacePending } from './useWorkspacePending'
 import { useWorkspaceTraces } from './useWorkspaceTraces'
 
 const initialNoteTokens = estimateTokens(INITIAL_NOTE)
@@ -148,26 +143,7 @@ export interface WorkspaceApi {
   cancelPendingSwitch: () => void
 }
 
-/**
- * The rejected-traces record for a resolved pending edit (§9.5). Grounding
- * is honestly marked `pending-adjudication`: the user, not a grounding
- * pass, made this call.
- */
-export function pendingResolutionRecord(edit: PendingEdit, reason: string): RejectedTraceRecord {
-  return {
-    at: Date.now(),
-    command: edit.directive.instruction,
-    route: { tool: edit.call.name, provenance: 'pending edit adjudication' },
-    grounding: { source: 'pending-adjudication' },
-    workerXml: edit.call.xml,
-    critic: { verdict: 'rejected', reason, pCorrect: edit.d1.noul },
-    directive: edit.directive,
-    // §9.5: the record carries the proposal — directive, call, AND the d1
-    // verdict that routed it to adjudication (battery case 32: the verdict
-    // was dropped here even though the type has the field).
-    d1: edit.d1,
-  }
-}
+export { pendingResolutionRecord } from './useWorkspacePending'
 
 export function useWorkspace(): WorkspaceApi {
   // Hydrate persisted workspace once, during first render (before paint).
@@ -221,13 +197,6 @@ export function useWorkspace(): WorkspaceApi {
   const [mode, setModeState] = useState<RunMode>(() => loadRunMode())
   const [asrBusy, setAsrBusy] = useState(false)
   const [ttsBusy, setTtsBusy] = useState(false)
-  // Reloaded pendings pass through pending.ts's defensive per-entry
-  // validation — a malformed entry drops out instead of bricking the queue.
-  const [pendingEdits, setPendingEdits] = useState<PendingEdit[]>(() =>
-    fromStorable(persisted?.pendingEdits ?? []),
-  )
-  const pendingEditsRef = useRef<PendingEdit[]>(pendingEdits)
-
   const busyRef = useRef(false)
   const speakerOnRef = useRef(speakerOn)
   const flowModelRef = useRef<ActiveModel>(null)
@@ -255,9 +224,6 @@ export function useWorkspace(): WorkspaceApi {
   const chatAbortRef = useRef<AbortController | null>(null)
   const messagesRef = useRef<Message[]>(messages)
 
-  useEffect(() => {
-    pendingEditsRef.current = pendingEdits
-  }, [pendingEdits])
   useEffect(() => {
     traceRef.current = trace
   }, [trace])
@@ -311,22 +277,6 @@ export function useWorkspace(): WorkspaceApi {
     setSourceMode,
     notify,
   })
-
-  // Debounced workspace persistence — best-effort, never breaks the UI.
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      saveWorkspaceState({
-        note,
-        snapshots: history,
-        messages,
-        runs,
-        rejectedTraces,
-        // D3: only unresolved pendings persist, capped by the store.
-        pendingEdits: toStorable(pendingEdits),
-      })
-    }, 500)
-    return () => window.clearTimeout(timer)
-  }, [note, history, messages, runs, rejectedTraces, pendingEdits])
 
   /** The mode-switch application itself: persist, announce, honest mic stop. */
   const applyMode = useCallback(
@@ -476,102 +426,24 @@ export function useWorkspace(): WorkspaceApi {
     }, 7200)
   }, [clearTransientHighlights])
 
-  // --- Pending-edit adjudication (design.md §9) ------------------------------
-  // Adjudication is not a turn: it respects the same busy gate as undo and
-  // never runs the pipeline. The store (lib/pending) decides; this hook
-  // executes an approved call and keeps the records.
-  const addPendingEdit = useCallback((pending: PendingEdit) => {
-    setPendingEdits((previous) => enqueue(previous, pending))
-  }, [])
-
-  const resolvePending = useCallback(
-    (id: string, decision: 'apply' | 'discard') => {
-      const edit = pendingEditsRef.current.find((entry) => entry.id === id)
-      if (!edit || edit.status !== 'pending') return
-      const outcome: PendingAdjudication = adjudicate(edit, decision, noteRef.current, { noteHash })
-      setPendingEdits((previous) =>
-        previous.map((entry) => (entry.id === id ? outcome.edit : entry)),
-      )
-      if (outcome.status === 'applied' && outcome.call) {
-        const execution = executeTool(
-          noteRef.current,
-          outcome.call,
-          edit.overrideBlastRadius ? { overrideBlastRadius: true } : {},
-        )
-        if (!execution.ok) {
-          // The store gate-validated the call; the engine refusing anyway is
-          // a drift between the two — surface it honestly, write nothing.
-          setPendingEdits((previous) =>
-            previous.map((entry) =>
-              entry.id === id ? { ...entry, status: 'stale' as const } : entry,
-            ),
-          )
-          setRejectedTraces((records) => [
-            ...records,
-            pendingResolutionRecord(outcome.edit, `Engine refused at execution: ${execution.message}`),
-          ])
-          addMessage({
-            role: 'assistant',
-            author: 'harness',
-            kind: 'error',
-            text: `That pending edit passed the gates but the engine refused it: ${execution.message} Nothing was written.`,
-          })
-          return
-        }
-        commitNote(execution.note, `Pending edit approved · ${outcome.call.name}`, outcome.call.name)
-        setDiff(execution.diff ?? null)
-        scheduleHighlightClear()
-        addMessage({
-          role: 'assistant',
-          author: 'harness',
-          kind: 'result',
-          text: `Applied the pending ${outcome.call.name} edit you approved.`,
-        })
-        notify('Pending edit applied', execution.message, 'success')
-        return
-      }
-      // stale or discarded: nothing written; the proposal joins the
-      // rejected-traces log (§9.5).
-      setRejectedTraces((records) => [
-        ...records,
-        pendingResolutionRecord(
-          outcome.edit,
-          outcome.status === 'discarded'
-            ? 'Discarded by the user at adjudication (design.md §9).'
-            : outcome.reason,
-        ),
-      ])
-      addMessage({
-        role: 'assistant',
-        author: 'harness',
-        kind: 'notice',
-        text:
-          outcome.status === 'stale'
-            ? `That pending edit went stale and was not applied. ${outcome.reason}`
-            : 'Discarded the pending edit. The note was not touched.',
-      })
-      if (outcome.status === 'stale') notify('Pending edit went stale', outcome.reason, 'error')
-    },
-    [addMessage, commitNote, notify, scheduleHighlightClear],
+  /** Narrow bridge to the trace module: records reach its log by append only. */
+  const appendRejectedTrace = useCallback(
+    (record: RejectedTraceRecord) => setRejectedTraces((records) => [...records, record]),
+    [setRejectedTraces],
   )
 
-  const applyPendingEdit = useCallback(
-    (id: string) => {
-      if (busyRef.current) {
-        notify('Worker is busy', 'Wait for the current turn to finish before applying a pending edit.', 'neutral')
-        return
-      }
-      resolvePending(id, 'apply')
-    },
-    [notify, resolvePending],
-  )
-
-  const dismissPendingEdit = useCallback(
-    (id: string) => {
-      resolvePending(id, 'discard')
-    },
-    [resolvePending],
-  )
+  const { pendingEdits, addPendingEdit, applyPendingEdit, dismissPendingEdit } =
+    useWorkspacePending({
+      persisted,
+      busyRef,
+      noteRef,
+      commitNote,
+      setDiff,
+      scheduleHighlightClear,
+      addMessage,
+      notify,
+      appendRejectedTrace,
+    })
 
   const stopSpeech = useCallback(() => {
     speechTokenRef.current += 1
@@ -1028,6 +900,22 @@ export function useWorkspace(): WorkspaceApi {
       if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current)
     }
   }, [])
+
+  // Debounced workspace persistence — best-effort, never breaks the UI.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      saveWorkspaceState({
+        note,
+        snapshots: history,
+        messages,
+        runs,
+        rejectedTraces,
+        // D3: only unresolved pendings persist, capped by the store.
+        pendingEdits: toStorable(pendingEdits),
+      })
+    }, 500)
+    return () => window.clearTimeout(timer)
+  }, [note, history, messages, runs, rejectedTraces, pendingEdits])
 
   const activeModel: ActiveModel = speaking ? 'omni' : flowModel
 

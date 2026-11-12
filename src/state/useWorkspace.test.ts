@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PendingEdit } from '../types'
-import { pendingResolutionRecord } from './useWorkspace'
+import { pendingResolutionRecord } from './useWorkspacePending'
 
 /**
  * The §9.5 rejected-traces record for a resolved pending edit (battery
