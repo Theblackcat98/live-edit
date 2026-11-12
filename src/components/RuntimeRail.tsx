@@ -23,6 +23,7 @@ import { cx, relativeTime } from '../lib/utils'
 import { ModeSwitch } from './ModeSwitch'
 import { SafetyCheckCard } from './rail/SafetyCheckCard'
 import { ContextRows } from './rail/ContextRows'
+import { EndpointRows } from './rail/EndpointRows'
 
 interface RuntimeRailProps {
   activeModel: 'omni' | 'd1' | 'worker' | null
@@ -349,25 +350,7 @@ function RuntimeWiringCard({
         })}
       </div>
 
-      <div className="wiring-endpoints">
-        {(runtimeHealth?.endpoints ?? []).map((endpoint) => (
-          <div
-            key={endpoint.id}
-            className={cx('wiring-endpoint', !endpoint.up && 'is-down')}
-            title={endpoint.error ?? endpoint.models?.join(', ')}
-          >
-            <span className={cx('status-dot', endpoint.up ? 'is-green' : 'is-red')} />
-            <span className="mono">{endpoint.port}</span>
-            <span className="wiring-endpoint-name">{endpoint.name}</span>
-            <span className="wiring-endpoint-meta mono">
-              {endpoint.up
-                ? `${endpoint.latencyMs ?? 0} ms${endpoint.models?.length ? ` · ${endpoint.models[0]}` : ''}`
-                : 'down'}
-            </span>
-          </div>
-        ))}
-        {!runtimeHealth && <div className="wiring-muted mono">Probing 127.0.0.1 :8080 · :8083 · :8085 · :8086…</div>}
-      </div>
+      <EndpointRows runtimeHealth={runtimeHealth} />
     </section>
   )
 }
