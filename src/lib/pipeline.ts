@@ -27,12 +27,10 @@ import type {
   DelegationInfo,
   Directive,
   ExecutionDiff,
-  Message,
   OmniTurnResult,
   PendingEdit,
   Probability,
   ToolName,
-  Trace,
   TraceRuntime,
   TurnHold,
   WorkerCall,
@@ -53,7 +51,7 @@ import { scaffoldTemplateBrief } from './templateScaffold'
 import { sectionScaleCollapse } from './blastGate'
 import { checkExecutionOutcome } from './executionCheck'
 import { detectSnapshotDirective } from './snapshotDirective'
-import { runOmniTurn, type OmniHistoryTurn } from './omni'
+import { runOmniTurn } from './omni'
 import { runWorkerChatTurn, WORKER_CHAT_SAMPLER, type WorkerChatTurnResult } from './workerChat'
 import { chatModelName } from './runmode'
 import type { RunMode } from './runmode'
@@ -79,42 +77,6 @@ import {
   type TurnContext,
 } from './flow/turnContext'
 import { createStreamBubble } from './flow/bubble'
-
-/**
- * Recent (user command, assistant reply) pairs replayed as chat turns.
- * A turn with no visible assistant reply contributes only its command.
- */
-interface ChatTurn {
-  command: string
-  reply?: string
-}
-
-/** How many prior turns the conversational model sees. */
-const CHAT_MEMORY_TURNS = 6
-
-/**
- * Pair each user message with the last assistant reply before the next user
- * message. A trailing user turn (the command being submitted) has no reply yet
- * and is therefore never replayed as history.
- */
-function conversationTurns(messages: Message[], limit: number): ChatTurn[] {
-  const turns: ChatTurn[] = []
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index]
-    if (message.role !== 'user' || !message.text.trim()) continue
-    let reply: Message | null = null
-    for (let cursor = index + 1; cursor < messages.length; cursor += 1) {
-      const candidate = messages[cursor]
-      if (candidate.role === 'user') break
-      if (candidate.role === 'assistant' && candidate.text.trim()) reply = candidate
-    }
-    turns.push({
-      command: message.text,
-      reply: reply?.text,
-    })
-  }
-  return turns.slice(-limit)
-}
 
 /**
  * Runs one user turn through the stage machine. This is the single entry
@@ -226,48 +188,8 @@ export async function runPipelineTurn(
   }
 }
 
-/**
- * Audio's history (design.md §6), assembled from the transcript and the
- * recorded runs: answer turns contribute their visible reply; delegation
- * turns contribute the recorded directive as a tool record — never harness
- * prose, never another turn's internals.
- */
-export function buildOmniHistory(messages: Message[], runs: Trace[]): OmniHistoryTurn[] {
-  const runsById = new Map(runs.map((run) => [run.id, run]))
-  const turns: OmniHistoryTurn[] = []
-  let current: OmniHistoryTurn | null = null
-  for (const message of messages) {
-    if (message.role === 'user') {
-      current = { command: message.text }
-      turns.push(current)
-      continue
-    }
-    if (!current) continue
-    // Delegation cards are 'tool' messages; replies are 'assistant' ones.
-    if (message.role !== 'assistant' && message.role !== 'tool') continue
-    const run = message.runId ? runsById.get(message.runId) : undefined
-    if (message.delegation && run?.directive && !current.delegation) {
-      current.delegation = {
-        tool: 'delegate_edit',
-        arguments: JSON.stringify(run.directive),
-        result: run.status === 'verified' ? 'Executed' : 'Execution failed',
-      }
-    } else if (!current.reply && !current.delegation && message.text && message.kind !== 'error') {
-      // Execution/result confirmations belong to a run (runId set) — they
-      // are harness prose, never model-authored chat. Accept one as the
-      // turn's reply only when it carries no run pairing (an unpaired
-      // confirmation has no delegation to hang off, so dropping it would
-      // lose the turn entirely); a run-paired confirmation whose run also
-      // produced a delegation card contributes nothing beyond the tool
-      // record (battery case 21: replaying it visibly taught the front
-      // door plain-text delegation, measured 4/4 server-side).
-      const pairedRun = message.runId ? runsById.get(message.runId) : undefined
-      if (message.role === 'assistant' && message.runId && pairedRun?.directive) continue
-      current.reply = message.text
-    }
-  }
-  return turns.filter((turn) => turn.command.trim().length > 0)
-}
+export { buildOmniHistory } from './flow/history'
+import { buildOmniHistory, CHAT_MEMORY_TURNS, conversationTurns, lastEditRun } from './flow/history'
 
 function packetWorkerCall(
   parsed: ParsedToolCall,
@@ -391,21 +313,12 @@ async function runOmniFirstTurn(
   const history = buildOmniHistory(deps.messagesRef.current, deps.runsRef.current)
   // The current command is already in the transcript; history is prior turns.
   const priorHistory = history.slice(0, -1)
-  // Last-run continuity is edit context for the worker's follow-ups —
-  // conversational/chat turns carry no edit state, and replaying one
-  // ("Last completed run: hey → conversational") teaches the front door
-  // that chat turns are delegations (measured: greeting delegated 3/3
-  // with the line present, answered 3/3 without it). Only verified and
-  // pending runs (real edit attempts) are reported.
-  const lastEditRun = deps.runsRef.current.find(
-    (run) => run.status === 'verified' || run.status === 'pending',
-  )
-  const lastRun = lastEditRun
-    ? {
-        command: lastEditRun.command,
-        status: lastEditRun.status,
-      }
-    : null
+  // Last-run continuity is edit context for the worker's follow-ups;
+  // conversational turns carry no edit state. Only verified and pending runs
+  // (real edit attempts) are reported. The Audio front door receives the
+  // command and status only — its prompt never replays the execution message.
+  const edit = lastEditRun(deps.runsRef.current)
+  const lastRun = edit ? { command: edit.command, status: edit.status } : null
 
   // Provisional streaming bubble: Audio's deltas land here live (battery
   // case 18); the authoritative text replaces them for answer/clarify, and
@@ -813,16 +726,7 @@ async function runWorkerChatFirstTurn(
   const history = conversationTurns(deps.messagesRef.current, CHAT_MEMORY_TURNS)
   // The current command is already in the transcript; history is prior turns.
   const priorHistory = history.slice(0, -1)
-  const lastEdit = deps.runsRef.current.find(
-    (run) => run.status === 'verified' || run.status === 'pending',
-  )
-  const lastRun = lastEdit
-    ? {
-        command: lastEdit.command,
-        status: lastEdit.status,
-        ...(lastEdit.execution?.message ? { message: lastEdit.execution.message } : {}),
-      }
-    : null
+  const lastRun = lastEditRun(deps.runsRef.current)
 
   // Provisional streaming bubble, same discipline as Audio-first: visible
   // deltas land here live; a call outcome retracts it, an answer settles the
