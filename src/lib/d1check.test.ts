@@ -2,11 +2,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { D1Answer } from '../types'
 import {
   CHOICE_QUESTION_ID,
+  CLARITY_QUESTION_ID,
+  CONFIDENCE_QUESTION_ID,
   D1_QUESTIONS,
   D1_THRESHOLDS,
   NOUL_QUESTION_ID,
   SAFE_CHOICE,
+  SUPPORTED_CHOICE,
+  TARGET_QUESTION_ID,
   UNSAFE_CHOICE,
+  UNSUPPORTED_CHOICE,
   runD1Check,
   type D1DecideFn,
 } from './d1check'
@@ -14,9 +19,11 @@ import {
 // --- fixtures -------------------------------------------------------------------
 
 /**
- * The E3 calibration record (docs/spikes/E3-d1-check.md, §"Questions, exactly
- * as sent"), embedded verbatim — confirmed byte-identical to the companion
- * JSON's `questions` block. D1_QUESTIONS must serialize to exactly this text.
+ * The E3 calibration record anchored the original two questions
+ * (docs/spikes/E3-d1-check.md, §"Questions, exactly as sent"). The packet has
+ * since grown three uncertainty questions (intent_clarity, target_support,
+ * execution_confidence); the E3 wording of the first two is preserved
+ * verbatim below and asserted byte-identical in the structure test.
  */
 const E3_QUESTIONS_JSON = `{
   "does_call_match_directive": {
@@ -33,7 +40,13 @@ const E3_QUESTIONS_JSON = `{
   }
 }`
 
-function answersOf(noul: number, choice: string): Record<string, D1Answer> {
+function answersOf(
+  noul: number,
+  choice: string,
+  clarity = 0.9,
+  target: string = SUPPORTED_CHOICE,
+  confidence = 0.9,
+): Record<string, D1Answer> {
   return {
     [NOUL_QUESTION_ID]: { type: 'noul', noul },
     [CHOICE_QUESTION_ID]: {
@@ -41,6 +54,13 @@ function answersOf(noul: number, choice: string): Record<string, D1Answer> {
       choice,
       probabilities: { [SAFE_CHOICE]: 0.9, [UNSAFE_CHOICE]: 0.1 },
     },
+    [CLARITY_QUESTION_ID]: { type: 'noul', noul: clarity },
+    [TARGET_QUESTION_ID]: {
+      type: 'choice',
+      choice: target,
+      probabilities: { [SUPPORTED_CHOICE]: 0.9, [UNSUPPORTED_CHOICE]: 0.1 },
+    },
+    [CONFIDENCE_QUESTION_ID]: { type: 'noul', noul: confidence },
   }
 }
 
@@ -63,26 +83,38 @@ async function checkWith(decide: D1DecideFn) {
   return runD1Check({ state: STATE, d1Decide: decide })
 }
 
-// --- D1_QUESTIONS: byte-identical to the E3 calibration record -------------------
+// --- D1_QUESTIONS: E3 wording preserved, packet extended -------------------------
 
 describe('D1_QUESTIONS', () => {
-  it('serializes byte-identical to the E3 "Questions, exactly as sent" record', () => {
-    expect(JSON.stringify(D1_QUESTIONS, null, 2)).toBe(E3_QUESTIONS_JSON)
+  it('keeps the E3-calibrated pair byte-identical inside the extended packet', () => {
+    const serialized = JSON.parse(JSON.stringify(D1_QUESTIONS)) as Record<string, unknown>
+    expect(JSON.stringify(serialized[NOUL_QUESTION_ID], null, 2)).toBe(
+      JSON.stringify(JSON.parse(E3_QUESTIONS_JSON)[NOUL_QUESTION_ID], null, 2),
+    )
+    expect(JSON.stringify(serialized[CHOICE_QUESTION_ID], null, 2)).toBe(
+      JSON.stringify(JSON.parse(E3_QUESTIONS_JSON)[CHOICE_QUESTION_ID], null, 2),
+    )
   })
 
-  it('has the E3-recorded structure: key names, question types, instruction strings', () => {
-    const parsed = JSON.parse(JSON.stringify(D1_QUESTIONS)) as {
-      does_call_match_directive: { type: string; instructions: string }
-      destructive_safety: { type: string; instructions: string; criteria: Record<string, string> }
-    }
-    expect(Object.keys(D1_QUESTIONS)).toEqual([NOUL_QUESTION_ID, CHOICE_QUESTION_ID])
-    expect(parsed.does_call_match_directive.type).toBe('noul')
-    expect(typeof parsed.does_call_match_directive.instructions).toBe('string')
-    expect(parsed.destructive_safety.type).toBe('choice')
-    expect(typeof parsed.destructive_safety.instructions).toBe('string')
-    expect(Object.keys(parsed.destructive_safety.criteria)).toEqual([SAFE_CHOICE, UNSAFE_CHOICE])
-    expect(typeof parsed.destructive_safety.criteria[SAFE_CHOICE]).toBe('string')
-    expect(typeof parsed.destructive_safety.criteria[UNSAFE_CHOICE]).toBe('string')
+  it('asks the five safety questions in packet order', () => {
+    expect(Object.keys(D1_QUESTIONS)).toEqual([
+      NOUL_QUESTION_ID,
+      CHOICE_QUESTION_ID,
+      CLARITY_QUESTION_ID,
+      TARGET_QUESTION_ID,
+      CONFIDENCE_QUESTION_ID,
+    ])
+  })
+
+  it('types the uncertainty questions (noul, choice, noul)', () => {
+    expect(D1_QUESTIONS[CLARITY_QUESTION_ID].type).toBe('noul')
+    expect(D1_QUESTIONS[TARGET_QUESTION_ID].type).toBe('choice')
+    expect(D1_QUESTIONS[CONFIDENCE_QUESTION_ID].type).toBe('noul')
+    const criteria =
+      D1_QUESTIONS[TARGET_QUESTION_ID].type === 'choice'
+        ? D1_QUESTIONS[TARGET_QUESTION_ID].criteria
+        : {}
+    expect(Object.keys(criteria)).toEqual([SUPPORTED_CHOICE, UNSUPPORTED_CHOICE])
   })
 })
 
@@ -150,6 +182,69 @@ describe('runD1Check verdict matrix', () => {
     const result = await checkWith(decideWith(0.49, SAFE_CHOICE))
     expect(result.verdict).toBe('disapproved')
     expect(result.failingQuestion).toBe(NOUL_QUESTION_ID)
+  })
+})
+
+// --- uncertainty questions ---------------------------------------------------------
+
+describe('runD1Check uncertainty verdicts', () => {
+  it('approves only when all five questions pass', async () => {
+    const result = await checkWith(decideWith(0.8, SAFE_CHOICE))
+    expect(result).toMatchObject({
+      verdict: 'approved',
+      noul: 0.8,
+      destructiveSafety: SAFE_CHOICE,
+      intentClarity: 0.9,
+      targetSupport: SUPPORTED_CHOICE,
+      executionConfidence: 0.9,
+    })
+    expect(result.failingQuestion).toBeUndefined()
+  })
+
+  it('disapproves unclear intent, failing intent_clarity', async () => {
+    const decide = decideReturning(answersOf(0.8, SAFE_CHOICE, 0.3))
+    const result = await checkWith(decide)
+    expect(result.verdict).toBe('disapproved')
+    expect(result.failingQuestion).toBe(CLARITY_QUESTION_ID)
+    expect(result.reason).toContain(CLARITY_QUESTION_ID)
+  })
+
+  it('disapproves an unsupported target, failing target_support', async () => {
+    const decide = decideReturning(answersOf(0.8, SAFE_CHOICE, 0.9, UNSUPPORTED_CHOICE))
+    const result = await checkWith(decide)
+    expect(result.verdict).toBe('disapproved')
+    expect(result.failingQuestion).toBe(TARGET_QUESTION_ID)
+    expect(result.reason).toContain(UNSUPPORTED_CHOICE)
+  })
+
+  it('disapproves low execution confidence, failing execution_confidence', async () => {
+    const decide = decideReturning(answersOf(0.8, SAFE_CHOICE, 0.9, SUPPORTED_CHOICE, 0.2))
+    const result = await checkWith(decide)
+    expect(result.verdict).toBe('disapproved')
+    expect(result.failingQuestion).toBe(CONFIDENCE_QUESTION_ID)
+    expect(result.reason).toContain(CONFIDENCE_QUESTION_ID)
+  })
+
+  it('names the first failing question in packet order (match before clarity)', async () => {
+    const decide = decideReturning(answersOf(0.3, SAFE_CHOICE, 0.2))
+    const result = await checkWith(decide)
+    expect(result.failingQuestion).toBe(NOUL_QUESTION_ID)
+  })
+
+  it('names safety before uncertainty when both fail', async () => {
+    const decide = decideReturning(answersOf(0.8, UNSAFE_CHOICE, 0.2, UNSUPPORTED_CHOICE, 0.1))
+    const result = await checkWith(decide)
+    expect(result.failingQuestion).toBe(CHOICE_QUESTION_ID)
+    expect(result.reason).toContain(CHOICE_QUESTION_ID)
+    expect(result.reason).toContain(CLARITY_QUESTION_ID)
+  })
+
+  it('is unavailable when a new question answer is missing', async () => {
+    const { [CONFIDENCE_QUESTION_ID]: _dropped, ...partial } = answersOf(0.8, SAFE_CHOICE)
+    const result = await checkWith(decideReturning(partial))
+    expect(result.verdict).toBe('unavailable')
+    expect(result.executionConfidence).toBeNull()
+    expect(result.reason).toContain(CONFIDENCE_QUESTION_ID)
   })
 })
 

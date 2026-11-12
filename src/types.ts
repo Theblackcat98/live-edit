@@ -473,14 +473,27 @@ export interface ContextPacket {
  * verdict: d1 down, malformed answer, or an otherwise unusable response is
  * never silently mapped to approval (or to rejection) — it means the user
  * decides instead.
+ *
+ * Beyond the calibrated pair (`does_call_match_directive` + `destructive_safety`),
+ * three advisory questions separate confident disapproval from uncertainty:
+ * `intent_clarity` (is the request unambiguous?), `target_support` (does the
+ * note contain what the call targets?) and `execution_confidence` (will the
+ * call execute as rendered?). Any of the five failing holds the edit for the
+ * user — the failing question names the reason.
  */
 export interface D1CheckResult {
-  /** approved: noul ≥ threshold and destructive_safety = safe; disapproved otherwise; unavailable per above. */
+  /** approved: every question passes its threshold; disapproved otherwise; unavailable per above. */
   verdict: 'approved' | 'disapproved' | 'unavailable'
   /** d1's measured `does_call_match_directive` score; null when unreported/unavailable. */
   noul: number | null
   /** d1's `destructive_safety` choice; null when unreported/unavailable. */
   destructiveSafety: 'safe' | 'unintended_data_loss' | null
+  /** d1's measured `intent_clarity` score; null when unreported/unavailable. */
+  intentClarity: number | null
+  /** d1's `target_support` choice; null when unreported/unavailable. */
+  targetSupport: 'supported' | 'unsupported' | null
+  /** d1's measured `execution_confidence` score; null when unreported/unavailable. */
+  executionConfidence: number | null
   /** Which typed question failed the verdict (shown to the user on a pending card). */
   failingQuestion?: string
   /** Human-readable reason (bridge error detail, threshold explanation). */
@@ -533,6 +546,9 @@ export interface PendingEdit {
     verdict: 'approved' | 'disapproved' | 'unavailable'
     noul: number | null
     destructiveSafety: 'safe' | 'unintended_data_loss' | null
+    intentClarity?: number | null
+    targetSupport?: 'supported' | 'unsupported' | null
+    executionConfidence?: number | null
     reason?: string
   }
   /** pending: awaiting adjudication; applied/discarded: resolved by the user; stale: gates failed on ✓ (drifted anchor). */
