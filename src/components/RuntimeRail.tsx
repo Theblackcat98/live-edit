@@ -476,11 +476,11 @@ function SupervisorCard({
           timing={trace?.timings.route}
         >
           {stageStates.A === 'running' ? (
-            <span className="sup-running">Classifying action_required…</span>
+            <span className="sup-running">Reading the command…</span>
           ) : stageStates.A === 'skipped' ? (
             <span className="sup-muted">No routing pass for this turn.</span>
           ) : (
-            <span className="sup-muted">Awaiting a command · heads armed</span>
+            <span className="sup-muted">Awaiting a command</span>
           )}
         </Stage>
 
@@ -490,11 +490,11 @@ function SupervisorCard({
           state={stageStates.B}
         >
           {stageStates.B === 'running' ? (
-            <span className="sup-running">Extracting span…</span>
+            <span className="sup-running">Worker is grounding the span…</span>
           ) : stageStates.B === 'skipped' ? (
-            <span className="sup-muted">No span needed for this turn.</span>
+            <span className="sup-muted">No edit this turn.</span>
           ) : (
-            <span className="sup-muted">Span head idle</span>
+            <span className="sup-muted">The worker grounds its own span</span>
           )}
         </Stage>
 
@@ -506,11 +506,11 @@ function SupervisorCard({
           last
         >
           {stageStates.C === 'running' ? (
-            <span className="sup-running">Scoring proposed XML call…</span>
+            <span className="sup-running">Running the safety check…</span>
           ) : stageStates.C === 'skipped' ? (
-            <span className="sup-muted">Critic bypassed — no worker call.</span>
+            <span className="sup-muted">No worker call to check.</span>
           ) : (
-            <span className="sup-muted">Critic armed · local hard gates</span>
+            <span className="sup-muted">Local hard gates · d1 safety check</span>
           )}
         </Stage>
       </div>
