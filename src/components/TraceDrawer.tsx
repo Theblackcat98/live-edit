@@ -39,6 +39,7 @@ function statusLabel(trace: Trace): string {
   if (trace.status === 'running') return 'running'
   if (trace.status === 'clarify') return 'clarify'
   if (trace.status === 'rejected') return 'held'
+  if (trace.status === 'pending') return 'pending'
   if (trace.status === 'failed') return 'failed'
   if (trace.status === 'conversational') return 'conversational'
   return 'verified'
@@ -46,7 +47,7 @@ function statusLabel(trace: Trace): string {
 
 function statusTone(trace: Trace): string {
   if (trace.status === 'verified') return 'chip-green'
-  if (trace.status === 'clarify') return 'chip-orange'
+  if (trace.status === 'clarify' || trace.status === 'pending') return 'chip-orange'
   if (trace.status === 'rejected' || trace.status === 'failed') return 'chip-red'
   return 'chip-accent'
 }
@@ -370,10 +371,10 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectR
             <div className="trace-empty-icon">
               <ScanSearch size={20} />
             </div>
-            <h3>No grounded run yet</h3>
+            <h3>No run yet</h3>
             <p>
               Ask {chatShort} to change the note. Each run registers the
-              directive, the worker XML, the d1 verdict and the diff here.
+              delegation directive, the worker XML, the safety-check verdict and the diff here.
             </p>
           </div>
         ) : (
@@ -548,7 +549,7 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectR
               caption={
                 trace.runtime?.worker === 'live'
                   ? 'LFM3-1.7B · live decode'
-                  : 'template fallback'
+                  : 'dictation exception · harness-built call'
               }
             >
               {trace.call ? (
@@ -572,7 +573,7 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectR
                       <span className="chip chip-ghost mono">sampler not recorded</span>
                     ) : (
                       <span className="chip chip-ghost mono">
-                        deterministic template · no sampler sent
+                        dictation exception · no decode, no sampler
                       </span>
                     )}
                     <span className="chip chip-ghost mono">{trace.call.toolSchemasInjected} schema</span>
@@ -721,7 +722,7 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectR
                     ? `Download ${rejectedTraces.length} rejected trace record${
                         rejectedTraces.length === 1 ? '' : 's'
                       } as JSONL`
-                    : 'No rejected traces yet — the critic has not rejected any worker call this session'
+                    : 'No rejected traces yet — no worker call or pending edit has been refused this session'
                 }
                 onClick={downloadRejected}
               >
