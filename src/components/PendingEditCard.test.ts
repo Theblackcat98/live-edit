@@ -5,7 +5,9 @@ import {
   DISCARD_LABEL,
   askedLine,
   busyReason,
+  defaultCollapsed,
   diffSummary,
+  reasonLine,
   scoreSummary,
   statusExplanation,
   statusTitle,
@@ -188,6 +190,48 @@ describe('status title per card state', () => {
     expect(statusTitle('applied')).toBe('Pending edit — applied')
     expect(statusTitle('discarded')).toBe('Pending edit — discarded')
     expect(statusTitle('stale')).toBe('Pending edit — stale')
+  })
+})
+
+describe('collapse policy — live decisions open, resolutions close', () => {
+  it('a pending edit renders expanded for adjudication', () => {
+    expect(defaultCollapsed('pending')).toBe(false)
+  })
+
+  it('resolved cards collapse to one summary row by default', () => {
+    expect(defaultCollapsed('applied')).toBe(true)
+    expect(defaultCollapsed('discarded')).toBe(true)
+    expect(defaultCollapsed('stale')).toBe(true)
+  })
+})
+
+describe('reason line — human sentence over the machine string', () => {
+  it('humanizes a target_support disapproval (the failing question travels)', () => {
+    expect(
+      reasonLine({
+        verdict: 'disapproved',
+        noul: 0.63,
+        destructiveSafety: 'safe',
+        reason: 'disapproved: target_support target_support = unsupported',
+      }),
+    ).toBe(
+      'The note does not contain what the edit targets — a missing heading, absent lines, or an anchor with nothing to attach to.',
+    )
+  })
+
+  it('passes a hand-written hold reason through verbatim (blast-radius, low-RAM)', () => {
+    const reason = 'Removal exceeds the blast-radius limit. Approving executes the removal with the limit waived — you decide.'
+    expect(reasonLine({ verdict: 'unavailable', noul: null, destructiveSafety: null, reason })).toBe(reason)
+  })
+
+  it('falls back to the recorded reason when the shape is unrecognized', () => {
+    expect(reasonLine({ verdict: 'disapproved', noul: null, destructiveSafety: null, reason: 'new shape' })).toBe(
+      'new shape',
+    )
+  })
+
+  it('shows nothing when d1 recorded no reason', () => {
+    expect(reasonLine({ verdict: 'disapproved', noul: null, destructiveSafety: null })).toBeNull()
   })
 })
 

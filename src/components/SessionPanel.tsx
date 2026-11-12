@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import type { FormEvent } from 'react'
 import {
   ArrowUp,
@@ -51,6 +51,11 @@ interface SessionPanelProps {
    * surface renders the same form as a persistent command bar instead. */
   showComposer?: boolean
 }
+
+/** One chronological transcript entry — a chat bubble or a pending-edit card. */
+type TimelineItem =
+  | { kind: 'message'; at: number; message: Message }
+  | { kind: 'pending'; at: number; edit: PendingEdit }
 
 interface SessionComposerProps {
   busy: boolean
@@ -114,6 +119,20 @@ export function SessionPanel({
 }: SessionPanelProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const stickToBottom = useRef(true)
+
+  // The transcript is one timeline: chat bubbles and pending-edit cards
+  // interleave by when they happened (message.at / edit.createdAt), so a held
+  // edit sits where it occurred instead of piling up at the bottom. Stable
+  // sort keeps same-timestamp entries in insertion order.
+  const timeline = useMemo<TimelineItem[]>(
+    () =>
+      [
+        ...messages.map((message) => ({ kind: 'message' as const, at: message.at, message })),
+        ...pendingEdits.map((edit) => ({ kind: 'pending' as const, at: edit.createdAt, edit })),
+      ].sort((a, b) => a.at - b.at),
+    [messages, pendingEdits],
+  )
+  const recentIds = useMemo(() => new Set(messages.slice(-2).map((message) => message.id)), [messages])
 
   useEffect(() => {
     const element = scrollRef.current
@@ -185,24 +204,25 @@ export function SessionPanel({
         ref={scrollRef}
         onScroll={handleScroll}
       >
-        {messages.map((message, index) => (
-          <MessageBubble
-            key={message.id}
-            message={message}
-            recent={index >= messages.length - 2}
-            onAction={onSubmit}
-            onOpenTrace={onOpenTrace}
-          />
-        ))}
-        {pendingEdits.map((edit) => (
-          <PendingEditCard
-            key={edit.id}
-            edit={edit}
-            busy={busy}
-            onApply={onApplyPending}
-            onDiscard={onDismissPending}
-          />
-        ))}
+        {timeline.map((item) =>
+          item.kind === 'message' ? (
+            <MessageBubble
+              key={item.message.id}
+              message={item.message}
+              recent={recentIds.has(item.message.id)}
+              onAction={onSubmit}
+              onOpenTrace={onOpenTrace}
+            />
+          ) : (
+            <PendingEditCard
+              key={item.edit.id}
+              edit={item.edit}
+              busy={busy}
+              onApply={onApplyPending}
+              onDiscard={onDismissPending}
+            />
+          ),
+        )}
       </div>
 
       <div className="session-compose">

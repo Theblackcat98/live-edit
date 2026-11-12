@@ -152,14 +152,25 @@
   text-overflow: ellipsis;
 }
 
+/* d1 verdict card (D1CheckSection): headline, the human reason, one bar per
+   typed question. Numeric bars draw the measured score against the approval
+   threshold (the tick); choice bars draw their state full/empty — never a
+   number d1 never reported. Unreported stays an empty track. */
 .trace-verdict {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
   margin-top: 8px;
   padding: 8px 10px;
   border-radius: var(--radius-chip);
   background: var(--red-tint);
+}
+
+.trace-verdict.is-unavailable {
+  background: var(--orange-tint);
+}
+
+.trace-verdict-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .trace-verdict-icon {
@@ -174,26 +185,105 @@
   flex-shrink: 0;
 }
 
-.trace-verdict strong {
-  display: block;
+.trace-verdict.is-unavailable .trace-verdict-icon {
+  color: var(--orange);
+}
+
+.trace-verdict-head strong {
   color: var(--ink);
   font-size: 10px;
   font-weight: 600;
 }
 
-.trace-verdict p {
-  margin-top: 1px;
+.trace-verdict-reason {
+  margin-top: 3px;
   color: var(--ink-2);
   font-size: 9.5px;
   line-height: 1.45;
 }
 
-.trace-verdict-meta {
-  display: block;
-  margin-top: 3px;
-  color: var(--red);
+.trace-verdict-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+/* Each question row is its own label | track | value grid. */
+.trace-verdict-bar {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr) 92px;
+  align-items: center;
+  column-gap: 8px;
+}
+
+.trace-verdict-bar-label {
+  color: var(--ink-3);
+  font-size: 8.5px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.trace-verdict-bar-track {
+  position: relative;
+  height: 5px;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+
+.trace-verdict-bar-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: 9999px;
+  background: var(--ink-3);
+}
+
+.trace-verdict-bar.is-pass .trace-verdict-bar-fill {
+  background: var(--green);
+}
+
+.trace-verdict-bar.is-fail .trace-verdict-bar-fill {
+  background: var(--red);
+}
+
+.trace-verdict-bar-fill.is-full {
+  width: 100%;
+}
+
+.trace-verdict-bar-tick {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 1px;
+  background: color-mix(in srgb, var(--ink) 38%, transparent);
+}
+
+.trace-verdict-bar-value {
+  color: var(--ink-2);
   font-size: 8.5px;
   letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trace-verdict-bar.is-pass .trace-verdict-bar-value {
+  color: var(--green);
+}
+
+.trace-verdict-bar.is-fail .trace-verdict-bar-value {
+  color: var(--red);
+}
+
+.trace-verdict-meta {
+  display: block;
+  margin-top: 6px;
+  color: var(--ink-3);
+  font-size: 8.5px;
+  letter-spacing: 0.01em;
+  word-break: break-word;
 }
 
 .trace-section {

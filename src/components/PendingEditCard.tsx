@@ -1,6 +1,8 @@
-import { CircleAlert, FileDiff, TriangleAlert, Check, X } from 'lucide-react'
+import { useState } from 'react'
+import { ChevronDown, ChevronRight, CircleAlert, FileDiff, TriangleAlert, Check, X } from 'lucide-react'
 import type { ExecutionDiff, PendingEdit } from '../types'
 import { TOOL_LABELS } from '../data/tools'
+import { humanD1Reason } from '../lib/d1reason'
 import { cx, truncate } from '../lib/utils'
 
 /**
@@ -11,9 +13,13 @@ import { cx, truncate } from '../lib/utils'
  * ✓ / ✗ controls. Until ✓, a pending edit modifies nothing — not the note,
  * the snapshot stack, or the undo chain.
  *
- * Mounted by SessionPanel under the transcript; useWorkspace resolves
- * statuses. This component renders every state — pending, busy, stale,
- * applied, discarded — safely on its own.
+ * Mounted by SessionPanel at its timestamp's place in the timeline;
+ * useWorkspace resolves statuses. This component renders every state —
+ * pending, busy, stale, applied, discarded — safely on its own.
+ *
+ * The card is collapsible: a live decision opens expanded (the whole point is
+ * adjudication); a resolved card lingers collapsed to one summary row unless
+ * reopened — resolved cards accumulate and must not eat the transcript.
  *
  * Props contract for the wiring:
  *   edit:    the PendingEdit (design.md §9 shape) to render
@@ -30,6 +36,11 @@ import { cx, truncate } from '../lib/utils'
 // can pin them without a DOM.
 export const APPLY_LABEL = 'Apply proposed edit'
 export const DISCARD_LABEL = 'Discard proposed edit'
+
+/** Collapsed-by-default policy: the live decision opens, resolutions close. */
+export function defaultCollapsed(status: PendingEdit['status']): boolean {
+  return status !== 'pending'
+}
 
 export interface PendingVerdictChip {
   label: string
@@ -68,6 +79,16 @@ export function scoreSummary(d1: PendingEdit['d1']): string | null {
     )
   }
   return parts.length > 0 ? parts.join(' · ') : null
+}
+
+/**
+ * Why d1 held the edit, in one human sentence (d1reason.ts maps the failing
+ * question); the machine reason stays available in the title tooltip. Null
+ * only when there is nothing to explain.
+ */
+export function reasonLine(d1: PendingEdit['d1']): string | null {
+  if (!d1.reason) return null
+  return humanD1Reason(d1) ?? d1.reason
 }
 
 /** The one line of "what was asked" (design.md §9): the directive's brief. */
@@ -137,19 +158,33 @@ export function PendingEditCard({ edit, busy, onApply, onDiscard }: PendingEditC
   // rendered read-only: the wiring owns resolving them, the card never
   // fakes an action for a state that already ended.
   const actionable = edit.status === 'pending'
+  // Collapse follows the state (live decision open, resolutions closed) until
+  // the user toggles; the override survives status changes — a card the user
+  // reopened stays open, one they closed stays closed.
+  const [collapseOverride, setCollapseOverride] = useState<boolean | null>(null)
+  const collapsed = collapseOverride ?? defaultCollapsed(edit.status)
   const chip = verdictChip(edit.d1.verdict)
   const scores = scoreSummary(edit.d1)
+  const reason = reasonLine(edit.d1)
   const explanation = statusExplanation(edit.status)
   const busyNote = busyReason(busy)
   const ask = askedLine(edit.directive.instruction)
+  const toggle = () => setCollapseOverride(!collapsed)
 
   return (
     <article
-      className={cx('pending-card', `is-${edit.status}`, actionable && busy && 'is-busy')}
+      className={cx('pending-card', `is-${edit.status}`, actionable && busy && 'is-busy', collapsed && 'is-collapsed')}
     >
       <span className="pending-rail" aria-hidden="true" />
       <div className="pending-main">
-        <div className="pending-head">
+        <button
+          type="button"
+          className="pending-head"
+          onClick={toggle}
+          aria-expanded={!collapsed}
+          title={collapsed ? 'Show the proposed edit' : 'Collapse to one line'}
+        >
+          {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
           <span className="pending-icon">
             <FileDiff size={12} />
           </span>
@@ -158,90 +193,102 @@ export function PendingEditCard({ edit, busy, onApply, onDiscard }: PendingEditC
             {edit.d1.verdict === 'disapproved' ? <X size={10} /> : <CircleAlert size={10} />}
             {chip.label}
           </span>
-        </div>
+        </button>
 
-        <div className="pending-tool">
-          <span className="pending-tool-name mono">{TOOL_LABELS[edit.call.name]}</span>
-          <span className="pending-tool-raw mono">{edit.call.name}</span>
-          <span className="pending-diff-meta mono">{diffSummary(edit.diff)}</span>
-        </div>
-
-        <p className="pending-asked" title={edit.directive.instruction}>
-          <span className="pending-asked-label">Asked:</span> {ask}
-        </p>
-
-        {/* Same before/after pattern as the trace drawer's ExecutionDiff body
-            (execution section E) — proposed styling, not applied green. */}
-        <div className="pending-diff" aria-label="Proposed diff — not yet applied">
-          {edit.diff.before.map((line, index) => (
-            <div className="pending-diff-line is-removed" key={`before-${index}`}>
-              <span className="mono">−</span>
-              <code className="mono">{line || ' '}</code>
+        {collapsed ? (
+          <p className="pending-collapsed-meta">
+            <span className="mono">{TOOL_LABELS[edit.call.name]} · {diffSummary(edit.diff)}</span>
+            <span className="pending-collapsed-asked">{ask}</span>
+          </p>
+        ) : (
+          <>
+            <div className="pending-tool">
+              <span className="pending-tool-name mono">{TOOL_LABELS[edit.call.name]}</span>
+              <span className="pending-tool-raw mono">{edit.call.name}</span>
+              <span className="pending-diff-meta mono">{diffSummary(edit.diff)}</span>
             </div>
-          ))}
-          {edit.diff.after.map((line, index) => (
-            <div className="pending-diff-line is-added" key={`after-${index}`}>
-              <span className="mono">+</span>
-              <code className="mono">{line || ' '}</code>
+
+            <p className="pending-asked" title={edit.directive.instruction}>
+              <span className="pending-asked-label">Asked:</span> {ask}
+            </p>
+
+            {/* Same before/after pattern as the trace drawer's ExecutionDiff body
+                (execution section E) — proposed styling, not applied green. */}
+            <div className="pending-diff" aria-label="Proposed diff — not yet applied">
+              {edit.diff.before.map((line, index) => (
+                <div className="pending-diff-line is-removed" key={`before-${index}`}>
+                  <span className="mono">−</span>
+                  <code className="mono">{line || ' '}</code>
+                </div>
+              ))}
+              {edit.diff.after.map((line, index) => (
+                <div className="pending-diff-line is-added" key={`after-${index}`}>
+                  <span className="mono">+</span>
+                  <code className="mono">{line || ' '}</code>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
 
-        {(scores || edit.d1.reason) && (
-          <div className="pending-verdict-detail">
-            {scores && <span className="pending-scores mono">{scores}</span>}
-            {edit.d1.reason && <p className="pending-reason">{edit.d1.reason}</p>}
-          </div>
-        )}
-        {edit.overrideBlastRadius && actionable && (
-          <p className="pending-note is-override-note">
-            <TriangleAlert size={11} />
-            <span>
-              Blast-radius limit exceeded: applying executes this large removal with the limit
-              waived — the cap is the only gate you are overriding.
-            </span>
-          </p>
-        )}
+            {(scores || reason) && (
+              <div className="pending-verdict-detail">
+                {scores && <span className="pending-scores mono">{scores}</span>}
+                {reason && (
+                  <p className="pending-reason" title={edit.d1.reason ?? undefined}>
+                    {reason}
+                  </p>
+                )}
+              </div>
+            )}
+            {edit.overrideBlastRadius && actionable && (
+              <p className="pending-note is-override-note">
+                <TriangleAlert size={11} />
+                <span>
+                  Blast-radius limit exceeded: applying executes this large removal with the limit
+                  waived — the cap is the only gate you are overriding.
+                </span>
+              </p>
+            )}
 
+            {explanation && (
+              <p className={cx('pending-note', edit.status === 'stale' && 'is-stale')}>
+                {edit.status === 'stale' && <TriangleAlert size={11} />}
+                <span>{explanation}</span>
+              </p>
+            )}
 
-        {explanation && (
-          <p className={cx('pending-note', edit.status === 'stale' && 'is-stale')}>
-            {edit.status === 'stale' && <TriangleAlert size={11} />}
-            <span>{explanation}</span>
-          </p>
-        )}
+            {actionable && busyNote && (
+              <p className="pending-note is-busy-note" role="status">
+                {busyNote}
+              </p>
+            )}
 
-        {actionable && busyNote && (
-          <p className="pending-note is-busy-note" role="status">
-            {busyNote}
-          </p>
-        )}
-
-        {actionable && (
-          <div className="pending-actions">
-            <button
-              type="button"
-              className="pending-act is-apply"
-              onClick={() => onApply(edit.id)}
-              disabled={busy}
-              aria-label={APPLY_LABEL}
-              title={busy && busyNote ? busyNote : 'Apply — hard gates re-run against the current note before anything is written'}
-            >
-              <Check size={13} />
-              <span>Apply</span>
-            </button>
-            <button
-              type="button"
-              className="pending-act is-discard"
-              onClick={() => onDiscard(edit.id)}
-              disabled={busy}
-              aria-label={DISCARD_LABEL}
-              title={busy && busyNote ? busyNote : 'Discard — nothing is written; the proposal is logged'}
-            >
-              <X size={13} />
-              <span>Discard</span>
-            </button>
-          </div>
+            {actionable && (
+              <div className="pending-actions">
+                <button
+                  type="button"
+                  className="pending-act is-apply"
+                  onClick={() => onApply(edit.id)}
+                  disabled={busy}
+                  aria-label={APPLY_LABEL}
+                  title={busy && busyNote ? busyNote : 'Apply — hard gates re-run against the current note before anything is written'}
+                >
+                  <Check size={13} />
+                  <span>Apply</span>
+                </button>
+                <button
+                  type="button"
+                  className="pending-act is-discard"
+                  onClick={() => onDiscard(edit.id)}
+                  disabled={busy}
+                  aria-label={DISCARD_LABEL}
+                  title={busy && busyNote ? busyNote : 'Discard — nothing is written; the proposal is logged'}
+                >
+                  <X size={13} />
+                  <span>Discard</span>
+                </button>
+              </div>
+            )}
+          </>
         )}
       </div>
     </article>
