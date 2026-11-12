@@ -89,7 +89,7 @@ export function useWorkspaceVoice({
   )
 
   const notifyVoiceNeedsOmni = useCallback(() => {
-    notify('Voice needs an Omni server', VOICE_NEEDS_OMNI_DETAIL, 'error')
+    notify('Voice is off in this mode', VOICE_NEEDS_OMNI_DETAIL, 'error')
   }, [notify])
 
   const notifySpeechOffline = useCallback(

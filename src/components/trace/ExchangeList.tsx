@@ -93,6 +93,19 @@ function ExchangeCard({
             finish {response.finishReason}
           </span>
         )}
+        {response?.timings?.tokensPerSecond !== undefined && (
+          <span title="generation speed the server reported">
+            {response.timings.tokensPerSecond.toFixed(1)} tok/s
+          </span>
+        )}
+        {response?.timings?.cachedTokens !== undefined && response.timings.cachedTokens > 0 && (
+          <span title="prompt tokens the server reused from its prompt cache">
+            {response.timings.cachedTokens} cached
+          </span>
+        )}
+        {exchange.servedModel && !exchange.servedModel.toLowerCase().includes(exchange.model.toLowerCase()) && (
+          <span title="the model id the server reported in its reply">served as {exchange.servedModel}</span>
+        )}
       </div>
       {exchange.error && <div className="exchange-error mono">{exchange.error}</div>}
       {response?.reasoning && (

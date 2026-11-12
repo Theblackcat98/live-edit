@@ -165,7 +165,7 @@ export function RuntimeRail({
         mode={mode}
         canOpenTrace={canOpenTrace}
       />
-      <ContextRows usage={contextUsage} mode={mode} />
+      <ContextRows usage={contextUsage} mode={mode} runtimeHealth={runtimeHealth} />
       <SnapshotsCard
         history={history}
         historyIndex={historyIndex}

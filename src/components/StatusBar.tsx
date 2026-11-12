@@ -81,7 +81,12 @@ export function StatusBar({ stage, trace, micOn, micActive, asrBusy, runtimeHeal
           title={
             health
               ? health.needed
-                  .map((endpoint) => `${endpoint.name} (${host}:${endpoint.port}) — ${endpoint.up ? 'up' : 'down'}`)
+                  .map(
+                    (endpoint) =>
+                      `${endpoint.name} (${host}:${endpoint.port}) — ${
+                        endpoint.up ? 'up' : endpoint.loading ? 'loading' : 'down'
+                      }`,
+                  )
                   .join(' · ')
               : 'Probing local model servers…'
           }
@@ -89,7 +94,9 @@ export function StatusBar({ stage, trace, micOn, micActive, asrBusy, runtimeHeal
           {health
             ? health.allUp
               ? `Models up ${health.up}/${health.needed.length}`
-              : `${health.down.length} of ${health.needed.length} models down`
+              : health.loading.length === health.down.length
+                ? `${health.loading.length} of ${health.needed.length} models loading`
+                : `${health.down.length} of ${health.needed.length} models down`
             : 'Probing models…'}
         </span>
         <span className="statusbar-sep">/</span>

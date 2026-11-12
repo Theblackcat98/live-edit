@@ -147,8 +147,10 @@ export interface TurnExchange {
   role: 'chat' | 'worker'
   /** Label within the turn: 'primary', 'repair retry', 'worker attempt 2', … */
   label: string
-  /** Model name that answered (e.g. 'LFM3-Audio-2B'). */
+  /** Model the app sent the request to (e.g. 'LFM3-Audio-2B'). */
   model: string
+  /** Model id the server reported in its reply, when it reported one. */
+  servedModel?: string
   /** URL the request hit. */
   url: string
   at: number
@@ -174,6 +176,13 @@ export interface TurnExchange {
     promptTokens: number
     outputTokens: number
     finishReason: string | null
+    /** llama.cpp performance figures (speed, prompt-cache hits), when reported. */
+    timings?: {
+      promptMs?: number
+      predictedMs?: number
+      tokensPerSecond?: number
+      cachedTokens?: number
+    }
   }
 }
 
@@ -340,8 +349,18 @@ export interface EndpointHealth {
   url: string
   up: boolean
   latencyMs?: number
+  /** Model ids the server lists (OpenAI `data[].id`, plus llama.cpp's `models[]`). */
   models?: string[]
   error?: string
+  /** The server answered 503 "Loading model": it is starting, not down. */
+  loading?: boolean
+  /**
+   * Set when the server answers but lists none of the expected alias — the
+   * port is serving a different model than the app thinks.
+   */
+  unexpectedModel?: string
+  /** Runtime context window the server reports (llama.cpp /props n_ctx). */
+  contextTokens?: number
 }
 
 export interface RuntimeHealth {

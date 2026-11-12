@@ -197,6 +197,7 @@ export async function buildPacketCall(input: PacketCallInput): Promise<PacketCal
           })
     const label = attemptText === '' ? 'packet decode · attempt 1' : 'packet decode · retry'
     let completion: ChatResult
+    const attemptStarted = performance.now()
     try {
       completion = await chatComplete('text', messages, sampler)
     } catch (error) {
@@ -215,6 +216,7 @@ export async function buildPacketCall(input: PacketCallInput): Promise<PacketCal
           tools: TOOL_DEFS.map((tool) => tool.name),
           completion: null,
           error: attemptError,
+          elapsedMs: Number((performance.now() - attemptStarted).toFixed(1)),
         }),
       )
       break

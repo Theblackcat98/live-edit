@@ -327,6 +327,7 @@ export async function runWorkerChatTurn(input: WorkerChatInput): Promise<WorkerC
         maxTokens: WORKER_CHAT_SAMPLER.maxTokens,
         completion,
         ...(error ? { error } : {}),
+        ...(completion ? {} : { elapsedMs: Number((performance.now() - started).toFixed(1)) }),
       }),
     )
   }

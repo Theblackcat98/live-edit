@@ -16,7 +16,7 @@
  */
 
 import type { EndpointHealth, RuntimeHealth } from '../types'
-import { isRecord, readString } from './utils'
+import { isRecord, readNumber, readString } from './utils'
 
 export interface EndpointSpec {
   id: EndpointHealth['id']
@@ -92,40 +92,63 @@ export async function fetchJson(
 
 // --- health ------------------------------------------------------------------
 
+/** Model ids from a /v1/models payload: OpenAI `data[]` and llama.cpp's `models[]`. */
+export function listedModels(payload: unknown): string[] {
+  if (!isRecord(payload)) return []
+  const ids = new Set<string>()
+  for (const key of ['data', 'models'] as const) {
+    const list = payload[key]
+    if (!Array.isArray(list)) continue
+    for (const entry of list) {
+      if (!isRecord(entry)) continue
+      const id = readString(entry, 'id') ?? readString(entry, 'model') ?? readString(entry, 'name')
+      if (id) ids.add(id)
+    }
+  }
+  return [...ids]
+}
+
+/** The runtime context window from a llama.cpp /props payload, when present. */
+export function contextFromProps(payload: unknown): number | undefined {
+  if (!isRecord(payload)) return undefined
+  const settings = isRecord(payload.default_generation_settings) ? payload.default_generation_settings : {}
+  const value = readNumber(settings, 'n_ctx') ?? readNumber(payload, 'n_ctx')
+  return value && value > 0 ? value : undefined
+}
+
 export async function probeEndpoint(spec: EndpointSpec): Promise<EndpointHealth> {
   const url = modelUrl(spec.port, '')
   const started = performance.now()
+  const base = { id: spec.id, name: spec.name, role: spec.role, port: spec.port, url }
   try {
     const payload = await fetchJson(`${url}/v1/models`, { method: 'GET', timeoutMs: 4000 })
-    const modelList =
-      isRecord(payload) && Array.isArray(payload.models)
-        ? payload.models
-        : []
-    const models = modelList
-      .map((model) =>
-        isRecord(model) ? (readString(model, 'id') ?? readString(model, 'name') ?? '') : '',
-      )
-      .filter(Boolean)
+    const latencyMs = Math.round(performance.now() - started)
+    const models = listedModels(payload)
+    // A server that lists models but not ours is up — serving the wrong thing.
+    const matches = models.some((model) => model === spec.alias || model.includes(spec.alias))
+    let contextTokens: number | undefined
+    try {
+      contextTokens = contextFromProps(await fetchJson(`${url}/props`, { method: 'GET', timeoutMs: 2000 }))
+    } catch {
+      // /props is optional; the context window then stays the configured one.
+    }
     return {
-      id: spec.id,
-      name: spec.name,
-      role: spec.role,
-      port: spec.port,
-      url,
+      ...base,
       up: true,
-      latencyMs: Math.round(performance.now() - started),
+      latencyMs,
       models,
+      ...(models.length && !matches ? { unexpectedModel: models[0] } : {}),
+      ...(contextTokens ? { contextTokens } : {}),
     }
   } catch (error) {
+    const message = error instanceof Error ? error.message : 'unreachable'
     return {
-      id: spec.id,
-      name: spec.name,
-      role: spec.role,
-      port: spec.port,
-      url,
+      ...base,
       up: false,
       latencyMs: Math.round(performance.now() - started),
-      error: error instanceof Error ? error.message : 'unreachable',
+      error: message,
+      // llama.cpp answers 503 while the weights load: starting, not down.
+      ...(/^HTTP 503\b/.test(message) ? { loading: true } : {}),
     }
   }
 }

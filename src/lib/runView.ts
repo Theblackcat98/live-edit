@@ -66,6 +66,8 @@ export interface ModeHealth {
   up: number
   /** Needed endpoints that did not answer. */
   down: EndpointHealth[]
+  /** The subset of `down` that is still loading its weights (HTTP 503). */
+  loading: EndpointHealth[]
   /** True when every endpoint the mode needs is up. */
   allUp: boolean
 }
@@ -80,7 +82,8 @@ export function modeHealth(health: RuntimeHealth | null, mode: RunMode): ModeHea
   const ids = modeDef(mode).endpoints
   const needed = health.endpoints.filter((endpoint) => ids.includes(endpoint.id))
   const down = needed.filter((endpoint) => !endpoint.up)
-  return { needed, up: needed.length - down.length, down, allUp: down.length === 0 }
+  const loading = down.filter((endpoint) => endpoint.loading)
+  return { needed, up: needed.length - down.length, down, loading, allUp: down.length === 0 }
 }
 
 /** True when the endpoint is part of the mode's roster. */

@@ -20,17 +20,40 @@ export function EndpointRows({ runtimeHealth, mode }: { runtimeHealth: RuntimeHe
           <div
             key={endpoint.id}
             className={cx('wiring-endpoint', !endpoint.up && 'is-down', !used && 'is-unused')}
-            title={endpoint.error ?? endpoint.models?.join(', ')}
+            title={
+              endpoint.unexpectedModel
+                ? `Expected ${endpoint.name}, but this port lists: ${endpoint.models?.join(', ')}`
+                : (endpoint.error ?? endpoint.models?.join(', '))
+            }
           >
-            <span className={cx('status-dot', !used ? '' : endpoint.up ? 'is-green' : 'is-red')} />
+            <span
+              className={cx(
+                'status-dot',
+                !used
+                  ? ''
+                  : endpoint.up
+                    ? endpoint.unexpectedModel
+                      ? 'is-orange'
+                      : 'is-green'
+                    : endpoint.loading
+                      ? 'is-orange is-pulsing'
+                      : 'is-red',
+              )}
+            />
             <span className="mono">{endpoint.port}</span>
             <span className="wiring-endpoint-name">{endpoint.name}</span>
             <span className="wiring-endpoint-meta mono">
               {!used
                 ? 'not used in this mode'
                 : endpoint.up
-                  ? `${endpoint.latencyMs ?? 0} ms${endpoint.models?.length ? ` · ${endpoint.models[0]}` : ''}`
-                  : 'down'}
+                  ? endpoint.unexpectedModel
+                    ? `serving ${endpoint.unexpectedModel}`
+                    : `${endpoint.latencyMs ?? 0} ms${
+                        endpoint.contextTokens ? ` · ${Math.round(endpoint.contextTokens / 1000)}K ctx` : ''
+                      }`
+                  : endpoint.loading
+                    ? 'loading…'
+                    : 'down'}
             </span>
           </div>
         )

@@ -740,7 +740,7 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
       ...(options.tools ? { tools: options.tools } : {}),
       onToken: streamingOnToken(options.streamDeltas === true),
     }
-    const report = (completion: ChatResult | null, error?: string) => {
+    const report = (completion: ChatResult | null, error?: string, elapsedMs?: number) => {
       input.onExchange?.(
         captureExchange({
           role: 'chat',
@@ -754,16 +754,22 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
           ...(options.tools ? { tools: options.tools.map((tool) => tool.function.name) } : {}),
           completion,
           ...(error ? { error } : {}),
+          ...(elapsedMs !== undefined ? { elapsedMs } : {}),
         }),
       )
     }
     const attempt = async (): Promise<ChatResult> => {
+      const attemptStarted = performance.now()
       try {
         const completion = await chat(messages, requestOptions)
         report(completion)
         return completion
       } catch (error) {
-        report(null, error instanceof Error ? error.message : String(error))
+        report(
+          null,
+          error instanceof Error ? error.message : String(error),
+          Number((performance.now() - attemptStarted).toFixed(1)),
+        )
         throw error
       }
     }
