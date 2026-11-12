@@ -21,11 +21,12 @@ import { runD1Check } from '../d1check'
 import { createPendingEdit } from '../pending'
 import { d1Decide } from '../bridge'
 import { splitLines } from '../doc'
-import { recordRejectedCall, type PipelineDeps, type TurnContext } from './turnContext'
+import { recordRejectedCall, type PipelineDeps, type RejectedFlowLabel, type TurnContext } from './turnContext'
 
 export interface VerifyOptions {
   d1Check: boolean
   snapshotLabel?: string
+  flowLabel?: RejectedFlowLabel
 }
 
 /** The card a held call settles on. */
@@ -98,6 +99,7 @@ export async function verifyAndExecute(
   options: VerifyOptions = { d1Check: true },
 ): Promise<void> {
   const { command, noteAtStart, traceLocal, runtime, publish, finish } = ctx
+  const flowLabel = options.flowLabel ?? 'audio-first pipeline'
 
   const delegation: DelegationInfo = {
     runId: traceLocal.id,
@@ -150,7 +152,7 @@ export async function verifyAndExecute(
       }
     }
     deps.patchMessage(delegationId, { delegation: { ...delegation, status: 'rejected' } })
-    recordRejectedCall(deps, ctx, directive, call, `Hard gates failed: ${detail}`, null)
+    recordRejectedCall(deps, ctx, directive, call, `Hard gates failed: ${detail}`, null, flowLabel)
     traceLocal.hold = { kind: 'hard-gate', reason: detail }
     publish()
     deps.addMessage({
@@ -167,7 +169,7 @@ export async function verifyAndExecute(
   const preview = executeTool(noteAtStart, call)
   if (!preview.ok || !preview.diff) {
     deps.patchMessage(delegationId, { delegation: { ...delegation, status: 'rejected' } })
-    recordRejectedCall(deps, ctx, directive, call, preview.message, null)
+    recordRejectedCall(deps, ctx, directive, call, preview.message, null, flowLabel)
     traceLocal.hold = { kind: 'engine', reason: preview.message }
     publish()
     deps.addMessage({
@@ -283,14 +285,8 @@ export async function verifyAndExecute(
   const outcome = checkExecutionOutcome(noteAtStart, directive, call, preview)
   if (outcome.kind === 'missing-content') {
     deps.patchMessage(delegationId, { delegation: { ...delegation, status: 'rejected' } })
-    recordRejectedCall(
-      deps,
-      ctx,
-      directive,
-      call,
-      `Execution outcome check failed: ${outcome.reason}`,
-      confidence,
-    )
+    const reason = `Execution outcome check failed: ${outcome.reason}`
+    recordRejectedCall(deps, ctx, directive, call, reason, confidence, flowLabel)
     traceLocal.hold = { kind: 'outcome', reason: outcome.reason }
     publish()
     deps.addMessage({

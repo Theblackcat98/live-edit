@@ -223,6 +223,9 @@ export function createTracePublisher(deps: PipelineDeps, traceLocal: Trace): Tra
   return { publish, finish, recordExchange, isClosed: () => closed }
 }
 
+/** Provenance label for a rejected call's trace record. */
+export type RejectedFlowLabel = 'audio-first pipeline' | 'worker-chat run mode'
+
 /** Rejected-trace record for a worker-authored call the harness refused. */
 export function recordRejectedCall(
   deps: PipelineDeps,
@@ -231,19 +234,14 @@ export function recordRejectedCall(
   call: WorkerCall,
   reason: string,
   pCorrect: Probability,
+  flowLabel: RejectedFlowLabel,
 ): void {
   deps.setRejectedTraces((previous) => [
     ...previous,
     {
       at: Date.now(),
       command: ctx.command,
-      route: {
-        tool: call.name,
-        provenance:
-          ctx.traceLocal.runMode && ctx.traceLocal.runMode !== 'audio' && ctx.traceLocal.runMode !== 'omni'
-            ? 'worker-chat run mode'
-            : 'audio-first pipeline',
-      },
+      route: { tool: call.name, provenance: flowLabel },
       grounding: { source: 'worker-self' },
       workerXml: call.xml,
       critic: { verdict: 'rejected', reason, pCorrect },

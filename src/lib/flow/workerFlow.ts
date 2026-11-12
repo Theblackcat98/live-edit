@@ -233,5 +233,6 @@ export async function runWorkerChatFirstTurn(
   await verifyAndExecute(deps, ctx, directive, call, {
     d1Check: mode === 'worker-d1',
     snapshotLabel: '1.7B tool call',
+    flowLabel: 'worker-chat run mode',
   })
 }
