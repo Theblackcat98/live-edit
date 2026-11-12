@@ -7,7 +7,6 @@ import type {
   PipelineStage,
   RejectedTraceRecord,
   RuntimeHealth,
-  RuntimeSource,
   Snapshot,
   StageId,
   StageState,
@@ -15,56 +14,28 @@ import type {
   Toast,
   Trace,
 } from '../types'
-import { DEMO_SEQUENCE, INITIAL_NOTE, NOTE_PATH, NOTE_TITLE } from '../data/note'
-import { speak, stopSpeaking, cleanSpeechText, speechSynthesisAvailable, VoiceRecorder } from '../lib/speech'
+import { NOTE_PATH, NOTE_TITLE } from '../data/note'
 import { buildSuggestions } from '../lib/suggestions'
 import { loadWorkspaceState, saveWorkspaceState, type PersistedWorkspace } from '../lib/storage'
-import { endpointUp, synthesizeSpeech, transcribeAudio } from '../lib/bridge'
-import { speechPortFor, type RunMode } from '../lib/runmode'
-import { modeDef } from '../lib/modes'
+import type { RunMode } from '../lib/runmode'
 import type { ModelSwitchPlan } from '../lib/modelPlan'
-import { estimateTokens, makeId, sleep } from '../lib/utils'
 import { runPipelineTurn, type PipelineDeps } from '../lib/pipeline'
-import {
-  toStorable,
-} from '../lib/pending'
+import { toStorable } from '../lib/pending'
+import { useDemoTurn } from './useDemoTurn'
 import { useRuntimeHealth } from './useRuntimeHealth'
 import { useSessionClock } from './useSessionClock'
 import { useToasts } from './useToasts'
+import { useTransientHighlight } from './useTransientHighlight'
 import { useWorkspaceHistory } from './useWorkspaceHistory'
 import { useWorkspaceModelSwitch } from './useWorkspaceModelSwitch'
 import { useWorkspacePending } from './useWorkspacePending'
+import { useWorkspaceSpeech } from './useWorkspaceSpeech'
+import { useWorkspaceVoice, type SubmitCommand } from './useWorkspaceVoice'
 import { useWorkspaceTraces } from './useWorkspaceTraces'
-
-const initialNoteTokens = estimateTokens(INITIAL_NOTE)
-const INITIAL_CONTEXT: ContextUsage = {
-  omni: initialNoteTokens + 620,
-  d1: initialNoteTokens * 2 + 1450,
-  worker: Math.round(initialNoteTokens * 0.35) + 900,
-}
+import { useWorkspaceTranscript } from './useWorkspaceTranscript'
+import { INITIAL_CONTEXT } from './workspaceSeed'
 
 type ActiveModel = 'omni' | 'd1' | 'worker' | null
-
-function initialMessages(): Message[] {
-  const now = Date.now()
-  return [
-    {
-      id: makeId('msg'),
-      role: 'system',
-      kind: 'notice',
-      text: 'Session ready · local runtime · audio input ready',
-      at: now - 800,
-    },
-    {
-      id: makeId('msg'),
-      role: 'assistant',
-      author: 'harness',
-      kind: 'greeting',
-      text: "I'm reading your note. Tell me what to change.",
-      at: now - 400,
-    },
-  ]
-}
 
 export interface WorkspaceApi {
   note: string
@@ -146,12 +117,10 @@ export function useWorkspace(): WorkspaceApi {
   if (!persistedRef.current) persistedRef.current = loadWorkspaceState()
   const persisted = persistedRef.current
 
-  const [messages, setMessages] = useState<Message[]>(() =>
-    (persisted?.messages ?? initialMessages()).map((message) =>
-      // A stream cut off by a reload must not leave a permanent caret.
-      message.streaming ? { ...message, streaming: false } : message,
-    ),
-  )
+  const { messages, setMessages, messagesRef, addMessage, patchMessage, resetMessages } =
+    useWorkspaceTranscript({ persisted })
+
+  const { diff, setDiff, clearTransientHighlights, scheduleHighlightClear } = useTransientHighlight()
   const [stage, setStage] = useState<PipelineStage>('idle')
   const [stageStates, setStageStates] = useState<Record<StageId, StageState>>({
     A: 'idle',
@@ -159,12 +128,7 @@ export function useWorkspace(): WorkspaceApi {
     C: 'idle',
   })
   const [busy, setBusy] = useState(false)
-  const [diff, setDiff] = useState<ExecutionDiff | null>(null)
   const [flowModel, setFlowModel] = useState<ActiveModel>(null)
-  const [speaking, setSpeaking] = useState(false)
-  const [speakerOn, setSpeakerOn] = useState(false)
-  const [micOn, setMicOn] = useState(false)
-  const [micActive, setMicActive] = useState(false)
   const [contextUsage, setContextUsage] = useState<ContextUsage>(INITIAL_CONTEXT)
   const [sourceMode, setSourceMode] = useState(false)
   const [commandInput, setCommandInput] = useState('')
@@ -184,65 +148,29 @@ export function useWorkspace(): WorkspaceApi {
     closeTrace,
     resetTraces,
   } = useWorkspaceTraces({ persisted })
-  const [demoRunning, setDemoRunning] = useState(false)
   const { elapsedSeconds, nowTick } = useSessionClock()
   const { runtimeHealth, healthRef, refreshRuntime } = useRuntimeHealth()
-  const [asrBusy, setAsrBusy] = useState(false)
-  const [ttsBusy, setTtsBusy] = useState(false)
   const busyRef = useRef(false)
-  const speakerOnRef = useRef(speakerOn)
   const flowModelRef = useRef<ActiveModel>(null)
   const idleTimerRef = useRef<number | null>(null)
-  const highlightTimerRef = useRef<number | null>(null)
-  const recorderRef = useRef<VoiceRecorder | null>(null)
-  const speechTokenRef = useRef(0)
-  const demoRunningRef = useRef(false)
-  const demoStopRef = useRef(false)
-  /** Hands-free toggle mirror: capture callbacks outlive the render they began in. */
+  /**
+   * Hands-free toggle mirror: the voice hook owns it, the mode-switch hook
+   * reads it, so the orchestrator creates it before both.
+   */
   const micOnRef = useRef(false)
-  const asrBusyRef = useRef(false)
-  /** Latest finishVoiceCapture, for VoiceRecorder.autoStop callbacks created earlier. */
-  const finishVoiceCaptureRef = useRef<() => Promise<void>>(async () => {})
-  /** Latest stopMic, callable from the mode switch declared above it. */
+  /** Latest stopMic, assigned by the voice hook for the mode-switch hook. */
   const stopMicRef = useRef<() => void>(() => {})
-  /** Endpoint the active mic capture started against (mode is read at start, not at stop). */
-  const micEndpointRef = useRef<'omni' | 'd1omni' | 'audio' | null>(null)
-  const asrSourceRef = useRef<RuntimeSource>('fallback')
-  const lastVoiceSecondsRef = useRef<number | undefined>(undefined)
-  const ttsAudioRef = useRef<HTMLAudioElement | null>(null)
-  const ttsAbortRef = useRef<AbortController | null>(null)
-  const ttsUrlRef = useRef<string | null>(null)
+  /**
+   * Latest submitCommand: the voice and demo hooks resolve a finished capture
+   * or a demo step through it, but the turn function is assembled here after
+   * every hook.
+   */
+  const submitRef = useRef<SubmitCommand>(async () => {})
   const chatAbortRef = useRef<AbortController | null>(null)
-  const messagesRef = useRef<Message[]>(messages)
 
-  useEffect(() => {
-    traceRef.current = trace
-  }, [trace])
-  useEffect(() => {
-    speakerOnRef.current = speakerOn
-  }, [speakerOn])
   useEffect(() => {
     flowModelRef.current = flowModel
   }, [flowModel])
-  useEffect(() => {
-    messagesRef.current = messages
-  }, [messages])
-  const addMessage = useCallback(
-    (message: Omit<Message, 'id' | 'at'> & { at?: number; id?: string }) => {
-      const id = message.id ?? makeId('msg')
-      const full: Message = { ...message, id, at: message.at ?? Date.now() }
-      setMessages((previous) => [...previous, full])
-      return id
-    },
-    [],
-  )
-
-  const patchMessage = useCallback((id: string, patch: Partial<Message>) => {
-    setMessages((previous) =>
-      previous.map((message) => (message.id === id ? { ...message, ...patch } : message)),
-    )
-  }, [])
-
   const {
     note,
     noteRef,
@@ -283,20 +211,6 @@ export function useWorkspace(): WorkspaceApi {
     stopMicRef,
   })
 
-  const clearTransientHighlights = useCallback(() => {
-    if (highlightTimerRef.current) {
-      window.clearTimeout(highlightTimerRef.current)
-      highlightTimerRef.current = null
-    }
-  }, [])
-
-  const scheduleHighlightClear = useCallback(() => {
-    clearTransientHighlights()
-    highlightTimerRef.current = window.setTimeout(() => {
-      setDiff(null)
-    }, 7200)
-  }, [clearTransientHighlights])
-
   /** Narrow bridge to the trace module: records reach its log by append only. */
   const appendRejectedTrace = useCallback(
     (record: RejectedTraceRecord) => setRejectedTraces((records) => [...records, record]),
@@ -316,160 +230,32 @@ export function useWorkspace(): WorkspaceApi {
       appendRejectedTrace,
     })
 
-  const stopSpeech = useCallback(() => {
-    speechTokenRef.current += 1
-    ttsAbortRef.current?.abort()
-    ttsAbortRef.current = null
-    if (ttsAudioRef.current) {
-      ttsAudioRef.current.pause()
-      ttsAudioRef.current = null
-    }
-    if (ttsUrlRef.current) {
-      URL.revokeObjectURL(ttsUrlRef.current)
-      ttsUrlRef.current = null
-    }
-    stopSpeaking()
-    setSpeaking(false)
-    setTtsBusy(false)
-  }, [])
+  const { speakerOn, toggleSpeaker, speaking, ttsBusy, stopSpeech, speakReply } =
+    useWorkspaceSpeech({ modeRef, healthRef })
 
-  const speakReply = useCallback(
-    (text: string) => {
-      if (!speakerOnRef.current) return
-      speechTokenRef.current += 1
-      const token = speechTokenRef.current
-      const clean = cleanSpeechText(text)
-      if (!clean) return
-
-      // Browser-voice dispatch: the speaking state is set at DISPATCH, not
-      // on the utterance's onstart — headless and some embedded browsers
-      // never fire onstart, which left a playing reply with a permanently
-      // disabled Stop button (battery case 17a). onend/onerror still clear
-      // it; stopSpeech cancels the utterance outright.
-      const speakWithBrowserVoice = (value: string) => {
-        if (!speechSynthesisAvailable()) return
-        setSpeaking(true)
-        speak(value, {
-          onStart: () => {
-            if (speechTokenRef.current === token) setSpeaking(true)
-          },
-          onEnd: () => {
-            if (speechTokenRef.current === token) setSpeaking(false)
-          },
-        })
-      }
-
-      // Live path: the mode's Omni-architecture server speaks its own reply
-      // over /tts (24 kHz WAV). Low-RAM has no such server
-      // (modeDef(...).speech → null) and always uses the browser voice.
-      const ttsEndpoint = modeDef(modeRef.current).speech
-      if (ttsEndpoint && endpointUp(healthRef.current, ttsEndpoint)) {
-        setTtsBusy(true)
-        const controller = new AbortController()
-        ttsAbortRef.current = controller
-        void (async () => {
-          try {
-            const blob = await synthesizeSpeech(clean, {
-              signal: controller.signal,
-              endpoint: ttsEndpoint,
-            })
-            if (speechTokenRef.current !== token) return
-            const url = URL.createObjectURL(blob)
-            ttsUrlRef.current = url
-            const audio = new Audio(url)
-            ttsAudioRef.current = audio
-            audio.onended = () => {
-              if (speechTokenRef.current !== token) return
-              setSpeaking(false)
-              URL.revokeObjectURL(url)
-              if (ttsUrlRef.current === url) ttsUrlRef.current = null
-              ttsAudioRef.current = null
-            }
-            audio.onerror = () => {
-              if (speechTokenRef.current !== token) return
-              setSpeaking(false)
-              // Model audio failed mid-playback — finish with the browser voice.
-              speakWithBrowserVoice(clean)
-            }
-            setSpeaking(true)
-            await audio.play()
-          } catch (error) {
-            if (controller.signal.aborted || speechTokenRef.current !== token) return
-            // TTS request failed — fall back to the browser voice.
-            speakWithBrowserVoice(clean)
-          } finally {
-            if (speechTokenRef.current === token) setTtsBusy(false)
-          }
-        })()
-        return
-      }
-
-      // Fallback: browser speechSynthesis.
-      speakWithBrowserVoice(clean)
-    },
-    [],
-  )
-
-  const toggleSpeaker = useCallback(() => {
-    setSpeakerOn((previous) => {
-      const next = !previous
-      speakerOnRef.current = next
-      if (!next) {
-        speechTokenRef.current += 1
-        stopSpeaking()
-        setSpeaking(false)
-      }
-      return next
-    })
-  }, [])
-
-  /** State + mirror in one step: capture callbacks read the ref, not a render. */
-  const setMicToggle = useCallback((on: boolean) => {
-    micOnRef.current = on
-    setMicOn(on)
-  }, [])
-
-  const notifyVoiceNeedsOmni = useCallback(() => {
-    notify(
-      'Voice needs an Omni server',
-      'Low-RAM mode runs only LFM3-1.7B — type instead.',
-      'error',
-    )
-  }, [notify])
-
-  const notifySpeechOffline = useCallback(
-    (endpoint: 'omni' | 'd1omni' | 'audio') => {
-      const port = speechPortFor(endpoint)
-      notify(
-        endpoint === 'omni' ? 'Omni ASR offline' : endpoint === 'audio' ? 'Audio ASR offline' : 'd1-Omni ASR offline',
-        endpoint === 'omni'
-          ? `LFM3-Omni-2B is not answering on :${port} — start it with ./lfm3.sh omni, or type the command.`
-          : endpoint === 'audio'
-            ? `LFM3-Audio-2B is not answering on :${port} — start it with scripts/start-models.sh, or type the command.`
-            : `d1-Omni-2B is not answering on :${port} — start it, or type the command.`,
-        'error',
-      )
-    },
-    [notify],
-  )
-
-  const stopMic = useCallback(() => {
-    // The ONE path allowed to abandon a capture without submitting it
-    // (reset, unmount, a mode that has no speech server): the toggle goes
-    // off, the recorder is aborted, and no re-arm follows.
-    setMicToggle(false)
-    recorderRef.current?.abort()
-    recorderRef.current = null
-    micEndpointRef.current = null
-    setMicActive(false)
-  }, [setMicToggle])
-
-  useEffect(() => {
-    stopMicRef.current = stopMic
-  }, [stopMic])
+  const {
+    micOn,
+    micActive,
+    toggleMic,
+    asrBusy,
+    getMicLevel,
+    stopMic,
+    recorderRef,
+    asrSourceRef,
+    lastVoiceSecondsRef,
+  } = useWorkspaceVoice({
+    modeRef,
+    healthRef,
+    busyRef,
+    notify,
+    stopSpeech,
+    micOnRef,
+    stopMicRef,
+    submitRef,
+  })
 
   // The turn pipeline (lib/pipeline.ts) owns the stage sequence; these are
-  // the session capabilities it borrows from the hook. Built fresh each
+  // the session capabilities it borrows from the hooks. Built fresh each
   // render so the pipeline always sees the current callbacks — the same
   // freshness the inlined implementation had via its closures.
   const pipelineDeps: PipelineDeps = {
@@ -518,192 +304,9 @@ export function useWorkspace(): WorkspaceApi {
     await runPipelineTurn(pipelineDeps, rawCommand, source)
   }
 
-  /**
-   * Open one capture. Returns false when the microphone could not be opened
-   * (a toast has been shown); the caller decides whether that ends the
-   * hands-free toggle.
-   */
-  const beginCapture = useCallback(
-    async (endpoint: 'omni' | 'd1omni' | 'audio'): Promise<boolean> => {
-      const recorder = new VoiceRecorder({
-        // The VAD ending an utterance is NOT the user ending hands-free:
-        // finishVoiceCapture transcribes + submits, then re-arms if the
-        // toggle is still on.
-        onAutoStop: () => {
-          void finishVoiceCaptureRef.current()
-        },
-        // Barge-in: voice onset cuts a spoken reply mid-sentence. Fires at
-        // most once per capture (the recorder latches on voice onset).
-        onVoiceStart: () => stopSpeech(),
-      })
-      try {
-        await recorder.start()
-      } catch {
-        notify(
-          'Microphone permission denied',
-          'Allow microphone access in the browser, or type the command.',
-          'error',
-        )
-        return false
-      }
-      recorderRef.current = recorder
-      micEndpointRef.current = endpoint
-      setMicActive(true)
-      return true
-    },
-    [notify, stopSpeech],
-  )
-
-  /**
-   * Re-arm listening after an utterance when hands-free is still on. The
-   * guards are re-run against the CURRENT mode/health: a switch to low-RAM
-   * (no speech server) or an endpoint that went away ends hands-free with
-   * the honest toast instead of leaving the UI claiming to listen.
-   */
-  const restartHandsFree = useCallback(async () => {
-    if (!micOnRef.current) return
-    const endpoint = modeDef(modeRef.current).speech
-    if (!endpoint) {
-      setMicToggle(false)
-      notifyVoiceNeedsOmni()
-      return
-    }
-    if (!endpointUp(healthRef.current, endpoint)) {
-      setMicToggle(false)
-      notifySpeechOffline(endpoint)
-      return
-    }
-    const started = await beginCapture(endpoint)
-    if (!started) {
-      // A failed re-arm ends hands-free: the toggle must never claim to be
-      // listening with no recorder behind it.
-      setMicToggle(false)
-      return
-    }
-    if (!micOnRef.current) {
-      // Tapped off while the microphone was opening.
-      recorderRef.current?.abort()
-      recorderRef.current = null
-      micEndpointRef.current = null
-      setMicActive(false)
-    }
-  }, [beginCapture, notifySpeechOffline, notifyVoiceNeedsOmni, setMicToggle])
-
-  const finishVoiceCapture = useCallback(async () => {
-    const recorder = recorderRef.current
-    if (!recorder) return
-    recorderRef.current = null
-    setMicActive(false)
-    // The endpoint is the one the capture started against; a mode switch
-    // mid-capture must not retarget a finished recording.
-    const endpoint = micEndpointRef.current ?? modeDef(modeRef.current).speech
-    micEndpointRef.current = null
-    asrBusyRef.current = true
-    setAsrBusy(true)
-    const seconds = recorder.seconds
-    try {
-      const blob = await recorder.stop()
-      if (!blob) {
-        notify(
-          'No speech captured',
-          'The microphone did not pick up anything. Try again or type the command.',
-          'error',
-        )
-      } else if (!endpoint) {
-        // The mode this capture belonged to no longer offers a speech server
-        // (a switch to low-RAM mid-capture): stop hands-free here; the re-arm
-        // below then finds the toggle off and stays quiet.
-        setMicToggle(false)
-        notifyVoiceNeedsOmni()
-      } else {
-        // Live ASR over the mode's Omni-architecture endpoint (:8083 omni,
-        // :8085 in 1.7B + d1 — same architecture).
-        const transcript = await transcribeAudio(blob, endpoint)
-        asrSourceRef.current = 'live'
-        lastVoiceSecondsRef.current = Number(seconds.toFixed(1))
-        // Awaiting the turn is the hands-free sequencing guarantee:
-        // runPipelineTurn resolves only after its finally cleared busyRef, so
-        // the re-arm below can never listen underneath a running turn.
-        await submitCommand(transcript.text, 'voice')
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'ASR request failed.'
-      const label = endpoint === 'd1omni' ? 'd1-Omni' : endpoint === 'audio' ? 'Audio' : 'Omni'
-      notify(`${label} ASR unavailable`, `${message} Type the command instead.`, 'error')
-    } finally {
-      asrBusyRef.current = false
-      setAsrBusy(false)
-      // Utterance over — the VAD stopped this capture, not the user. If the
-      // toggle is still on, listen for the next one.
-      await restartHandsFree()
-    }
-  }, [notify, notifySpeechOffline, notifyVoiceNeedsOmni, restartHandsFree, setMicToggle])
-
-  useEffect(() => {
-    finishVoiceCaptureRef.current = finishVoiceCapture
-  }, [finishVoiceCapture])
-
-  const toggleMic = useCallback(() => {
-    // Barge-in: speaking while you talk would fight the microphone.
-    stopSpeech()
-    if (micOnRef.current) {
-      // OFF: never discard spoken words. A capture in progress is finished
-      // (transcribed + submitted) and not restarted; an in-flight ASR/submit
-      // is allowed to complete and submit. Clearing the toggle is what ends
-      // the loop — finishVoiceCapture's re-arm reads it.
-      setMicToggle(false)
-      if (recorderRef.current) void finishVoiceCapture()
-      return
-    }
-    if (busyRef.current) {
-      notify('Worker is busy', 'Wait for the current call to finish before speaking.', 'neutral')
-      return
-    }
-    const endpoint = modeDef(modeRef.current).speech
-    if (!endpoint) {
-      // Low-RAM: no Omni-architecture server exists, so ASR is honestly off.
-      notifyVoiceNeedsOmni()
-      return
-    }
-    if (!endpointUp(healthRef.current, endpoint)) {
-      notifySpeechOffline(endpoint)
-      return
-    }
-    // ON: the toggle is set before the permission prompt so a second tap
-    // cancels instead of opening a second stream; a failed start rolls it
-    // back below.
-    setMicToggle(true)
-    if (asrBusyRef.current) {
-      // The previous utterance is still transcribing; arming now is honest —
-      // finishVoiceCapture's re-arm picks the toggle up when it resolves.
-      return
-    }
-    void (async () => {
-      const started = await beginCapture(endpoint)
-      if (!started) {
-        setMicToggle(false)
-        return
-      }
-      if (!micOnRef.current) {
-        // Tapped off while the permission prompt was open: no capture runs
-        // for a toggle that is already off.
-        recorderRef.current?.abort()
-        recorderRef.current = null
-        micEndpointRef.current = null
-        setMicActive(false)
-      }
-    })()
-  }, [
-    beginCapture,
-    finishVoiceCapture,
-    notify,
-    notifySpeechOffline,
-    notifyVoiceNeedsOmni,
-    setMicToggle,
-    stopSpeech,
-  ])
-
-  const getMicLevel = useCallback(() => recorderRef.current?.getLevel() ?? 0, [])
+  // Late-bind the composed turn function: voice capture and the demo loop
+  // resolve through it, but they are declared before this pipeline exists.
+  submitRef.current = submitCommand
 
   const resetChat = useCallback(() => {
     if (busyRef.current) {
@@ -718,7 +321,7 @@ export function useWorkspace(): WorkspaceApi {
     stopMic()
     chatAbortRef.current?.abort()
     chatAbortRef.current = null
-    setMessages(initialMessages())
+    resetMessages()
     resetTraces()
     setStage('idle')
     setStageStates({ A: 'idle', B: 'idle', C: 'idle' })
@@ -729,46 +332,19 @@ export function useWorkspace(): WorkspaceApi {
       'The conversation and decision traces were cleared. The note and its snapshots stay.',
       'success',
     )
-  }, [notify, resetTraces, stopMic, stopSpeech])
+  }, [notify, resetMessages, resetTraces, stopMic, stopSpeech])
 
   const suggestions = useMemo(() => buildSuggestions(note), [note])
 
-  const runDemo = useCallback(async () => {
-    if (demoRunningRef.current) {
-      demoStopRef.current = true
-      setDemoRunning(false)
-      notify('Demo stopping', 'The current verified call will finish first.')
-      return
-    }
-    if (busyRef.current) {
-      notify('Worker is busy', 'Wait for the current call to finish before starting the demo.', 'neutral')
-      return
-    }
-    demoStopRef.current = false
-    demoRunningRef.current = true
-    setDemoRunning(true)
-    for (const step of DEMO_SEQUENCE) {
-      if (demoStopRef.current) break
-      await submitCommand(step.command, step.source)
-      await sleep(650)
-    }
-    demoStopRef.current = false
-    demoRunningRef.current = false
-    setDemoRunning(false)
-  }, [notify, submitCommand])
+  const { demoRunning, runDemo } = useDemoTurn({ busyRef, notify, submitRef })
 
   useEffect(() => {
     return () => {
-      // Unmount is a stop path: never let an in-flight ASR/turn re-arm the
-      // microphone after the session is gone.
-      micOnRef.current = false
-      recorderRef.current?.abort()
-      recorderRef.current = null
-      ttsAbortRef.current?.abort()
+      // Unmount is a stop path for the turn: the speech hook aborts its own
+      // recorder and TTS on unmount too, so only the pipeline's controller
+      // and timers are cleared here.
       chatAbortRef.current?.abort()
-      stopSpeaking()
       if (idleTimerRef.current) window.clearTimeout(idleTimerRef.current)
-      if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current)
     }
   }, [])
 
@@ -853,7 +429,3 @@ export function useWorkspace(): WorkspaceApi {
     cancelPendingSwitch,
   }
 }
-
-
-
-
