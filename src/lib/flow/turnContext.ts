@@ -10,10 +10,12 @@
 
 import type {
   ContextUsage,
+  Directive,
   ExecutionDiff,
   Message,
   PendingEdit,
   PipelineStage,
+  Probability,
   RejectedTraceRecord,
   RunStatus,
   RuntimeHealth,
@@ -25,6 +27,7 @@ import type {
   Trace,
   TraceRuntime,
   TurnExchange,
+  WorkerCall,
 } from '../../types'
 import type { RunMode } from '../runmode'
 import { estimateTokens, makeId } from '../utils'
@@ -218,4 +221,33 @@ export function createTracePublisher(deps: PipelineDeps, traceLocal: Trace): Tra
     publish()
   }
   return { publish, finish, recordExchange, isClosed: () => closed }
+}
+
+/** Rejected-trace record for a worker-authored call the harness refused. */
+export function recordRejectedCall(
+  deps: PipelineDeps,
+  ctx: TurnContext,
+  directive: Directive,
+  call: WorkerCall,
+  reason: string,
+  pCorrect: Probability,
+): void {
+  deps.setRejectedTraces((previous) => [
+    ...previous,
+    {
+      at: Date.now(),
+      command: ctx.command,
+      route: {
+        tool: call.name,
+        provenance:
+          ctx.traceLocal.runMode && ctx.traceLocal.runMode !== 'audio' && ctx.traceLocal.runMode !== 'omni'
+            ? 'worker-chat run mode'
+            : 'audio-first pipeline',
+      },
+      grounding: { source: 'worker-self' },
+      workerXml: call.xml,
+      critic: { verdict: 'rejected', reason, pCorrect },
+      directive,
+    },
+  ])
 }
