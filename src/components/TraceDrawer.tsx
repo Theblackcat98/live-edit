@@ -22,6 +22,7 @@ import { D1CheckSection } from './trace/D1CheckSection'
 import { HoldSection } from './trace/HoldSection'
 import { ExchangeList } from './trace/ExchangeList'
 import { TraceSection } from './trace/TraceSection'
+import { DirectiveSection } from './trace/DirectiveSection'
 
 interface TraceDrawerProps {
   rejectedTraces: RejectedTraceRecord[]
@@ -273,67 +274,7 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectR
             {trace.hold && <HoldSection hold={trace.hold} status={trace.status} />}
 
             {trace.directive && (
-              // Audio's typed delegation directive (design.md §5), recorded on
-              // the trace from P2 on. Legacy supervisor-first traces have no
-              // directive field — for them this section simply does not
-              // render, leaving the drawer exactly as it was.
-              <TraceSection index="D" title="Delegation directive" caption={`${chatShort} → worker · typed brief`}>
-                <div className="trace-route">
-                  <div className="trace-query-row">
-                    <div className="trace-query-name mono">task</div>
-                    <div className="trace-query-value">
-                      <span className="chip chip-accent mono">{trace.directive.task}</span>
-                    </div>
-                  </div>
-                  <div className="trace-query-row">
-                    <div className="trace-query-name mono">instruction</div>
-                    <div className="trace-query-value">
-                      <div className="trace-tool-list">
-                        <p className="trace-reason">{trace.directive.instruction}</p>
-                      </div>
-                    </div>
-                  </div>
-                  {trace.directive.verbatim && (
-                    // The one case where content legitimately travels inside
-                    // the directive: the user dictated exact words (§5).
-                    <div className="trace-query-row">
-                      <div className="trace-query-name mono">verbatim</div>
-                      <div className="trace-query-value">
-                        <div className="trace-tool-list">
-                          <p className="trace-reason mono">{trace.directive.verbatim}</p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                  {trace.directive.target && (
-                    <div className="trace-query-row">
-                      <div className="trace-query-name mono">target</div>
-                      <div className="trace-query-value">
-                        <div className="trace-tool-list">
-                          <p className="trace-reason">{trace.directive.target.description}</p>
-                          {trace.directive.target.heading && (
-                            <p className="trace-muted">under {trace.directive.target.heading}</p>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                  {trace.directive.constraints && trace.directive.constraints.length > 0 && (
-                    <div className="trace-query-row">
-                      <div className="trace-query-name mono">constraints</div>
-                      <div className="trace-query-value">
-                        <div className="trace-tool-list">
-                          {trace.directive.constraints.map((constraint) => (
-                            <span className="chip chip-ghost mono" key={constraint}>
-                              {constraint}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </TraceSection>
+              <DirectiveSection directive={trace.directive} chatShort={chatShort} />
             )}
 
             <TraceSection
