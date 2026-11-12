@@ -82,7 +82,7 @@ export function SafetyCheckCard({
       <header className="rail-header">
         <div className="rail-title">
           <ScanSearch size={13} />
-          Supervisor
+          Safety check
           <span className={cx('status-dot', running ? 'is-accent is-pulsing' : 'is-accent')} />
         </div>
         <span
