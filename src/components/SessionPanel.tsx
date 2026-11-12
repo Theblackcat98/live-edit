@@ -15,6 +15,7 @@ import {
   Table2,
 } from 'lucide-react'
 import type { Message, Suggestion } from '../types'
+import { modeDef } from '../lib/modes'
 import { cx, formatElapsed } from '../lib/utils'
 import type { RunMode } from '../lib/runmode'
 import type { PendingEdit } from '../types'
@@ -265,7 +266,9 @@ export function SessionComposer({
   const isMac =
     typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
   const shortcut = isMac ? '⌘K' : 'Ctrl K'
-  const voiceAvailable = mode !== 'lowram'
+  // Capability check through the registry: a mode with no speech endpoint has
+  // no microphone path (low-RAM keeps the text composer only).
+  const voiceAvailable = modeDef(mode).speech !== null
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault()

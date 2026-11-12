@@ -1,7 +1,7 @@
 import { ShieldCheck } from 'lucide-react'
 import type { PipelineStage, RuntimeHealth, Trace } from '../types'
+import { modeDef } from '../lib/modes'
 import type { RunMode } from '../lib/runmode'
-import { transcribingModel } from '../lib/runmode'
 import { cx } from '../lib/utils'
 interface StatusBarProps {
   stage: PipelineStage
@@ -57,7 +57,7 @@ export function StatusBar({ stage, trace, micOn, micActive, asrBusy, runtimeHeal
   const totalEndpoints = runtimeHealth?.endpoints.length ?? 4
   const liveTone =
     !runtimeHealth ? 'statusbar-muted' : upCount === totalEndpoints ? 'is-green' : 'is-orange'
-  const asrModel = transcribingModel(mode)
+  const asrModel = modeDef(mode).chat.transcriber
   // Honest three-state: a turn between utterances is not a live capture.
   const micLabel = asrBusy
     ? `${asrModel ?? 'ASR'} · transcribing`

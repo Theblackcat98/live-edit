@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Loader2 } from 'lucide-react'
 import { ENDPOINTS } from '../lib/bridge'
-import { runModeInfo, type RunMode } from '../lib/runmode'
+import { modeDef } from '../lib/modes'
+import type { RunMode } from '../lib/runmode'
 import type { EndpointId, ModelSwitchPlan } from '../lib/modelPlan'
 
 interface ModelSwitchDialogProps {
@@ -28,8 +29,8 @@ function endpointLabel(id: EndpointId): string {
  */
 export function ModelSwitchDialog({ plan, from, switching, onConfirm, onCancel }: ModelSwitchDialogProps) {
   const [stopSpares, setStopSpares] = useState(false)
-  const target = runModeInfo(plan.mode)
-  const current = runModeInfo(from)
+  const target = modeDef(plan.mode).info
+  const current = modeDef(from).info
 
   const content = (
     <div className="model-switch-overlay">

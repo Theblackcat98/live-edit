@@ -1,10 +1,9 @@
-import type { RunMode } from '../lib/runmode'
 import type { ModelInfo } from '../types'
 
 // Specs are ground truth from scripts/start-models.sh: quant files, mmproj
 // adapters, and each server's -c context window. The roster a mode actually
-// runs is rosterFor(mode) — never a static trinity, so the Runtime rail shows
-// the models serving the active mode.
+// runs is `MODES[mode].roster` in src/lib/modes.ts — never a static trinity,
+// so the Runtime rail shows the models serving the active mode.
 
 /** The default interface: LFM3-Audio-2B on :8086 (-c 128000). */
 export const AUDIO_INTERFACE: ModelInfo = {
@@ -69,14 +68,6 @@ export const WORKER: ModelInfo = {
 
 /** The worker-chat role label: the 1.7B answers chat AND authors calls there. */
 export const WORKER_CHAT: ModelInfo = { ...WORKER, role: 'Chat + Worker' }
-
-/** The models a run mode actually runs, display order. */
-export function rosterFor(mode: RunMode): ModelInfo[] {
-  if (mode === 'audio') return [AUDIO_INTERFACE, D1_CHECK, WORKER]
-  if (mode === 'omni') return [OMNI_INTERFACE, D1_CHECK, WORKER]
-  if (mode === 'worker-d1') return [WORKER_CHAT, D1_CHECK]
-  return [WORKER_CHAT]
-}
 
 /** Weights+adapter footprint of a roster (each model counted once). */
 export function rosterMemoryGB(models: ModelInfo[]): number {

@@ -24,8 +24,9 @@ import type {
   StageState,
   Trace,
 } from '../types'
-import { rosterFor, rosterMemoryGB, MEMORY_BUDGET_GB } from '../data/models'
-import { runModeInfo, chatModelName, transcribingModel, type RunMode } from '../lib/runmode'
+import { rosterMemoryGB, MEMORY_BUDGET_GB } from '../data/models'
+import { modeDef } from '../lib/modes'
+import type { RunMode } from '../lib/runmode'
 import { cx, relativeTime } from '../lib/utils'
 import { ModeSwitch } from './ModeSwitch'
 
@@ -80,7 +81,7 @@ function RuntimeCard({
   runtimeHealth: RuntimeHealth | null
   mode: RunMode
 }) {
-  const models = rosterFor(mode)
+  const models = modeDef(mode).roster
   const rosterMemory = rosterMemoryGB(models)
   const upCount = runtimeHealth
     ? runtimeHealth.endpoints.filter((endpoint) => endpoint.up).length
@@ -91,7 +92,7 @@ function RuntimeCard({
       <header className="rail-header">
         <div className="rail-title">
           <Cpu size={13} />
-          Model roster · {runModeInfo(mode).short}
+          Model roster · {modeDef(mode).info.short}
         </div>
         <span
           className={cx(
@@ -169,21 +170,26 @@ interface WiringSurface {
 }
 
 /**
- * What each surface is wired to in the active mode. Targets name the model
- * that actually serves the mode — Audio by default, Omni only in legacy.
+ * What each surface is wired to in the active mode, straight from the mode's
+ * registry row: the chat author/endpoint, the speech endpoint and the decision
+ * policy. Targets name the model that actually serves the mode — Audio by
+ * default, Omni only in legacy.
  */
 function wiringSurfacesFor(mode: RunMode): WiringSurface[] {
-  const chat = chatModelName(mode)
-  const asrModel = transcribingModel(mode)
-  const frontDoor: 'audio' | 'omni' = mode === 'omni' ? 'omni' : 'audio'
-  const d1Endpoint: 'd1omni' | null = mode === 'lowram' ? null : 'd1omni'
+  const def = modeDef(mode)
+  const { chat } = def
+  const asrModel = chat.transcriber
+  // Omni-first modes chat through a front-door model (Audio or legacy Omni);
+  // the worker-chat flows chat through the 1.7B itself.
+  const omniFirst = def.flow === 'omni-first'
+  const d1Endpoint: 'd1omni' | null = def.decide === 'd1' ? 'd1omni' : null
   return [
     asrModel
       ? {
           id: 'asr',
           label: 'Voice ASR',
           target: `${asrModel} /v1/audio/transcriptions`,
-          endpoint: mode === 'worker-d1' ? 'd1omni' : frontDoor,
+          endpoint: def.speech,
           fallback: 'typed input instead',
         }
       : {
@@ -197,16 +203,16 @@ function wiringSurfacesFor(mode: RunMode): WiringSurface[] {
     {
       id: 'chat',
       label: 'Chat replies',
-      target: `${chat} /v1/chat/completions`,
-      endpoint: mode === 'audio' ? 'audio' : mode === 'omni' ? 'omni' : 'text',
+      target: `${chat.author} /v1/chat/completions`,
+      endpoint: chat.endpoint,
       fallback: 'turn fails honestly — no canned replies',
     },
-    mode === 'audio' || mode === 'omni'
+    omniFirst
       ? {
           id: 'route',
           label: 'Routing',
-          target: `${chat} · typed directive`,
-          endpoint: frontDoor,
+          target: `${chat.author} · typed directive`,
+          endpoint: def.speech,
           fallback: 'turn fails honestly — no heuristic router',
         }
       : {
@@ -295,7 +301,7 @@ function RuntimeWiringCard({
   onSetMode: (mode: RunMode) => void
 }) {
   const [refreshing, setRefreshing] = useState(false)
-  const modeInfo = runModeInfo(mode)
+  const modeInfo = modeDef(mode).info
   const surfaces = wiringSurfacesFor(mode)
   const up = (id: 'omni' | 'audio' | 'd1omni' | 'text'): boolean =>
     runtimeHealth?.endpoints.some((endpoint) => endpoint.id === id && endpoint.up) ?? false
@@ -537,35 +543,27 @@ function ContextCard({
   trace: Trace | null
   mode: RunMode
 }) {
-  // One row per model the mode actually runs; limits are the servers' real
-  // -c windows (start-models.sh). The interface row id stays 'omni' — it is
-  // the interface slot of ContextUsage, whatever model fills it.
+  // One row per model the mode actually runs, in registry roster order; limits
+  // are the servers' real -c windows (start-models.sh). Each row's usage slot
+  // is its roster model's flow — 'omni' stays the interface slot, whatever
+  // model fills it.
+  const def = modeDef(mode)
   const rows: Array<{
     id: string
     label: string
     limit: number
     value: number
     color: string
-  }> =
-    mode === 'audio' || mode === 'omni'
-      ? [
-          {
-            id: 'omni',
-            label: mode === 'audio' ? 'Audio · rolling' : 'Omni · rolling',
-            limit: mode === 'audio' ? 128000 : 32000,
-            value: usage.omni,
-            color: 'green',
-          },
-          { id: 'd1', label: 'd1 · stateless', limit: 128000, value: usage.d1, color: 'accent' },
-          { id: 'worker', label: '1.7B · task', limit: 128000, value: usage.worker, color: 'orange' },
-        ]
-      : mode === 'worker-d1'
-        ? [
-            { id: 'worker', label: '1.7B · chat + calls', limit: 128000, value: usage.worker, color: 'orange' },
-            { id: 'd1', label: 'd1 · stateless', limit: 128000, value: usage.d1, color: 'accent' },
-          ]
-        : [{ id: 'worker', label: '1.7B · rolling', limit: 128000, value: usage.worker, color: 'orange' }]
-
+  }> = def.contextRows.map((row, index) => {
+    const model = def.roster[index]
+    return {
+      id: model.flow,
+      label: row.label,
+      limit: row.limit,
+      value: usage[model.flow],
+      color: model.color,
+    }
+  })
 
   return (
     <section className="rail-card context-card">

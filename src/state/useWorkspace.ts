@@ -22,12 +22,11 @@ import { loadWorkspaceState, saveWorkspaceState, type PersistedWorkspace } from 
 import { ENDPOINTS, endpointUp, probeRuntime, synthesizeSpeech, transcribeAudio } from '../lib/bridge'
 import {
   loadRunMode,
-  runModeInfo,
   saveRunMode,
-  speechEndpointFor,
   speechPortFor,
   type RunMode,
 } from '../lib/runmode'
+import { modeDef } from '../lib/modes'
 import { managerStart, managerStatus, managerStop } from '../lib/modelManager'
 import { managerNameFor, planModelSwitch, type ModelSwitchPlan } from '../lib/modelPlan'
 import { estimateTokens, makeId, sleep } from '../lib/utils'
@@ -381,7 +380,7 @@ export function useWorkspace(): WorkspaceApi {
       modeRef.current = next
       setModeState(next)
       saveRunMode(next)
-      const info = runModeInfo(next)
+      const info = modeDef(next).info
       addMessage({
         role: 'system',
         kind: 'notice',
@@ -391,7 +390,7 @@ export function useWorkspace(): WorkspaceApi {
       // Hands-free listening needs an Omni-architecture speech server. If the
       // new mode has none, stop honestly now — the same stop path as a reset —
       // rather than recording into a void until the next VAD stop.
-      if (micOnRef.current && !speechEndpointFor(next)) {
+      if (micOnRef.current && modeDef(next).speech === null) {
         stopMicRef.current()
         notify(
           'Voice needs an Omni server',
@@ -772,8 +771,8 @@ export function useWorkspace(): WorkspaceApi {
 
       // Live path: the mode's Omni-architecture server speaks its own reply
       // over /tts (24 kHz WAV). Low-RAM has no such server
-      // (speechEndpointFor → null) and always uses the browser voice.
-      const ttsEndpoint = speechEndpointFor(modeRef.current)
+      // (modeDef(...).speech → null) and always uses the browser voice.
+      const ttsEndpoint = modeDef(modeRef.current).speech
       if (ttsEndpoint && endpointUp(healthRef.current, ttsEndpoint)) {
         setTtsBusy(true)
         const controller = new AbortController()
@@ -973,7 +972,7 @@ export function useWorkspace(): WorkspaceApi {
    */
   const restartHandsFree = useCallback(async () => {
     if (!micOnRef.current) return
-    const endpoint = speechEndpointFor(modeRef.current)
+    const endpoint = modeDef(modeRef.current).speech
     if (!endpoint) {
       setMicToggle(false)
       notifyVoiceNeedsOmni()
@@ -1007,7 +1006,7 @@ export function useWorkspace(): WorkspaceApi {
     setMicActive(false)
     // The endpoint is the one the capture started against; a mode switch
     // mid-capture must not retarget a finished recording.
-    const endpoint = micEndpointRef.current ?? speechEndpointFor(modeRef.current)
+    const endpoint = micEndpointRef.current ?? modeDef(modeRef.current).speech
     micEndpointRef.current = null
     asrBusyRef.current = true
     setAsrBusy(true)
@@ -1070,7 +1069,7 @@ export function useWorkspace(): WorkspaceApi {
       notify('Worker is busy', 'Wait for the current call to finish before speaking.', 'neutral')
       return
     }
-    const endpoint = speechEndpointFor(modeRef.current)
+    const endpoint = modeDef(modeRef.current).speech
     if (!endpoint) {
       // Low-RAM: no Omni-architecture server exists, so ASR is honestly off.
       notifyVoiceNeedsOmni()

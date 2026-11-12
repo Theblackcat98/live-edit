@@ -9,7 +9,8 @@ import {
 } from 'lucide-react'
 import { LogoMark } from './LogoMark'
 import { ModeSwitch } from './ModeSwitch'
-import { rosterFor, rosterMemoryGB } from '../data/models'
+import { rosterMemoryGB } from '../data/models'
+import { modeDef } from '../lib/modes'
 import type { RunMode } from '../lib/runmode'
 import { cx, formatElapsed } from '../lib/utils'
 
@@ -80,7 +81,7 @@ export function TopBar({
           <span className="trinity-pip pip-orange" />
         </span>
         <span className="trinity-label">Trinity</span>
-        <span className="trinity-memory mono">{rosterMemoryGB(rosterFor(mode)).toFixed(1)} GB</span>
+        <span className="trinity-memory mono">{rosterMemoryGB(modeDef(mode).roster).toFixed(1)} GB</span>
       </div>
 
       <div className="topbar-divider" />
@@ -92,6 +93,8 @@ export function TopBar({
       </div>
 
       <div className="topbar-actions">
+        {/* Capability check, not a mode branch: low-RAM runs no
+            Omni-architecture server, so the mic has nothing to record into. */}
         <button
           type="button"
           className={cx('icon-button', micOn && 'is-active')}

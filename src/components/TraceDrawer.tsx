@@ -14,8 +14,8 @@ import {
   X,
 } from 'lucide-react'
 import type { ExchangeMessage, RejectedTraceRecord, Trace, TurnExchange, TurnHold } from '../types'
+import { modeDef } from '../lib/modes'
 import type { RunMode } from '../lib/runmode'
-import { chatModelShort } from '../lib/runmode'
 import { cx, pad, truncate } from '../lib/utils'
 import { Download } from 'lucide-react'
 
@@ -241,7 +241,7 @@ function ExchangeCard({
 
 
 export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectRun, onClose }: TraceDrawerProps) {
-  const chatShort = chatModelShort(mode)
+  const chatShort = modeDef(mode).chat.short
   const [tab, setTab] = useState<'decision' | 'chat'>('decision')
   const [copied, setCopied] = useState(false)
   const [showNoteView, setShowNoteView] = useState(false)
