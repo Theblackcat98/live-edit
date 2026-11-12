@@ -20,7 +20,9 @@ export function RouteSection({ route }: { route: D1RouteRecord }) {
   // Records written before the threshold was stored fall back to today's.
   const threshold = route.threshold ?? ROUTE_CONFIDENCE_MIN
   const isEdit = route.intent !== 'conversational' && route.intent !== 'ambiguous'
-  const outcome = route.routesToWorker
+  const outcome = route.error
+    ? 'd1 gave no usable verdict — handled as conversation; nothing was edited.'
+    : route.routesToWorker
     ? OUTCOME.worker
     : route.intent === 'ambiguous'
       ? OUTCOME.ambiguous
@@ -63,6 +65,12 @@ export function RouteSection({ route }: { route: D1RouteRecord }) {
         </span>
         <span className="trace-kv-key">outcome</span>
         <span className="trace-kv-value trace-body">{outcome}</span>
+        {route.error && (
+          <>
+            <span className="trace-kv-key">error</span>
+            <span className="trace-kv-value trace-body trace-error-text">{route.error}</span>
+          </>
+        )}
       </div>
     </TraceSection>
   )

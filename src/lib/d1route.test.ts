@@ -89,3 +89,30 @@ describe('runD1Route', () => {
     expect(result.intent).toBe(ROUTE_CONVERSATIONAL)
   })
 })
+
+describe('runD1Route — failures are labelled, never passed off as a verdict', () => {
+  it('records the bridge error when d1 does not answer', async () => {
+    const result = await runD1Route({
+      ...BASE,
+      lastRun: null,
+      d1Decide: async () => {
+        throw new Error('HTTP 503: Loading model')
+      },
+    })
+    expect(result.routesToWorker).toBe(false)
+    expect(result.intent).toBe('conversational')
+    expect(result.error).toMatch(/d1 did not answer: HTTP 503: Loading model/)
+  })
+
+  it('records an unknown intent instead of silently reading it as conversation', async () => {
+    const result = await runD1Route({ ...BASE, lastRun: null, d1Decide: routeDecide('rewrite', 0.9) })
+    expect(result.routesToWorker).toBe(false)
+    expect(result.error).toMatch(/unknown turn_intent "rewrite"/)
+  })
+
+  it('a clean verdict carries no error', async () => {
+    const result = await runD1Route({ ...BASE, lastRun: null, d1Decide: routeDecide('edit', 0.9) })
+    expect(result.routesToWorker).toBe(true)
+    expect(result.error).toBeUndefined()
+  })
+})

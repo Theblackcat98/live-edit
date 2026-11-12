@@ -29,6 +29,8 @@ export interface ChatTurnResult {
   outputTokens?: number
   /** Omni repair diagnostics (validation error + raw arguments), when any. */
   repair?: { error: string; rawArguments: string }
+  /** The reply stopped at the max_tokens cap (finish_reason "length"). */
+  truncated?: boolean
   /** Worker-chat reasoning channel, when the reply emitted one. */
   think?: string
 }
@@ -41,6 +43,7 @@ export function chatTurnFromOmni(result: OmniTurnResult): ChatTurnResult {
     ...(result.directive ? { directive: result.directive } : {}),
     ...(result.action ? { action: result.action } : {}),
     ...(result.repair ? { repair: result.repair } : {}),
+    ...(result.truncated ? { truncated: true } : {}),
     ms: result.ms,
     ...(result.promptTokens ? { promptTokens: result.promptTokens } : {}),
     ...(result.outputTokens ? { outputTokens: result.outputTokens } : {}),

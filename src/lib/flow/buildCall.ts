@@ -245,7 +245,10 @@ export async function buildPacketCall(input: PacketCallInput): Promise<PacketCal
     attemptedTool = parsed?.name ?? null
     attemptedParsed = parsed
     if (!parsed) {
-      attemptError = 'The reply did not contain one parseable tool call in the repo XML format.'
+      attemptError =
+        completion.finishReason === 'length'
+          ? `The reply hit the ${sampler.maxTokens}-token output limit before finishing a tool call.`
+          : 'The reply did not contain one parseable tool call in the repo XML format.'
       recordPacketExchange(attemptError)
       continue
     }

@@ -377,8 +377,11 @@ export async function runWorkerChatTurn(input: WorkerChatInput): Promise<WorkerC
   }
 
   const invalidReason =
-    'the reply contained no parseable tool call and no visible text after stripping the ' +
-    'reasoning channel'
+    completion.finishReason === 'length'
+      ? // Uncapped decode (no max_tokens sent): "length" means the server's context ran out.
+        "the reply ran into the server's length limit before producing a tool call or visible text"
+      : 'the reply contained no parseable tool call and no visible text after stripping the ' +
+        'reasoning channel'
   report(completion, invalidReason)
   return result({ outcome: 'invalid', error: invalidReason })
 }

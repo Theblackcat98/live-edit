@@ -444,6 +444,8 @@ export interface OmniTurnResult {
    * repair rescued — the evidence the next diagnosis works from, never UI copy.
    */
   repair?: { error: string; rawArguments: string }
+  /** The reply stopped at the max_tokens cap (finish_reason "length"). */
+  truncated?: boolean
   ms: number
   promptTokens?: number
   outputTokens?: number
@@ -534,6 +536,8 @@ export interface D1RouteRecord {
   threshold: number
   ms: number
   promptTokens?: number
+  /** Why d1 produced no usable verdict; the turn then settled as conversation. */
+  error?: string
 }
 
 /**
