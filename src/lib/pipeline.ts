@@ -78,6 +78,7 @@ import {
   type PipelineDeps,
   type TurnContext,
 } from './flow/turnContext'
+import { createStreamBubble } from './flow/bubble'
 
 /**
  * Recent (user command, assistant reply) pairs replayed as chat turns.
@@ -410,37 +411,10 @@ async function runOmniFirstTurn(
   // case 18); the authoritative text replaces them for answer/clarify, and
   // the bubble is retracted entirely when the turn delegates or acts — the
   // delegation must stay silent in the transcript.
-  let streamId: string | null = null
-  let streamedText = ''
-  const onText = (delta: string) => {
-    streamedText += delta
-    if (!streamId) {
-      streamId = deps.addMessage({
-        role: 'assistant',
-        text: streamedText,
-        author: chatAuthor,
-        runId: traceLocal.id,
-      })
-    } else {
-      deps.patchMessage(streamId, { text: streamedText })
-    }
-  }
-  const retractStream = () => {
-    if (streamId) {
-      const id = streamId
-      deps.setMessages((previous) => previous.filter((message) => message.id !== id))
-      streamId = null
-      streamedText = ''
-    }
-  }
-  const settleStream = (text: string) => {
-    if (streamId) {
-      deps.patchMessage(streamId, { text })
-      streamId = null
-    } else {
-      deps.addMessage({ role: 'assistant', text, author: chatAuthor, runId: traceLocal.id })
-    }
-  }
+  const { onText, retractStream, settleStream } = createStreamBubble(deps, {
+    author: chatAuthor,
+    runId: traceLocal.id,
+  })
 
   let omni: OmniTurnResult | null
   try {
@@ -853,38 +827,10 @@ async function runWorkerChatFirstTurn(
   // Provisional streaming bubble, same discipline as Audio-first: visible
   // deltas land here live; a call outcome retracts it, an answer settles the
   // authoritative text.
-  let streamId: string | null = null
-  let streamedText = ''
-  const onText = (delta: string) => {
-    streamedText += delta
-    if (!streamId) {
-      streamId = deps.addMessage({
-        role: 'assistant',
-        text: streamedText,
-        streaming: true,
-        author: 'LFM3-1.7B',
-        runId: traceLocal.id,
-      })
-    } else {
-      deps.patchMessage(streamId, { text: streamedText })
-    }
-  }
-  const retractStream = () => {
-    if (streamId) {
-      const id = streamId
-      deps.setMessages((previous) => previous.filter((message) => message.id !== id))
-      streamId = null
-      streamedText = ''
-    }
-  }
-  const settleStream = (text: string) => {
-    if (streamId) {
-      deps.patchMessage(streamId, { text, streaming: false })
-      streamId = null
-    } else {
-      deps.addMessage({ role: 'assistant', text, author: 'LFM3-1.7B', runId: traceLocal.id })
-    }
-  }
+  const { onText, retractStream, settleStream } = createStreamBubble(deps, {
+    author: 'LFM3-1.7B',
+    runId: traceLocal.id,
+  })
 
   const controller = new AbortController()
   deps.chatAbortRef.current = controller
