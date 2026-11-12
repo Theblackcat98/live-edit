@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ContextUsage,
   ExecutionDiff,
+  ExecutionResult,
   Message,
   PendingEdit,
   PipelineStage,
@@ -217,8 +218,32 @@ export function useWorkspace(): WorkspaceApi {
     [setRejectedTraces],
   )
 
+  // A pending edit's decision is part of its run's story: move the run from
+  // "held" to applied (with the execution) or rejected, everywhere it is shown.
+  const resolveRun = useCallback(
+    (runId: string, resolution: 'applied' | 'discarded' | 'stale', execution?: ExecutionResult) => {
+      const update = (run: Trace): Trace =>
+        run.id === runId
+          ? {
+              ...run,
+              resolution,
+              status: resolution === 'applied' ? 'verified' : 'rejected',
+              ...(execution ? { execution } : {}),
+            }
+          : run
+      runsRef.current = runsRef.current.map(update)
+      setRuns(runsRef.current)
+      if (traceRef.current?.id === runId) {
+        traceRef.current = update(traceRef.current)
+        setTrace(traceRef.current)
+      }
+    },
+    [runsRef, setRuns, setTrace, traceRef],
+  )
+
   const { pendingEdits, addPendingEdit, applyPendingEdit, dismissPendingEdit } =
     useWorkspacePending({
+      onRunResolved: resolveRun,
       persisted,
       busyRef,
       noteRef,
@@ -231,7 +256,7 @@ export function useWorkspace(): WorkspaceApi {
     })
 
   const { speakerOn, toggleSpeaker, speaking, ttsBusy, stopSpeech, speakReply } =
-    useWorkspaceSpeech({ modeRef, healthRef })
+    useWorkspaceSpeech({ modeRef, healthRef, notify })
 
   const {
     micOn,
@@ -243,6 +268,7 @@ export function useWorkspace(): WorkspaceApi {
     recorderRef,
     asrSourceRef,
     lastVoiceSecondsRef,
+    lastAsrMsRef,
   } = useWorkspaceVoice({
     modeRef,
     healthRef,
@@ -268,6 +294,7 @@ export function useWorkspace(): WorkspaceApi {
     modeRef,
     asrSourceRef,
     lastVoiceSecondsRef,
+    lastAsrMsRef,
     chatAbortRef,
     idleTimerRef,
     traceRef,

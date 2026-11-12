@@ -73,6 +73,8 @@ function holdForUserDecision(
     ...(insertion ? { insertion } : {}),
     d1,
     ...(overrideBlastRadius ? { overrideBlastRadius: true } : {}),
+    runId: traceLocal.id,
+    holdKind: hold.kind,
   })
   traceLocal.hold = hold
   publish()
@@ -267,10 +269,14 @@ export async function verifyAndExecute(
   if (collapse) {
     holdForUserDecision(deps, ctx, delegation, delegationId, directive, call, {
       diff: preview.diff,
+      // Every score d1 returned, not just the first two.
       d1: {
         verdict: check.verdict,
         noul: check.noul,
         destructiveSafety: check.destructiveSafety,
+        intentClarity: check.intentClarity,
+        targetSupport: check.targetSupport,
+        executionConfidence: check.executionConfidence,
         ...(check.reason ? { reason: check.reason } : {}),
       },
       confidence: check.noul,

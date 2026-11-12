@@ -48,6 +48,8 @@ export interface WorkspaceVoiceApi {
   recorderRef: { current: VoiceRecorder | null }
   asrSourceRef: { current: RuntimeSource }
   lastVoiceSecondsRef: { current: number | undefined }
+  /** How long the server took to transcribe the last capture (ms). */
+  lastAsrMsRef: { current: number | undefined }
 }
 
 /**
@@ -78,6 +80,7 @@ export function useWorkspaceVoice({
   const micEndpointRef = useRef<VoiceEndpoint | null>(null)
   const asrSourceRef = useRef<RuntimeSource>('fallback')
   const lastVoiceSecondsRef = useRef<number | undefined>(undefined)
+  const lastAsrMsRef = useRef<number | undefined>(undefined)
 
   /** State + mirror in one step: capture callbacks read the ref, not a render. */
   const setMicToggle = useCallback(
@@ -226,6 +229,7 @@ export function useWorkspaceVoice({
         const transcript = await transcribeAudio(blob, endpoint)
         asrSourceRef.current = 'live'
         lastVoiceSecondsRef.current = Number(seconds.toFixed(1))
+        lastAsrMsRef.current = transcript.ms
         // Awaiting the turn is the hands-free sequencing guarantee:
         // runPipelineTurn resolves only after its finally cleared busyRef, so
         // the re-arm below can never listen underneath a running turn.
@@ -344,5 +348,6 @@ export function useWorkspaceVoice({
     recorderRef,
     asrSourceRef,
     lastVoiceSecondsRef,
+    lastAsrMsRef,
   }
 }

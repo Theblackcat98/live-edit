@@ -202,7 +202,9 @@ export async function runOmniFirstTurn(
     deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
     deps.setStage('executing')
     const delta = turn.action === 'undo' ? -1 : 1
+    const restoreStarted = performance.now()
     const restored = deps.restoreHistory(deps.historyIndexRef.current + delta)
+    traceLocal.timings.execute = Number((performance.now() - restoreStarted).toFixed(1))
     if (!restored.ok) {
       deps.addMessage({
         role: 'assistant',
@@ -222,7 +224,7 @@ export async function runOmniFirstTurn(
       message: restored.message,
       tool: turn.action!,
       note: restored.note,
-      durationMs: 0,
+      durationMs: traceLocal.timings.execute,
       snapshotId: restored.snapshot?.id,
     }
     publish()

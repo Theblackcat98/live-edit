@@ -98,8 +98,12 @@ export async function runPipelineTurn(
     critic: 'skipped',
     chat: 'fallback',
   }
-  if (source === 'voice') runtime.asr = deps.asrSourceRef.current
+  if (source === 'voice') {
+    runtime.asr = deps.asrSourceRef.current
+    if (deps.lastAsrMsRef.current) traceLocal.timings.asr = deps.lastAsrMsRef.current
+  }
   deps.asrSourceRef.current = 'fallback'
+  deps.lastAsrMsRef.current = undefined
   traceLocal.runtime = runtime
 
   const ctx: TurnContext = {

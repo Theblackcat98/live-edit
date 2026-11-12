@@ -263,3 +263,15 @@ describe('adjudication control labels (aria contract)', () => {
     expect(DISCARD_LABEL).toBe('Discard proposed edit')
   })
 })
+
+describe('verdict chip names what actually held the edit', () => {
+  it('does not blame d1 in a mode that has no d1', () => {
+    expect(verdictChip('unavailable', 'no-decision-model').label).toMatch(/No safety check in this mode/)
+  })
+  it('does not blame d1 for a removal-limit hold the gates raised', () => {
+    expect(verdictChip('unavailable', 'blast-radius').label).toMatch(/removal limit/)
+  })
+  it('keeps the d1 wording for a real d1 hold', () => {
+    expect(verdictChip('unavailable', 'd1').label).toMatch(/d1 unavailable/)
+  })
+})

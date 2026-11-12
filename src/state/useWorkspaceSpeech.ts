@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { RuntimeHealth } from '../types'
+import type { RuntimeHealth, Toast } from '../types'
 import { speak, stopSpeaking, cleanSpeechText, speechSynthesisAvailable } from '../lib/speech'
 import { endpointUp, synthesizeSpeech } from '../lib/bridge'
 import type { RunMode } from '../lib/runmode'
@@ -9,6 +9,8 @@ interface SpeechArgs {
   /** Latest run mode: decides whether a model TTS server (or browser voice) speaks. */
   modeRef: { current: RunMode }
   healthRef: { current: RuntimeHealth | null }
+  /** Toasts — a model-voice fallback is announced, never silent. */
+  notify: (title: string, detail?: string, tone?: Toast['tone']) => void
 }
 
 export interface WorkspaceSpeechApi {
@@ -27,7 +29,17 @@ export interface WorkspaceSpeechApi {
  * server speaks its own reply over /tts when it is up; every failure path
  * finishes with the browser voice rather than going silent.
  */
-export function useWorkspaceSpeech({ modeRef, healthRef }: SpeechArgs): WorkspaceSpeechApi {
+export function useWorkspaceSpeech({ modeRef, healthRef, notify }: SpeechArgs): WorkspaceSpeechApi {
+  // Announce a fallback to the browser voice once per cause, not per reply.
+  const announcedFallbackRef = useRef<string | null>(null)
+  const announceFallback = useCallback(
+    (reason: string) => {
+      if (announcedFallbackRef.current === reason) return
+      announcedFallbackRef.current = reason
+      notify('Using the browser voice', `${reason} Replies are read by your browser instead of the model.`, 'neutral')
+    },
+    [notify],
+  )
   const [speaking, setSpeaking] = useState(false)
   const [speakerOn, setSpeakerOn] = useState(false)
   const [ttsBusy, setTtsBusy] = useState(false)
@@ -115,13 +127,19 @@ export function useWorkspaceSpeech({ modeRef, healthRef }: SpeechArgs): Workspac
               if (speechTokenRef.current !== token) return
               setSpeaking(false)
               // Model audio failed mid-playback — finish with the browser voice.
+              announceFallback('The model audio could not play.')
               speakWithBrowserVoice(clean)
             }
             setSpeaking(true)
             await audio.play()
+            // Model voice works again: a later fallback is news worth a toast.
+            announcedFallbackRef.current = null
           } catch (error) {
             if (controller.signal.aborted || speechTokenRef.current !== token) return
-            // TTS request failed — fall back to the browser voice.
+            // TTS request failed — fall back to the browser voice, and say so.
+            announceFallback(
+              `Model speech failed (${error instanceof Error ? error.message : 'no audio'}).`,
+            )
             speakWithBrowserVoice(clean)
           } finally {
             if (speechTokenRef.current === token) setTtsBusy(false)
@@ -130,10 +148,12 @@ export function useWorkspaceSpeech({ modeRef, healthRef }: SpeechArgs): Workspac
         return
       }
 
-      // Fallback: browser speechSynthesis.
+      // Browser speechSynthesis: by design in low-RAM (no speech server);
+      // a fallback, announced, when the mode's speech server is down.
+      if (ttsEndpoint) announceFallback('The speech server is not answering.')
       speakWithBrowserVoice(clean)
     },
-    [healthRef, modeRef],
+    [announceFallback, healthRef, modeRef],
   )
 
   const toggleSpeaker = useCallback(() => {

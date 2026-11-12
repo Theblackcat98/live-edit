@@ -69,6 +69,8 @@ export interface PipelineDeps {
   asrSourceRef: { current: RuntimeSource }
   /** Duration of the last voice capture, recorded on the user message. */
   lastVoiceSecondsRef: { current: number | undefined }
+  /** Server transcription time of the last voice capture; consumed by the next voice turn. */
+  lastAsrMsRef: { current: number | undefined }
   /** In-flight chat stream controller; aborted on barge-in, reassigned per stream. */
   chatAbortRef: { current: AbortController | null }
   /** Idle-stage reset timer; rescheduled when a run finishes. */
@@ -202,7 +204,8 @@ export function createTracePublisher(
         traceLocal.timings.generate +
         traceLocal.timings.critic +
         traceLocal.timings.execute +
-        (traceLocal.timings.chat ?? 0)
+        (traceLocal.timings.chat ?? 0) +
+        (traceLocal.timings.asr ?? 0)
       ).toFixed(1),
     )
     // Output tokens are the sum the model servers reported across every

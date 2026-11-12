@@ -74,6 +74,10 @@ export interface PendingEditInput {
   insertion?: PendingEdit['insertion']
   /** Set on blast-radius holds: approval executes with the cap waived (user override). */
   overrideBlastRadius?: true
+  /** The run that produced the proposal. */
+  runId?: string
+  /** Why the run held it. */
+  holdKind?: PendingEdit['holdKind']
 }
 
 /**
@@ -119,6 +123,8 @@ export function createPendingEdit(input: PendingEditInput): PendingEdit {
     noteHash: input.noteHash,
     ...(input.insertion ? { insertion: input.insertion } : {}),
     ...(input.overrideBlastRadius ? { overrideBlastRadius: true } : {}),
+    ...(input.runId ? { runId: input.runId } : {}),
+    ...(input.holdKind ? { holdKind: input.holdKind } : {}),
     d1: input.d1,
     status: 'pending',
   }
@@ -375,13 +381,34 @@ function parseD1(raw: unknown): PendingEdit['d1'] | null {
   const safety = raw.destructiveSafety
   if (safety !== null && safety !== 'safe' && safety !== 'unintended_data_loss') return null
   if (raw.reason !== undefined && typeof raw.reason !== 'string') return null
+  // The advisory scores survive a reload too (they were dropped here).
+  const optionalScore = (value: unknown) => (value === null || isFiniteNumber(value) ? { ok: true } : null)
+  if (raw.intentClarity !== undefined && !optionalScore(raw.intentClarity)) return null
+  if (raw.executionConfidence !== undefined && !optionalScore(raw.executionConfidence)) return null
+  const target = raw.targetSupport
+  if (target !== undefined && target !== null && target !== 'supported' && target !== 'unsupported') return null
   return {
     verdict: raw.verdict,
     noul: raw.noul,
     destructiveSafety: safety,
+    ...(raw.intentClarity !== undefined ? { intentClarity: raw.intentClarity as number | null } : {}),
+    ...(target !== undefined ? { targetSupport: target as 'supported' | 'unsupported' | null } : {}),
+    ...(raw.executionConfidence !== undefined
+      ? { executionConfidence: raw.executionConfidence as number | null }
+      : {}),
     ...(raw.reason !== undefined ? { reason: raw.reason } : {}),
   }
 }
+
+const HOLD_KINDS: NonNullable<PendingEdit['holdKind']>[] = [
+  'hard-gate',
+  'blast-radius',
+  'blast-collapse',
+  'no-decision-model',
+  'engine',
+  'outcome',
+  'd1',
+]
 
 function parseStoredEdit(raw: unknown): PendingEdit | null {
   if (!isRecord(raw)) return null
@@ -417,6 +444,10 @@ function parseStoredEdit(raw: unknown): PendingEdit | null {
     noteHash,
     ...(insertion ? { insertion } : {}),
     ...(raw.overrideBlastRadius === true ? { overrideBlastRadius: true as const } : {}),
+    ...(typeof raw.runId === 'string' ? { runId: raw.runId } : {}),
+    ...(typeof raw.holdKind === 'string' && HOLD_KINDS.includes(raw.holdKind as never)
+      ? { holdKind: raw.holdKind as PendingEdit['holdKind'] }
+      : {}),
     d1,
     status: 'pending',
   }

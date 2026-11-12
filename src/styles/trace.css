@@ -292,6 +292,14 @@
   background: var(--red-tint);
 }
 
+.trace-banner.is-applied {
+  background: var(--green-tint);
+}
+
+.trace-banner.is-applied .trace-banner-icon {
+  color: var(--green);
+}
+
 .trace-banner-icon {
   display: flex;
   align-items: center;

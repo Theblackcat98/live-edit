@@ -23,6 +23,7 @@ export function HoldSection({ trace }: { trace: Trace }) {
   const hold = trace.hold
   if (!hold) return null
   const held = trace.status === 'pending'
+  const resolved = trace.resolution
   const isD1 = hold.kind === 'd1'
   const title = isD1 && trace.d1Check?.verdict === 'unavailable'
     ? 'Safety check unavailable — held for your decision'
@@ -30,7 +31,13 @@ export function HoldSection({ trace }: { trace: Trace }) {
   const reason = isD1 && trace.d1Check ? humanD1Reason(trace.d1Check) ?? hold.reason : hold.reason
   const Icon = hold.kind === 'blast-radius' || hold.kind === 'blast-collapse' ? Gauge : held ? CircleAlert : X
   return (
-    <div className={cx('trace-banner', held ? 'is-held' : 'is-stopped')} role="status">
+    <div
+      className={cx(
+        'trace-banner',
+        resolved === 'applied' ? 'is-applied' : held || resolved === 'discarded' ? 'is-held' : 'is-stopped',
+      )}
+      role="status"
+    >
       <span className="trace-banner-icon" aria-hidden="true">
         <Icon size={12} />
       </span>
@@ -38,7 +45,15 @@ export function HoldSection({ trace }: { trace: Trace }) {
         <strong>{title}</strong>
         {reason && <p>{reason}</p>}
         <span className="trace-banner-meta">
-          {held ? 'Waiting under Pending edits · note untouched' : 'Note untouched'}
+          {resolved === 'applied'
+            ? 'You approved it — applied to the note'
+            : resolved === 'discarded'
+              ? 'You discarded it — note untouched'
+              : resolved === 'stale'
+                ? 'Went stale before it could apply — note untouched'
+                : held
+                  ? 'Waiting under Pending edits · note untouched'
+                  : 'Note untouched'}
         </span>
       </div>
     </div>

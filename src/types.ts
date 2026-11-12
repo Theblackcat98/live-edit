@@ -119,6 +119,8 @@ export interface TraceTimings {
   total: number
   /** Conversational reply generation (streamed chat), measured end-to-end. */
   chat?: number
+  /** Server transcription of a spoken command, before the turn started. */
+  asr?: number
 }
 
 /**
@@ -216,6 +218,11 @@ export interface Trace {
    * traces; the inspector treats absent as empty.
    */
   exchanges?: TurnExchange[]
+  /**
+   * How the user resolved this run's pending edit, after the fact. The run's
+   * status moves to verified (applied) or rejected (discarded / stale) with it.
+   */
+  resolution?: 'applied' | 'discarded' | 'stale'
   /**
    * Why the turn stopped or was held before execution (hard-gate refusal,
    * blast-radius hold, engine refusal, outcome check, d1 verdict). Absent
@@ -617,4 +624,8 @@ export interface PendingEdit {
    * other pending.
    */
   overrideBlastRadius?: true
+  /** The run that produced this proposal; its trace is updated on adjudication. */
+  runId?: string
+  /** Why the run held it (d1 verdict, blast radius, no decision model in the mode). */
+  holdKind?: TurnHold['kind']
 }

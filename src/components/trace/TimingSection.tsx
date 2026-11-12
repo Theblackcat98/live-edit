@@ -13,6 +13,7 @@ type Stage = { key: string; label: string; ms: number; tone: string }
 export function TimingSection({ trace, chatShort }: { trace: Trace; chatShort: string }) {
   const t = trace.timings
   const stages: Stage[] = [
+    { key: 'asr', label: 'Transcription', ms: t.asr ?? 0, tone: 'green' },
     { key: 'chat', label: `${chatShort} reply`, ms: t.chat ?? 0, tone: 'green' },
     { key: 'route', label: 'Routing', ms: t.route, tone: 'accent' },
     { key: 'generate', label: 'Worker', ms: t.generate, tone: 'orange' },
