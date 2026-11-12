@@ -251,7 +251,7 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectR
                     ? `Download ${rejectedTraces.length} rejected trace record${
                         rejectedTraces.length === 1 ? '' : 's'
                       } as JSONL`
-                    : 'Nothing refused yet this session'
+                    : 'No rejected traces yet — nothing has been refused this session'
                 }
                 onClick={downloadRejected}
               >

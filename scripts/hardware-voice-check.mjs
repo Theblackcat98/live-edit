@@ -706,7 +706,7 @@ async function main() {
 
   // Wait for the runtime health probe so the app knows Omni is live.
   for (let i = 0; i < 60; i += 1) {
-    const live = await app.evalJs(`/Live models 4\\/4/.test(document.querySelector('.statusbar')?.textContent ?? '')`)
+    const live = await app.evalJs(`/Models up (\\d+)\\/\\1\\b/.test(document.querySelector('.statusbar')?.textContent ?? '')`)
     if (live) break
     await sleep(250)
   }
@@ -909,7 +909,7 @@ async function main() {
     await app.seedWorkspace(null)
     await sleep(1000)
     for (let i = 0; i < 60; i += 1) {
-      const live = await app.evalJs(`/Live models 4\\/4/.test(document.querySelector('.statusbar')?.textContent ?? '')`)
+      const live = await app.evalJs(`/Models up (\\d+)\\/\\1\\b/.test(document.querySelector('.statusbar')?.textContent ?? '')`)
       if (live) break
       await sleep(250)
     }

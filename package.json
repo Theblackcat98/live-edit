@@ -11,6 +11,7 @@
     "typecheck": "tsc -b --pretty",
     "qa": "node scripts/qa-suite.mjs",
     "models:manager": "node scripts/model-manager.mjs serve",
+    "e2e:modes": "node scripts/e2e/modes-e2e.mjs",
     "test": "vitest run"
   },
   "dependencies": {
