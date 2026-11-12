@@ -29,6 +29,7 @@ import {
 } from './flow/turnContext'
 import { runOmniFirstTurn } from './flow/omniFlow'
 import { runWorkerChatFirstTurn } from './flow/workerFlow'
+import { isOmniFirstMode } from './modes'
 
 export type { PipelineDeps, RunResultSnapshot } from './flow/turnContext'
 export { buildDictationCall } from './flow/buildCall'
@@ -110,11 +111,10 @@ export async function runPipelineTurn(
 
   try {
     // Captured once at turn start: a mode switch mid-turn must never swap the
-    // models under an in-flight turn. `audio` and `omni` share the
-    // runOmniTurn front door (the chat default selects the member); the
-    // worker-chat modes route below.
+    // models under an in-flight turn. The registry row owns which flow runs
+    // the turn — `flow` is the dispatch value, never a hardcoded mode list.
     const mode = deps.modeRef.current
-    if (mode === 'omni' || mode === 'audio') {
+    if (isOmniFirstMode(mode)) {
       await runOmniFirstTurn(deps, ctx, mode)
       return
     }

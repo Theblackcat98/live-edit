@@ -8,7 +8,7 @@
 
 import type { OmniTurnResult } from '../../types'
 import { endpointUp } from '../bridge'
-import { chatModelName } from '../runmode'
+import { modeDef } from '../modes'
 import { runOmniTurn } from '../omni'
 import { createStreamBubble } from './bubble'
 import { buildDictationCall, buildEffectiveDirective, buildPacketCall } from './buildCall'
@@ -34,11 +34,15 @@ export async function runOmniFirstTurn(
   mode: 'audio' | 'omni',
 ): Promise<void> {
   const { command, noteAtStart, traceLocal, runtime, liveUsage, publish, finish } = ctx
-  // The model actually answering chat this turn — the reply author label and
-  // the front-door endpoint both follow the captured mode, never a hardcoded
-  // model (legacy `omni` really is served by LFM3-Omni-2B :8083).
-  const chatAuthor = chatModelName(mode)
-  const chatEndpoint = mode === 'omni' ? 'omni' : 'audio'
+  // The registry row names the model actually answering chat in this mode —
+  // the reply author label and the front-door endpoint both follow it, never
+  // a hardcoded model (legacy `omni` really is served by LFM3-Omni-2B :8083).
+  const def = modeDef(mode)
+  const chatAuthor = def.chat.author
+  const chatEndpoint = def.chat.endpoint
+  if (chatEndpoint === 'text') {
+    throw new Error(`Mode ${mode} has no front-door chat endpoint.`)
+  }
   traceLocal.runMode = mode
   deps.setFlowModel('omni')
   deps.setStage('routing')
@@ -237,7 +241,9 @@ export async function runOmniFirstTurn(
     traceLocal.call = call
     traceLocal.workerNoteView = call.noteView
     publish()
-    await verifyAndExecute(deps, ctx, effectiveDirective, call)
+    await verifyAndExecute(deps, ctx, effectiveDirective, call, {
+      d1Check: def.decide === 'd1',
+    })
     return
   }
 
@@ -284,6 +290,8 @@ export async function runOmniFirstTurn(
   if (scaffoldNote) {
     call.promptHints.push(scaffoldNote)
   }
-  await verifyAndExecute(deps, ctx, effectiveDirective, call)
+  await verifyAndExecute(deps, ctx, effectiveDirective, call, {
+    d1Check: def.decide === 'd1',
+  })
 }
 

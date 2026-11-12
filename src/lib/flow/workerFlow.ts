@@ -7,7 +7,7 @@
 
 import type { Directive, ToolName, WorkerCall } from '../../types'
 import { endpointUp } from '../bridge'
-import { chatModelName, type RunMode } from '../runmode'
+import { modeDef } from '../modes'
 import { numberNoteLines, renderToolCallXml } from '../worker'
 import { runWorkerChatTurn, WORKER_CHAT_SAMPLER, type WorkerChatTurnResult } from '../workerChat'
 import type { ParsedToolCall } from '../xml'
@@ -67,11 +67,13 @@ function workerChatCall(
 export async function runWorkerChatFirstTurn(
   deps: PipelineDeps,
   ctx: TurnContext,
-  mode: Exclude<RunMode, 'omni'>,
+  mode: 'worker-d1' | 'lowram',
 ): Promise<void> {
   const { command, noteAtStart, traceLocal, runtime, liveUsage, publish, finish } = ctx
-  // The reply author follows the captured mode, never a hardcoded label.
-  const chatAuthor = chatModelName(mode)
+  // The registry row names the reply author and the decision policy, never a
+  // hardcoded label or a mode comparison.
+  const def = modeDef(mode)
+  const chatAuthor = def.chat.author
   traceLocal.runMode = mode
   deps.setFlowModel('worker')
   deps.setStage('routing')
@@ -231,7 +233,7 @@ export async function runWorkerChatFirstTurn(
   // the user's decision — with no decision model running, nothing may
   // execute silently.
   await verifyAndExecute(deps, ctx, directive, call, {
-    d1Check: mode === 'worker-d1',
+    d1Check: def.decide === 'd1',
     snapshotLabel: '1.7B tool call',
     flowLabel: 'worker-chat run mode',
   })
