@@ -3,8 +3,6 @@ import type { ToolDefinition, ToolName } from '../types'
 export const TOOL_DEFS: ToolDefinition[] = [
   {
     name: 'add_text',
-    description:
-      'Insert new text or Markdown at a precise position: append, prepend, after a line, or under a heading.',
     params: [
       { name: 'file_path', type: 'string', required: true, description: 'Target note path.' },
       {
@@ -24,8 +22,6 @@ export const TOOL_DEFS: ToolDefinition[] = [
   },
   {
     name: 'edit_text',
-    description:
-      'Replace a grounded line span with updated text. The old anchor must match the current note.',
     params: [
       { name: 'file_path', type: 'string', required: true, description: 'Target note path.' },
       { name: 'start_line', type: 'integer', required: true, description: '1-based first line.' },
@@ -41,8 +37,6 @@ export const TOOL_DEFS: ToolDefinition[] = [
   },
   {
     name: 'remove_text',
-    description:
-      'Delete a grounded line span, bullet, row or section after the critic verifies the target.',
     params: [
       { name: 'file_path', type: 'string', required: true, description: 'Target note path.' },
       { name: 'start_line', type: 'integer', required: true, description: '1-based first line.' },

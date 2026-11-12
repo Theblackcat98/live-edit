@@ -46,7 +46,6 @@ export interface ToolParam {
 
 export interface ToolDefinition {
   name: ToolName
-  description: string
   params: ToolParam[]
 }
 
