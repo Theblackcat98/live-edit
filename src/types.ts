@@ -343,7 +343,7 @@ export interface Message {
   at: number
   /** Who authored an assistant bubble: the chat model's name for model text, 'harness' for pipeline templates. Absent only on legacy persisted messages. */
   author?: string
-  kind?: 'greeting' | 'ack' | 'result' | 'clarify' | 'error' | 'notice'
+  kind?: 'greeting' | 'result' | 'error' | 'notice'
   source?: 'voice' | 'text' | 'demo'
   durationSec?: number
   runId?: string

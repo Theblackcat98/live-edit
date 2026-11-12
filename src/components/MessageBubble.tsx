@@ -68,8 +68,6 @@ export function MessageBubble({ message, onAction, onOpenTrace, recent }: Messag
       <div className="message-assistant-content">
         <div className="message-assistant-meta">
           <span className="message-author">{message.author ?? 'Assistant'}</span>
-          {message.kind === 'ack' && <span className="message-tag mono">delegating</span>}
-          {message.kind === 'clarify' && <span className="message-tag mono">clarify</span>}
           {message.kind === 'error' && (
             <span className="message-tag message-tag-error mono">guardrail</span>
           )}

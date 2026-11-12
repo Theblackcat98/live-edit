@@ -220,10 +220,7 @@ function makeTrace(command: string, source: 'text' | 'voice' | 'demo', note: str
 
 /**
  * Recent (user command, assistant reply) pairs replayed as chat turns.
- * `reply` is absent when the workspace answered with a pipeline template
- * (clarify/ack): that canned wording is not conversation, and a small model
- * imitates it verbatim on later turns instead of answering, so only the
- * command is replayed for those turns.
+ * A turn with no visible assistant reply contributes only its command.
  */
 interface ChatTurn {
   command: string
@@ -233,8 +230,6 @@ interface ChatTurn {
 /** How many prior turns the conversational model sees. */
 const CHAT_MEMORY_TURNS = 6
 
-/** Workspace-authored replies that are pipeline templates, not conversation. */
-const TEMPLATE_REPLY_KINDS: Array<NonNullable<Message['kind']>> = ['clarify', 'ack', 'greeting']
 /**
  * Pair each user message with the last assistant reply before the next user
  * message. A trailing user turn (the command being submitted) has no reply yet
@@ -251,10 +246,9 @@ function conversationTurns(messages: Message[], limit: number): ChatTurn[] {
       if (candidate.role === 'user') break
       if (candidate.role === 'assistant' && candidate.text.trim()) reply = candidate
     }
-    const templated = reply?.kind ? TEMPLATE_REPLY_KINDS.includes(reply.kind) : false
     turns.push({
       command: message.text,
-      reply: reply && !templated ? reply.text : undefined,
+      reply: reply?.text,
     })
   }
   return turns.slice(-limit)
