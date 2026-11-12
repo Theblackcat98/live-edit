@@ -42,6 +42,7 @@ import { checkExecutionOutcome } from './executionCheck'
 import type { ParsedToolCall } from './xml'
 import { runOmniTurn } from './omni'
 import { runWorkerChatTurn, WORKER_CHAT_SAMPLER, type WorkerChatTurnResult } from './workerChat'
+import { chatTurnFromOmni, chatTurnFromWorker } from './flow/chatTurn'
 import { chatModelName } from './runmode'
 import type { RunMode } from './runmode'
 import { buildD1State, noteHash } from './context'
@@ -266,9 +267,9 @@ async function runOmniFirstTurn(
     runId: traceLocal.id,
   })
 
-  let omni: OmniTurnResult | null
+  let raw: OmniTurnResult | null
   try {
-    omni = await runOmniTurn({
+    raw = await runOmniTurn({
       command,
       source: traceLocal.source,
       history: priorHistory,
@@ -284,50 +285,51 @@ async function runOmniFirstTurn(
       `Omni turn failed: ${error instanceof Error ? error.message : 'unknown error'}`,
     )
   }
-  if (!omni) {
+  if (!raw) {
     retractStream()
     finish('failed')
     return
   }
+  const turn = chatTurnFromOmni(raw)
   runtime.chat = 'live'
   runtime.route = 'live'
-  if (omni.repair) traceLocal.omniRepair = omni.repair
-  traceLocal.timings.route = omni.ms
-  if (omni.promptTokens) {
-    traceLocal.promptTokens = omni.promptTokens
-    liveUsage.omni = omni.promptTokens
+  if (turn.repair) traceLocal.omniRepair = turn.repair
+  traceLocal.timings.route = turn.ms
+  if (turn.promptTokens) {
+    traceLocal.promptTokens = turn.promptTokens
+    liveUsage.omni = turn.promptTokens
   }
   publish()
 
-  if (omni.outcome === 'answer' || omni.outcome === 'clarify') {
-    const text = omni.text ?? ''
-    traceLocal.timings.chat = omni.ms
+  if (turn.outcome === 'answer' || turn.outcome === 'clarify') {
+    const text = turn.text ?? ''
+    traceLocal.timings.chat = turn.ms
     deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
     // No silent failures: a clarify that exists because the delegation
-    // failed validation twice (omni.repair is set only on that path) must
+    // failed validation twice (turn.repair is set only on that path) must
     // SAY the edit failed — a bare clarifying question would read as if
     // nothing went wrong and the note was simply not discussed.
-    if (omni.outcome === 'clarify' && omni.repair) {
+    if (turn.outcome === 'clarify' && turn.repair) {
       deps.addMessage({
         role: 'assistant',
         author: 'harness',
         kind: 'notice',
-        text: `That edit didn't go through — the delegation instruction failed validation (${omni.repair.error}). Nothing was changed. The question below is how to retry it.`,
+        text: `That edit didn't go through — the delegation instruction failed validation (${turn.repair.error}). Nothing was changed. The question below is how to retry it.`,
         runId: traceLocal.id,
       })
-      deps.notify('Edit failed validation', omni.repair.error, 'error')
+      deps.notify('Edit failed validation', turn.repair.error, 'error')
     }
     settleStream(text)
     deps.speakReply(text)
-    finish(omni.outcome === 'answer' ? 'conversational' : 'clarify')
+    finish(turn.outcome === 'answer' ? 'conversational' : 'clarify')
     return
   }
 
-  if (omni.outcome === 'action') {
+  if (turn.outcome === 'action') {
     retractStream()
     deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
     deps.setStage('executing')
-    const delta = omni.action === 'undo' ? -1 : 1
+    const delta = turn.action === 'undo' ? -1 : 1
     const restored = deps.restoreHistory(deps.historyIndexRef.current + delta)
     if (!restored.ok) {
       deps.addMessage({
@@ -335,7 +337,7 @@ async function runOmniFirstTurn(
         author: 'harness',
         kind: 'result',
         text:
-          omni.action === 'undo'
+          turn.action === 'undo'
             ? 'There is nothing to undo yet — the note is at its first snapshot.'
             : 'There is nothing to redo. The note is already at the latest snapshot.',
         runId: traceLocal.id,
@@ -346,14 +348,14 @@ async function runOmniFirstTurn(
     traceLocal.execution = {
       ok: true,
       message: restored.message,
-      tool: omni.action!,
+      tool: turn.action!,
       note: restored.note,
       durationMs: 0,
       snapshotId: restored.snapshot?.id,
     }
     publish()
     const confirmation =
-      omni.action === 'undo'
+      turn.action === 'undo'
         ? `Reverted to “${restored.snapshot?.label}”.`
         : `Reapplied “${restored.snapshot?.label}”.`
     deps.addMessage({ role: 'assistant', author: 'harness', kind: 'result', text: confirmation, runId: traceLocal.id })
@@ -363,7 +365,7 @@ async function runOmniFirstTurn(
   }
 
   // --- delegate: worker authors + grounds from the §6 packet ---------------
-  const directive = omni.directive
+  const directive = turn.directive
   if (!directive) {
     retractStream()
     throw new Error(`${chatAuthor} delegated without a directive.`)
@@ -543,9 +545,9 @@ async function runWorkerChatFirstTurn(
 
   const controller = new AbortController()
   deps.chatAbortRef.current = controller
-  let turn: WorkerChatTurnResult
+  let raw: WorkerChatTurnResult
   try {
-    turn = await runWorkerChatTurn({
+    raw = await runWorkerChatTurn({
       command,
       history: priorHistory,
       note: noteAtStart,
@@ -556,9 +558,9 @@ async function runWorkerChatFirstTurn(
     })
     // One retry on an unusable reply: the rejected text and the exact parse
     // error are appended (the packet-worker retry pattern), never a guess.
-    if (turn.outcome === 'invalid') {
-      const rejected = turn
-      turn = await runWorkerChatTurn({
+    if (raw.outcome === 'invalid') {
+      const rejected = raw
+      raw = await runWorkerChatTurn({
         command,
         history: priorHistory,
         note: noteAtStart,
@@ -593,17 +595,18 @@ async function runWorkerChatFirstTurn(
 
   // The chat turn is served by the 1.7B itself; routing was the deterministic
   // undo/redo pre-check above, so no model route call is claimed.
+  const turn = chatTurnFromWorker(raw)
   runtime.chat = 'live'
   runtime.route = 'fallback'
-  traceLocal.timings.chat = turn.ms
-  if (turn.promptTokens) {
-    traceLocal.promptTokens = turn.promptTokens
-    liveUsage.worker = turn.promptTokens
+  traceLocal.timings.chat = raw.ms
+  if (raw.promptTokens) {
+    traceLocal.promptTokens = raw.promptTokens
+    liveUsage.worker = raw.promptTokens
   }
-  if (turn.outputTokens) traceLocal.outputTokens = turn.outputTokens
+  if (raw.outputTokens) traceLocal.outputTokens = raw.outputTokens
   publish()
 
-  if (turn.outcome === 'answer') {
+  if (turn?.outcome === 'answer') {
     const text = turn.text ?? ''
     deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
     settleStream(text)
@@ -612,7 +615,7 @@ async function runWorkerChatFirstTurn(
     return
   }
 
-  if (turn.outcome === 'invalid' || !turn.call) {
+  if (!turn || !turn.call) {
     retractStream()
     deps.setStageStates({ A: 'done', B: 'skipped', C: 'skipped' })
     deps.addMessage({
@@ -620,11 +623,11 @@ async function runWorkerChatFirstTurn(
       kind: 'error',
       author: 'harness',
       text: `The 1.7B could not produce a usable reply after one retry (${
-        turn.error ?? 'no parseable tool call and no visible text'
+        raw.error ?? 'no parseable tool call and no visible text'
       }). Nothing was written to the note, and no fallback content was substituted.`,
       runId: traceLocal.id,
     })
-    deps.notify('Chat reply invalid', turn.error ?? 'No usable reply.', 'error')
+    deps.notify('Chat reply invalid', raw.error ?? 'No usable reply.', 'error')
     finish('failed')
     return
   }
