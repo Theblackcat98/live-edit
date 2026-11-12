@@ -12,6 +12,7 @@ import { ToastView } from './components/ToastView'
 import { AboutDialog } from './components/AboutDialog'
 import { ModelSwitchDialog } from './components/ModelSwitchDialog'
 import { cx } from './lib/utils'
+import { useTheme } from './state/useTheme'
 
 type PhoneView = 'session' | 'note' | 'runtime'
 
@@ -42,6 +43,7 @@ function usePhoneLayout(): boolean {
 
 export default function App() {
   const workspace = useWorkspace()
+  const { theme, cycleTheme } = useTheme()
   const workspaceRef = useRef(workspace)
   const [aboutOpen, setAboutOpen] = useState(false)
   const [phoneView, setPhoneView] = useState<PhoneView>('session')
@@ -135,6 +137,8 @@ export default function App() {
         onToggleMic={workspace.toggleMic}
         onOpenTrace={() => handleOpenTrace()}
         onOpenHelp={() => setAboutOpen(true)}
+        theme={theme}
+        onCycleTheme={cycleTheme}
       />
 
       <main className="workspace-grid">

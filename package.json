@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.9.0",
   "type": "module",
-  "description": "Local-first multimodal note workspace driven by the LFM3 model trinity.",
+  "description": "Local-first, voice-first note workspace driven by local LFM3 models.",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",

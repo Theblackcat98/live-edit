@@ -4,9 +4,13 @@ import {
   CloudOff,
   Mic,
   MicOff,
+  Monitor,
+  Moon,
+  Sun,
   Volume2,
   VolumeX,
 } from 'lucide-react'
+import type { ThemePreference } from '../lib/theme'
 import { LogoMark } from './LogoMark'
 import { ModeSwitch } from './ModeSwitch'
 import { rosterMemoryGB } from '../data/models'
@@ -28,6 +32,15 @@ interface TopBarProps {
   onToggleMic: () => void
   onOpenTrace: () => void
   onOpenHelp: () => void
+  /** Colour theme preference and the control that cycles it. */
+  theme: ThemePreference
+  onCycleTheme: () => void
+}
+
+const THEME_LABEL: Record<ThemePreference, string> = {
+  system: 'Theme: match system',
+  light: 'Theme: light',
+  dark: 'Theme: dark',
 }
 
 export function TopBar({
@@ -43,7 +56,10 @@ export function TopBar({
   onToggleMic,
   onOpenTrace,
   onOpenHelp,
+  theme,
+  onCycleTheme,
 }: TopBarProps) {
+  const ThemeIcon = theme === 'dark' ? Moon : theme === 'light' ? Sun : Monitor
   const roster = modeDef(mode).roster
   const memory = rosterMemoryGB(roster).toFixed(1)
   return (
@@ -144,6 +160,15 @@ export function TopBar({
           title="Open decision trace"
         >
           <Braces size={15} />
+        </button>
+        <button
+          type="button"
+          className="icon-button"
+          onClick={onCycleTheme}
+          aria-label={`${THEME_LABEL[theme]} — click to change`}
+          title={`${THEME_LABEL[theme]} — click to change`}
+        >
+          <ThemeIcon size={15} />
         </button>
         <button
           type="button"

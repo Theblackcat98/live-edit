@@ -13,7 +13,7 @@
 .about-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(23, 24, 26, 0.28);
+  background: var(--backdrop);
   backdrop-filter: blur(3px);
   animation: fade-in 160ms var(--ease-out-strong) both;
 }
@@ -77,10 +77,10 @@
   display: flex;
   gap: 9px;
   margin-top: 12px;
-  padding: 9px 11px;
-  border-left: 2px solid var(--orange);
-  border-radius: 0 var(--radius-chip) var(--radius-chip) 0;
-  background: var(--orange-tint);
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+  background: var(--inset);
+  box-shadow: 0 0 0 1px var(--line);
 }
 
 .about-callout-icon {

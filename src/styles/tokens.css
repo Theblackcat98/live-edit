@@ -32,6 +32,24 @@
   --tooltip-muted: #a5a8ad;
   --tooltip-border: #3a3c40;
 
+  /* Primary (ink-filled) button hover */
+  --ink-hover: #25272b;
+  /* Modal/drawer scrim */
+  --backdrop: rgba(23, 24, 26, 0.26);
+  /* Code panes (tool-call XML) — dark in both themes */
+  --code-bg: #25272b;
+  --code-fg: #f6f7f8;
+  --code-muted: #a5a8ad;
+  --code-border: #3a3c40;
+  --code-hover: rgba(255, 255, 255, 0.04);
+  --code-tag: #7ec0ff;
+  --code-param: #3cbb72;
+  /* Waveform canvas (read by Waveform.tsx) */
+  --wave-accent: #3d9aff;
+  --wave-muted: #a5a8ad;
+
+  color-scheme: light;
+
   /* Radii */
   --radius-chip: 6px;
   --radius-control: 8px;
@@ -75,6 +93,106 @@
   --left-column: 404px;
   --right-column: 304px;
   --gap: 12px;
+}
+
+/* Dark theme — follows the OS unless the user picked Light in the top bar;
+   the explicit [data-theme='dark'] choice wins regardless of the OS. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --page: #0e0f11;
+    --canvas: #131416;
+    --surface: #17181b;
+    --inset: #1d1f22;
+    --hover: #222428;
+    --hover-2: #2b2e33;
+    --field: #212327;
+    --ink: #ececee;
+    --ink-2: #a6a9af;
+    --ink-3: #72767d;
+    --line: #2a2c31;
+    --line-strong: #363940;
+    --line-soft: #212327;
+    --grid-line: color-mix(in srgb, var(--line) 70%, transparent);
+    --stripe: oklch(1 0 0 / 0.06);
+    --stripe-bg: #1a1b1e;
+
+    --accent: #3d9aff;
+    --accent-ink: #74b6ff;
+    --accent-tint: #142740;
+    --green: #3fc07a;
+    --green-tint: #13291d;
+    --orange: #f2913f;
+    --orange-tint: #2f2013;
+    --red: #f06a6e;
+    --red-tint: #33191b;
+
+    --tooltip-bg: #2b2d32;
+    --tooltip-fg: #f6f7f8;
+    --tooltip-muted: #a5a8ad;
+    --tooltip-border: #3d4046;
+
+    --ink-hover: #ffffff;
+    --backdrop: rgba(0, 0, 0, 0.55);
+    --code-bg: #101113;
+    --code-border: #2a2c31;
+
+    --shadow-xs: 0 0 4px 0 rgba(0, 0, 0, 0.3);
+    --shadow-sm: 0 8px 24px 0 rgba(0, 0, 0, 0.28), 0 2px 6px 0 rgba(0, 0, 0, 0.24);
+    --shadow-md: 0 12px 28px 0 rgba(0, 0, 0, 0.36), 0 3px 8px 0 rgba(0, 0, 0, 0.28);
+    --shadow-lg: 0 24px 48px 0 rgba(0, 0, 0, 0.45), 0 6px 14px 0 rgba(0, 0, 0, 0.32);
+    --shadow-xl: 0 40px 80px 0 rgba(0, 0, 0, 0.5), 0 10px 20px 0 rgba(0, 0, 0, 0.36);
+    --shadow-inset-field: inset 0 1px 2px rgba(0, 0, 0, 0.4);
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --page: #0e0f11;
+  --canvas: #131416;
+  --surface: #17181b;
+  --inset: #1d1f22;
+  --hover: #222428;
+  --hover-2: #2b2e33;
+  --field: #212327;
+  --ink: #ececee;
+  --ink-2: #a6a9af;
+  --ink-3: #72767d;
+  --line: #2a2c31;
+  --line-strong: #363940;
+  --line-soft: #212327;
+  --grid-line: color-mix(in srgb, var(--line) 70%, transparent);
+  --stripe: oklch(1 0 0 / 0.06);
+  --stripe-bg: #1a1b1e;
+
+  --accent: #3d9aff;
+  --accent-ink: #74b6ff;
+  --accent-tint: #142740;
+  --green: #3fc07a;
+  --green-tint: #13291d;
+  --orange: #f2913f;
+  --orange-tint: #2f2013;
+  --red: #f06a6e;
+  --red-tint: #33191b;
+
+  --tooltip-bg: #2b2d32;
+  --tooltip-fg: #f6f7f8;
+  --tooltip-muted: #a5a8ad;
+  --tooltip-border: #3d4046;
+
+  --ink-hover: #ffffff;
+  --backdrop: rgba(0, 0, 0, 0.55);
+  --code-bg: #101113;
+  --code-border: #2a2c31;
+
+  --shadow-xs: 0 0 4px 0 rgba(0, 0, 0, 0.3);
+  --shadow-sm: 0 8px 24px 0 rgba(0, 0, 0, 0.28), 0 2px 6px 0 rgba(0, 0, 0, 0.24);
+  --shadow-md: 0 12px 28px 0 rgba(0, 0, 0, 0.36), 0 3px 8px 0 rgba(0, 0, 0, 0.28);
+  --shadow-lg: 0 24px 48px 0 rgba(0, 0, 0, 0.45), 0 6px 14px 0 rgba(0, 0, 0, 0.32);
+  --shadow-xl: 0 40px 80px 0 rgba(0, 0, 0, 0.5), 0 10px 20px 0 rgba(0, 0, 0, 0.36);
+  --shadow-inset-field: inset 0 1px 2px rgba(0, 0, 0, 0.4);
+
+  color-scheme: dark;
 }
 
 *,
@@ -354,7 +472,7 @@ a {
 }
 
 .button-primary:hover {
-  background: var(--tooltip-bg);
+  background: var(--ink-hover);
 }
 
 .button-quiet {

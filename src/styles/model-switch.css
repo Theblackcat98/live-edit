@@ -13,7 +13,7 @@
 .model-switch-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(23, 24, 26, 0.28);
+  background: var(--backdrop);
   backdrop-filter: blur(3px);
   animation: fade-in 160ms var(--ease-out-strong) both;
 }
@@ -103,7 +103,7 @@
   margin-top: 10px;
   padding: 8px 10px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-card);
   cursor: pointer;
   font-size: 10.5px;
   line-height: 1.45;

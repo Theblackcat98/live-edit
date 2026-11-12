@@ -285,7 +285,6 @@
 .doc-block.is-target,
 .doc-table-row.is-target {
   background: var(--accent-tint);
-  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .doc-block.is-target .doc-line-no,
@@ -296,7 +295,6 @@
 .doc-block.is-diff,
 .doc-table-row.is-diff {
   background: color-mix(in srgb, var(--green-tint) 82%, var(--surface));
-  box-shadow: inset 2px 0 0 var(--green);
   animation: diff-flash 280ms var(--ease-out-strong);
 }
 
@@ -330,10 +328,6 @@
 .doc-block.proposed-diff .doc-line-no,
 .doc-table-row.proposed-diff .doc-line-no {
   color: var(--accent-ink);
-}
-
-.doc-table-row.proposed-diff .doc-table-cell:first-of-type {
-  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
 }
 
 .doc-table-row.proposed-diff .doc-table-cell {
@@ -481,10 +475,8 @@
 
 .doc-quote blockquote {
   margin: 0;
-  padding: 8px 11px;
-  border-left: 2px solid var(--accent);
-  border-radius: 0 var(--radius-chip) var(--radius-chip) 0;
-  background: var(--accent-tint);
+  padding: 2px 0 2px 14px;
+  border-left: 2px solid var(--line-strong);
   color: var(--ink-2);
   font-size: 12.5px;
   line-height: 1.58;
@@ -633,16 +625,8 @@
   padding-bottom: 6px;
 }
 
-.doc-table-row.is-target .doc-table-cell:first-of-type {
-  box-shadow: inset 2px 0 0 var(--accent);
-}
-
 .doc-table-row.is-target .doc-table-cell {
   color: var(--accent-ink);
-}
-
-.doc-table-row.is-diff .doc-table-cell:first-of-type {
-  box-shadow: inset 2px 0 0 var(--green);
 }
 
 /* Code & math */

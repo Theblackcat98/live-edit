@@ -171,7 +171,7 @@ export function SessionPanel({
       <header className="card-header session-header">
         <div className="card-title">
           <span className={cx('status-dot', busy ? 'is-accent is-pulsing' : 'is-green')} />
-          Live session
+          Session
         </div>
         <span className="session-clock mono">{formatElapsed(elapsedSeconds)}</span>
         <div className="card-header-spacer" />
