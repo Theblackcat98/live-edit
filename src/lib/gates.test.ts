@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import type { SpanTarget, WorkerCall } from '../types'
+import type { WorkerCall } from '../types'
 import { INITIAL_NOTE } from '../data/note'
-import { lineRangeExcerpt, splitLines } from './doc'
+import { splitLines } from './doc'
 import { checkAnchor, checkBlastRadius, checkBounds, checkSchema, runHardGates } from './gates'
 import { executeTool } from './tools'
 import { renderToolCallXml } from './worker'
@@ -19,16 +19,6 @@ function makeCall(name: WorkerCall['name'], params: Record<string, string>): Wor
     promptHints: [],
     toolSchemasInjected: 0,
     noteView: '',
-  }
-}
-
-function spanAt(note: string, startLine: number, endLine: number): SpanTarget {
-  return {
-    startLine,
-    endLine,
-    excerpt: lineRangeExcerpt(note, startLine, endLine),
-    confidence: 0.95,
-    reason: 'test span',
   }
 }
 
@@ -166,7 +156,7 @@ describe('checkBounds', () => {
   })
 })
 
-// --- anchor gate (span-override semantics, audit TD-01) --------------------------
+// --- anchor gate (note-line exactness) -------------------------------------------
 
 describe('checkAnchor', () => {
   const anchored = makeCall('edit_text', {
@@ -205,29 +195,24 @@ describe('checkAnchor', () => {
     expect(checkAnchor(INITIAL_NOTE, drifted)).toEqual({
       gate: 'anchor_exact',
       pass: false,
-      detail: 'Anchor drifted from the grounded span.',
+      detail: 'Anchor drifted from the note lines at the stated range.',
     })
   })
 
-  it('span override: an anchor equal to the span excerpt passes even when the call range disagrees with the note', () => {
-    // The supervisor's span covers the whole Risks block; the call names a
-    // narrower range whose own text is NOT the anchor. Today's critic accepts
-    // this because the anchor is validated against the SUPERVISOR'S span.
-    const span = spanAt(INITIAL_NOTE, 28, 32)
+  it('rejects an anchor copied from a different range (no span override exists)', () => {
+    const elsewhere = excerptOf(INITIAL_NOTE, 28, 32)
     const narrow = makeCall('edit_text', {
       file_path: 'notes/quarterly-review.md',
       start_line: '30',
       end_line: '30',
-      old_text_anchor: span.excerpt,
+      old_text_anchor: elsewhere,
       new_text: excerptOf(INITIAL_NOTE, 28, 32),
     })
-    expect(checkAnchor(INITIAL_NOTE, narrow, span.excerpt)).toEqual({
+    expect(checkAnchor(INITIAL_NOTE, narrow)).toEqual({
       gate: 'anchor_exact',
-      pass: true,
-      detail: 'old_text_anchor matches the grounded span exactly.',
+      pass: false,
+      detail: 'Anchor drifted from the note lines at the stated range.',
     })
-    // Without the override, the same call fails against the note's own line.
-    expect(checkAnchor(INITIAL_NOTE, narrow)?.pass).toBe(false)
   })
 
   it('does not apply to tools without a range anchor', () => {
@@ -295,7 +280,7 @@ describe('runHardGates', () => {
       end_line: '25',
       target_excerpt: '- Redis cache migration was postponed to Q4.',
     })
-    const result = runHardGates(INITIAL_NOTE, call, spanAt(INITIAL_NOTE, 25, 25))
+    const result = runHardGates(INITIAL_NOTE, call)
     expect(result).toEqual({ pass: true, failures: [] })
   })
 
@@ -338,18 +323,16 @@ describe('runHardGates', () => {
     expect(execution.note).toBe(INITIAL_NOTE)
   })
 
-  it('forwards the span as the anchor source (TD-01): range-disagreeing anchor passes with the span, fails without', () => {
-    const span = spanAt(INITIAL_NOTE, 28, 32)
+  it('fails a range-disagreeing anchor at composition, not just at the gate', () => {
     const narrow = makeCall('edit_text', {
       file_path: 'notes/quarterly-review.md',
       start_line: '30',
       end_line: '30',
-      old_text_anchor: span.excerpt,
+      old_text_anchor: excerptOf(INITIAL_NOTE, 28, 32),
       new_text: excerptOf(INITIAL_NOTE, 28, 32),
     })
-    expect(runHardGates(INITIAL_NOTE, narrow, span).pass).toBe(true)
     expect(runHardGates(INITIAL_NOTE, narrow).failures).toEqual([
-      { gate: 'anchor_exact', detail: 'Anchor drifted from the grounded span.' },
+      { gate: 'anchor_exact', detail: 'Anchor drifted from the note lines at the stated range.' },
     ])
   })
 

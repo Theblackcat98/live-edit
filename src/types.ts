@@ -75,16 +75,6 @@ export interface RouteDecision {
   directive?: 'undo' | 'redo'
 }
 
-export interface SpanTarget {
-  startLine: number
-  endLine: number
-  excerpt: string
-  /** Heuristic (deterministic search) or d1-measured; null when d1 chose without reporting one. */
-  confidence: Probability
-  reason: string
-  phrase?: string
-}
-
 /**
  * Which path resolved the target span: d1-Omni's typed span question over
  * /v1/systemone (`d1-span`), or the deterministic supervisor search
@@ -254,7 +244,6 @@ export interface Trace {
   /** Omni's typed delegation directive (P2+; absent on legacy/supervisor-first traces). */
   directive?: Directive
   route?: RouteDecision
-  span?: SpanTarget
   /** How the span was resolved (d1 typed question vs deterministic search). */
   grounding?: GroundingRecord
   call?: WorkerCall

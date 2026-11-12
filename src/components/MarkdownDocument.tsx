@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import type { ReactNode } from 'react'
 import katex from 'katex'
-import type { ExecutionDiff, SpanTarget } from '../types'
+import type { ExecutionDiff } from '../types'
 import {
   blockIntersects,
   parseMarkdown,
@@ -12,7 +12,6 @@ import { cx } from '../lib/utils'
 
 interface MarkdownDocumentProps {
   note: string
-  span: SpanTarget | null
   diff: ExecutionDiff | null
 }
 
@@ -106,34 +105,13 @@ function ListItemContent({ text }: { text: string }) {
   )
 }
 
-export function MarkdownDocument({ note, span, diff }: MarkdownDocumentProps) {
+export function MarkdownDocument({ note, diff }: MarkdownDocumentProps) {
   const blocks = useMemo(() => parseMarkdown(note), [note])
   const paperRef = useRef<HTMLDivElement | null>(null)
   const lineCount = useMemo(() => splitLines(note).length, [note])
   const diffRange = diff && diff.after.length > 0
     ? { start: diff.startLine, end: diff.startLine + diff.after.length - 1 }
     : null
-
-  useEffect(() => {
-    if (!span) return
-    const timer = window.setTimeout(() => {
-      const paper = paperRef.current
-      if (!paper) return
-      const rows = Array.from(paper.querySelectorAll<HTMLElement>('[data-line]'))
-      let target = rows.find(
-        (row) => Number(row.dataset.line) === span.startLine,
-      )
-      if (!target) {
-        target = rows.find((row) => {
-          const start = Number(row.dataset.line)
-          const end = Number(row.dataset.endLine ?? row.dataset.line)
-          return span.startLine >= start && span.startLine <= end
-        })
-      }
-      target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    }, 80)
-    return () => window.clearTimeout(timer)
-  }, [span?.startLine, span?.endLine, span])
 
   useEffect(() => {
     if (!diff) return
@@ -148,8 +126,6 @@ export function MarkdownDocument({ note, span, diff }: MarkdownDocumentProps) {
     return () => window.clearTimeout(timer)
   }, [diff])
 
-  const blockTarget = (block: MarkdownBlock) =>
-    Boolean(span && blockIntersects(block, span.startLine, span.endLine))
   const blockDiff = (block: MarkdownBlock) =>
     Boolean(diffRange && blockIntersects(block, diffRange.start, diffRange.end))
 
@@ -176,7 +152,6 @@ export function MarkdownDocument({ note, span, diff }: MarkdownDocumentProps) {
                 'doc-block',
                 'doc-heading-block',
                 `doc-h${block.level}`,
-                blockTarget(block) && 'is-target',
                 blockDiff(block) && 'is-diff',
               )}
               data-line={block.line}
@@ -203,7 +178,7 @@ export function MarkdownDocument({ note, span, diff }: MarkdownDocumentProps) {
           return (
             <div
               key={key}
-              className={cx('doc-block', 'doc-paragraph', blockTarget(block) && 'is-target', blockDiff(block) && 'is-diff')}
+              className={cx('doc-block', 'doc-paragraph', blockDiff(block) && 'is-diff')}
               data-line={block.line}
               data-end-line={block.endLine}
             >
@@ -226,8 +201,6 @@ export function MarkdownDocument({ note, span, diff }: MarkdownDocumentProps) {
               data-end-line={block.endLine}
             >
               {block.items.map((item) => {
-                const itemTarget =
-                  Boolean(span) && item.line >= span!.startLine && item.line <= span!.endLine
                 const itemDiff =
                   Boolean(diffRange) &&
                   item.line >= diffRange!.start &&
@@ -238,7 +211,6 @@ export function MarkdownDocument({ note, span, diff }: MarkdownDocumentProps) {
                     className={cx(
                       'doc-block',
                       'doc-list-row',
-                      itemTarget && 'is-target',
                       itemDiff && 'is-diff',
                     )}
                     data-line={item.line}
@@ -287,8 +259,6 @@ export function MarkdownDocument({ note, span, diff }: MarkdownDocumentProps) {
                   ))}
                 </div>
                 {block.rows.map((row) => {
-                  const rowTarget =
-                    Boolean(span) && row.line >= span!.startLine && row.line <= span!.endLine
                   const rowDiff =
                     Boolean(diffRange) &&
                     row.line >= diffRange!.start &&
@@ -298,7 +268,6 @@ export function MarkdownDocument({ note, span, diff }: MarkdownDocumentProps) {
                       key={`${key}-${row.line}`}
                       className={cx(
                         'doc-table-row',
-                        rowTarget && 'is-target',
                         rowDiff && 'is-diff',
                       )}
                       role="row"
@@ -323,7 +292,7 @@ export function MarkdownDocument({ note, span, diff }: MarkdownDocumentProps) {
           return (
             <div
               key={key}
-              className={cx('doc-block', 'doc-quote', blockTarget(block) && 'is-target', blockDiff(block) && 'is-diff')}
+              className={cx('doc-block', 'doc-quote', blockDiff(block) && 'is-diff')}
               data-line={block.line}
               data-end-line={block.endLine}
             >
@@ -341,7 +310,7 @@ export function MarkdownDocument({ note, span, diff }: MarkdownDocumentProps) {
           return (
             <div
               key={key}
-              className={cx('doc-block', 'doc-code-block', blockTarget(block) && 'is-target', blockDiff(block) && 'is-diff')}
+              className={cx('doc-block', 'doc-code-block', blockDiff(block) && 'is-diff')}
               data-line={block.line}
               data-end-line={block.endLine}
             >
@@ -362,7 +331,7 @@ export function MarkdownDocument({ note, span, diff }: MarkdownDocumentProps) {
           return (
             <div
               key={key}
-              className={cx('doc-block', 'doc-math-block', blockTarget(block) && 'is-target', blockDiff(block) && 'is-diff')}
+              className={cx('doc-block', 'doc-math-block', blockDiff(block) && 'is-diff')}
               data-line={block.line}
               data-end-line={block.endLine}
             >

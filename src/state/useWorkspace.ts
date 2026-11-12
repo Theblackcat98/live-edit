@@ -9,7 +9,6 @@ import type {
   RuntimeHealth,
   RuntimeSource,
   Snapshot,
-  SpanTarget,
   StageId,
   StageState,
   Suggestion,
@@ -107,7 +106,6 @@ export interface WorkspaceApi {
   stage: PipelineStage
   stageStates: Record<StageId, StageState>
   busy: boolean
-  span: SpanTarget | null
   diff: ExecutionDiff | null
   contextUsage: ContextUsage
   sourceMode: boolean
@@ -209,7 +207,6 @@ export function useWorkspace(): WorkspaceApi {
     C: 'idle',
   })
   const [busy, setBusy] = useState(false)
-  const [span, setSpan] = useState<SpanTarget | null>(null)
   const [diff, setDiff] = useState<ExecutionDiff | null>(null)
   const [flowModel, setFlowModel] = useState<ActiveModel>(null)
   const [speaking, setSpeaking] = useState(false)
@@ -563,7 +560,6 @@ export function useWorkspace(): WorkspaceApi {
     setHistoryIndex(targetIndex)
     noteRef.current = target.note
     setNote(target.note)
-    setSpan(null)
     setDiff(null)
     setSourceMode(false)
     return {
@@ -594,7 +590,6 @@ export function useWorkspace(): WorkspaceApi {
         const execution = executeTool(
           noteRef.current,
           outcome.call,
-          undefined,
           edit.overrideBlastRadius ? { overrideBlastRadius: true } : {},
         )
         if (!execution.ok) {
@@ -720,8 +715,7 @@ export function useWorkspace(): WorkspaceApi {
       }
       if (nextNote === noteRef.current) return false
       commitNote(nextNote, 'Manual source edit', 'manual')
-      setSpan(null)
-      setDiff(null)
+        setDiff(null)
       addMessage({
         role: 'system',
         kind: 'notice',
@@ -906,7 +900,6 @@ export function useWorkspace(): WorkspaceApi {
     setBusy,
     setCommandInput,
     setSourceMode,
-    setSpan,
     setDiff,
     setStage,
     setStageStates,
@@ -1133,7 +1126,6 @@ export function useWorkspace(): WorkspaceApi {
       return
     }
     commitNote('# Untitled\n\n', 'New note', 'manual')
-    setSpan(null)
     setDiff(null)
     setSourceMode(false)
     notify(
@@ -1255,7 +1247,6 @@ export function useWorkspace(): WorkspaceApi {
     stage,
     stageStates,
     busy,
-    span,
     diff,
     contextUsage,
     sourceMode,

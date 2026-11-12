@@ -26,7 +26,7 @@ import type {
 } from '../types'
 import { rosterFor, rosterMemoryGB, MEMORY_BUDGET_GB } from '../data/models'
 import { runModeInfo, chatModelName, transcribingModel, type RunMode } from '../lib/runmode'
-import { cx, formatP, relativeTime, truncate } from '../lib/utils'
+import { cx, formatP, relativeTime } from '../lib/utils'
 import { ModeSwitch } from './ModeSwitch'
 
 interface RuntimeRailProps {
@@ -442,7 +442,6 @@ function SupervisorCard({
   openTrace: () => void
 }) {
   const route = trace?.route
-  const span = trace?.span
   const critic = trace?.critic
   const actionTone =
     route?.action === 'file_mutation'
@@ -528,30 +527,7 @@ function SupervisorCard({
           state={stageStates.B}
           timing={trace?.timings.ground}
         >
-          {span ? (
-            <div className="sup-stage-data">
-              <div className="sup-chip-row">
-                <span className="chip chip-accent mono">
-                  L{span.startLine}
-                  {span.endLine !== span.startLine ? `–${span.endLine}` : ''}
-                </span>
-                <span
-                  className="chip chip-ghost mono"
-                  title="measured by d1 · heuristic (local) · — unreported"
-                >
-                  P {formatP(span.confidence)}
-                </span>
-              </div>
-              <div className="sup-excerpt">{truncate(span.excerpt, 66)}</div>
-              <span className="sup-muted mono">
-                {span.confidence === null
-                  ? 'unreported'
-                  : trace?.grounding?.source === 'd1-span'
-                    ? 'measured by d1'
-                    : 'local heuristic'}
-              </span>
-            </div>
-          ) : stageStates.B === 'running' ? (
+          {stageStates.B === 'running' ? (
             <span className="sup-running">Extracting span…</span>
           ) : stageStates.B === 'skipped' ? (
             <span className="sup-muted">No span needed for this turn.</span>

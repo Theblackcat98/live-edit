@@ -9,8 +9,8 @@ import {
   ShieldCheck,
   Undo2,
 } from 'lucide-react'
-import type { ExecutionDiff, Snapshot, SpanTarget, Trace } from '../types'
-import { countWords, cx, estimateTokens, formatP, relativeTime } from '../lib/utils'
+import type { ExecutionDiff, Snapshot, Trace } from '../types'
+import { countWords, cx, estimateTokens, relativeTime } from '../lib/utils'
 import { MarkdownDocument } from './MarkdownDocument'
 import { SourceEditor } from './SourceEditor'
 
@@ -18,7 +18,6 @@ interface NoteWorkspaceProps {
   note: string
   title: string
   path: string
-  span: SpanTarget | null
   diff: ExecutionDiff | null
   busy: boolean
   sourceMode: boolean
@@ -40,7 +39,6 @@ export function NoteWorkspace({
   note,
   title,
   path,
-  span,
   diff,
   busy,
   sourceMode,
@@ -203,20 +201,7 @@ export function NoteWorkspace({
       </header>
 
       <div className={cx('note-tray', sourceMode && 'is-source')}>
-        {span && !sourceMode && (
-          <div className="document-target-pill animate-pop-in">
-            <span className="status-dot is-accent" />
-            <span className="mono">
-              {trace?.grounding?.source === 'd1-span' ? 'd1 target' : 'local target'} · L
-              {span.startLine}
-              {span.endLine !== span.startLine ? `–${span.endLine}` : ''}
-            </span>
-            <span className="document-target-conf mono" title="measured by d1 · heuristic (local) · — unreported">
-              P {formatP(span.confidence)}
-            </span>
-          </div>
-        )}
-        {diff && !span && !sourceMode && (
+        {diff && !sourceMode && (
           <div className="document-target-pill is-diff animate-pop-in">
             <span className="status-dot is-green" />
             <span className="mono">
@@ -240,7 +225,7 @@ export function NoteWorkspace({
           />
         ) : (
           <div className="document-scroll" data-testid="note-document">
-            <MarkdownDocument note={note} span={span} diff={diff} />
+            <MarkdownDocument note={note} diff={diff} />
           </div>
         )}
       </div>

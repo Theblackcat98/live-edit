@@ -305,7 +305,6 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectR
       at: new Date(trace.at).toISOString(),
       action: trace.route?.action,
       tool: trace.call?.name,
-      span: trace.span,
       critic: trace.critic
         ? {
             verdict: trace.critic.verdict,
@@ -692,51 +691,6 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectR
                 </div>
               ) : (
                 <p className="trace-muted">Routing pass pending.</p>
-              )}
-            </TraceSection>
-            )}
-
-            {(trace.span || trace.grounding) && (
-            <TraceSection
-              index="B"
-              title="Zero-token grounding"
-              caption={
-                trace.grounding?.source === 'd1-span'
-                  ? 'd1-Omni · /v1/systemone'
-                  : trace.grounding
-                    ? 'local heuristics'
-                    : 'pending'
-              }
-            >
-              {trace.span ? (
-                <div className="trace-grounding">
-                  <div className="trace-span-card">
-                    <div className="trace-span-head">
-                      <span className="chip chip-accent mono">
-                        L{trace.span.startLine}
-                        {trace.span.endLine !== trace.span.startLine ? `–${trace.span.endLine}` : ''}
-                      </span>
-                      <span
-                        className="mono"
-                        title="measured by d1 · heuristic (local) · — unreported"
-                      >
-                        P {formatP(trace.span.confidence)}
-                      </span>
-                      <span className="trace-span-label">target span</span>
-                    </div>
-                    <div className="trace-span-lines">
-                      {trace.span.excerpt.split('\n').map((line, index) => (
-                        <div className="trace-span-line" key={index}>
-                          <span className="mono">{trace.span!.startLine + index}</span>
-                          <code className="mono">{line || ' '}</code>
-                        </div>
-                      ))}
-                    </div>
-                    <p className="trace-reason">{trace.span.reason}</p>
-                  </div>
-                </div>
-              ) : (
-                <p className="trace-muted">Grounding was skipped for this turn.</p>
               )}
             </TraceSection>
             )}

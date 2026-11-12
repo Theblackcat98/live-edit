@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { SpanTarget, WorkerCall } from '../types'
+import type { WorkerCall } from '../types'
 import { INITIAL_NOTE } from '../data/note'
-import { lineRangeExcerpt } from './doc'
 import { executeTool } from './tools'
 import { renderToolCallXml } from './worker'
 
@@ -15,16 +14,6 @@ function makeCall(name: 'edit_text' | 'remove_text' | 'add_text', params: Record
     promptHints: [],
     toolSchemasInjected: 0,
     noteView: '',
-  }
-}
-
-function spanAt(note: string, startLine: number, endLine: number): SpanTarget {
-  return {
-    startLine,
-    endLine,
-    excerpt: lineRangeExcerpt(note, startLine, endLine),
-    confidence: 0.95,
-    reason: 'test span',
   }
 }
 
@@ -63,17 +52,16 @@ describe('executeTool: engine-level blast radius (TD-44)', () => {
     expect(result.note).toBe(NOTE_13)
   })
 
-  it('names the grounded span in the rejection when one is supplied', () => {
-    const span = spanAt(NOTE_13, 1, 12)
+  it('reports the engine refusal without span provenance text', () => {
     const call = makeCall('remove_text', {
       file_path: 'notes/quarterly-review.md',
       start_line: '1',
       end_line: '12',
       target_excerpt: excerptOf(NOTE_13, 1, 12),
     })
-    const result = executeTool(NOTE_13, call, span)
-    expect(result.ok).toBe(false)
-    expect(result.message).toContain('grounded span lines 1–12')
+    const result = executeTool(NOTE_13, call)
+    expect(result.message).toContain('Removal exceeds the blast-radius limit')
+    expect(result.message).not.toContain('grounded span')
   })
 
   it('still executes removals under the cap', () => {
@@ -110,8 +98,7 @@ describe('executeTool: engine-level blast radius (TD-44)', () => {
     expect(result.message).toContain('characters retained')
   })
 
-  it('executes a same-length row edit with the grounded span passed through', () => {
-    const span = spanAt(INITIAL_NOTE, 17, 17)
+  it('executes a same-length row edit', () => {
     const call = makeCall('edit_text', {
       file_path: 'notes/quarterly-review.md',
       start_line: '17',
@@ -119,7 +106,7 @@ describe('executeTool: engine-level blast radius (TD-44)', () => {
       old_text_anchor: '| Q3 | $1.2M | Pending |',
       new_text: '| Q3 | $1.45M | Final |',
     })
-    const result = executeTool(INITIAL_NOTE, call, span)
+    const result = executeTool(INITIAL_NOTE, call)
     expect(result.ok).toBe(true)
     expect(result.note).toContain('| Q3 | $1.45M | Final |')
     expect(result.diff).toMatchObject({ added: 1, removed: 1 })
@@ -127,14 +114,14 @@ describe('executeTool: engine-level blast radius (TD-44)', () => {
 })
 
 describe('executeTool: unchanged good paths (regression)', () => {
-  it('removes a single grounded bullet', () => {
+  it('removes a single bullet', () => {
     const call = makeCall('remove_text', {
       file_path: 'notes/quarterly-review.md',
       start_line: '25',
       end_line: '25',
       target_excerpt: '- Redis cache migration was postponed to Q4.',
     })
-    const result = executeTool(INITIAL_NOTE, call, spanAt(INITIAL_NOTE, 25, 25))
+    const result = executeTool(INITIAL_NOTE, call)
     expect(result.ok).toBe(true)
     expect(result.note).not.toContain('Redis')
   })
@@ -201,7 +188,7 @@ describe('executeTool: blast-radius override (user-approved hold)', () => {
       end_line: '12',
       target_excerpt: excerptOf(NOTE_13, 1, 12),
     })
-    const result = executeTool(NOTE_13, call, undefined, { overrideBlastRadius: true })
+    const result = executeTool(NOTE_13, call, { overrideBlastRadius: true })
     expect(result.ok).toBe(true)
     expect(result.diff?.removed).toBe(12)
   })
@@ -213,7 +200,7 @@ describe('executeTool: blast-radius override (user-approved hold)', () => {
       end_line: '12',
       target_excerpt: 'text that is not the note',
     })
-    const result = executeTool(NOTE_13, driftedAnchor, undefined, { overrideBlastRadius: true })
+    const result = executeTool(NOTE_13, driftedAnchor, { overrideBlastRadius: true })
     expect(result.ok).toBe(false)
     expect(result.message).toContain('Anchor')
     expect(result.note).toBe(NOTE_13)

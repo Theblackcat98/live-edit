@@ -37,7 +37,6 @@ import type {
   RuntimeHealth,
   RuntimeSource,
   Snapshot,
-  SpanTarget,
   StageId,
   StageState,
   Toast,
@@ -136,8 +135,6 @@ export interface PipelineDeps {
   setCommandInput: (value: string) => void
   /** Source-edit pane, closed when a turn starts. */
   setSourceMode: (value: boolean) => void
-  /** Grounded-span highlight on the note. */
-  setSpan: (span: SpanTarget | null) => void
   /** Execution diff highlight on the note. */
   setDiff: (diff: ExecutionDiff | null) => void
   /** Pipeline stage chip; finish() also uses the updater form. */
@@ -180,7 +177,7 @@ export interface PipelineDeps {
   clearTransientHighlights: () => void
   /** Speak an assistant reply when the speaker is on. */
   speakReply: (text: string) => void
-  /** Fade the diff/span highlights out after a successful execution. */
+  /** Fade the diff highlight out after a successful execution. */
   scheduleHighlightClear: () => void
 }
 
@@ -290,7 +287,6 @@ export async function runPipelineTurn(
   }
   deps.clearTransientHighlights()
   deps.setDiff(null)
-  deps.setSpan(null)
   deps.setStage('routing')
   deps.setStageStates({ A: 'running', B: 'idle', C: 'idle' })
   deps.setFlowModel('d1')
@@ -1301,7 +1297,7 @@ async function verifyAndExecute(
     if (blastOnly) {
       // Dry-run with the cap waived: the card (and approval) run on the
       // real diff, so the user sees exactly what the override would do.
-      const overridePreview = executeTool(noteAtStart, call, undefined, { overrideBlastRadius: true })
+      const overridePreview = executeTool(noteAtStart, call, { overrideBlastRadius: true })
       if (overridePreview.ok && overridePreview.diff) {
         holdForUserDecision(
           deps,
@@ -1551,7 +1547,6 @@ async function verifyAndExecute(
   )
   execution.snapshotId = snapshot.id
   deps.setDiff(execution.diff ?? null)
-  deps.setSpan(null)
   deps.patchMessage(delegationId, {
     delegation: { ...delegation, status: 'executed', confidence },
   })
