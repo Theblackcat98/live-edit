@@ -1431,7 +1431,7 @@ async function main() {
       /^\d+$/.test(String(info.call?.params?.end_line ?? ''))
     record('23', 'vague "remove that section about API keys" → worker grounds the Security section (directive + live call, no supervisor fields)',
       info.status === 'verified' && sectionGone && neighboursKept && workerGrounded && info.d1Check?.verdict === 'approved',
-      `status=${info.status}, sectionGone=${sectionGone}, neighboursKept=${neighboursKept}, workerGrounded=${workerGrounded}, task=${info.directive?.task ?? '-'}, span=${info.call?.params?.start_line ?? '-'}-${info.call?.params?.end_line ?? '-'}, tool=${info.call?.name ?? '-'}, sampler=${info.call?.sampler ? 'live' : '-'}, grounding=${JSON.stringify(info.grounding)}, d1=${info.d1Check?.verdict ?? '-'}${run.timedOut ? ', TIMEOUT' : ''}`)
+      `status=${info.status}, sectionGone=${sectionGone}, neighboursKept=${neighboursKept}, workerGrounded=${workerGrounded}, task=${info.directive?.task ?? '-'}, span=${info.call?.params?.start_line ?? '-'}-${info.call?.params?.end_line ?? '-'}, tool=${info.call?.name ?? '-'}, sampler=${info.call?.sampler ? 'live' : '-'}, d1=${info.d1Check?.verdict ?? '-'}${run.timedOut ? ', TIMEOUT' : ''}`)
   }
 
   await seedWorkspace(null)
@@ -1452,7 +1452,7 @@ async function main() {
       /^\d+$/.test(String(info.call?.params?.end_line ?? ''))
     record('24', 'vague "delete the bullet about the audit" → worker grounds the SSO list item (directive + live call, no supervisor fields)',
       info.status === 'verified' && bulletGone && neighboursKept && workerGrounded && info.d1Check?.verdict === 'approved',
-      `status=${info.status}, bulletGone=${bulletGone}, neighboursKept=${neighboursKept}, workerGrounded=${workerGrounded}, task=${info.directive?.task ?? '-'}, span=${info.call?.params?.start_line ?? '-'}-${info.call?.params?.end_line ?? '-'}, tool=${info.call?.name ?? '-'}, sampler=${info.call?.sampler ? 'live' : '-'}, grounding=${JSON.stringify(info.grounding)}, d1=${info.d1Check?.verdict ?? '-'}${run.timedOut ? ', TIMEOUT' : ''}`)
+      `status=${info.status}, bulletGone=${bulletGone}, neighboursKept=${neighboursKept}, workerGrounded=${workerGrounded}, task=${info.directive?.task ?? '-'}, span=${info.call?.params?.start_line ?? '-'}-${info.call?.params?.end_line ?? '-'}, tool=${info.call?.name ?? '-'}, sampler=${info.call?.sampler ? 'live' : '-'}, d1=${info.d1Check?.verdict ?? '-'}${run.timedOut ? ', TIMEOUT' : ''}`)
   }
 
   // --- Group F: P2 gates — delegation hygiene + ambiguous → Audio clarify -
