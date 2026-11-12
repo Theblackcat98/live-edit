@@ -44,6 +44,7 @@ import { useRuntimeHealth } from './useRuntimeHealth'
 import { useSessionClock } from './useSessionClock'
 import { useToasts } from './useToasts'
 import { useWorkspaceHistory } from './useWorkspaceHistory'
+import { useWorkspaceTraces } from './useWorkspaceTraces'
 
 const initialNoteTokens = estimateTokens(INITIAL_NOTE)
 const INITIAL_CONTEXT: ContextUsage = {
@@ -180,8 +181,6 @@ export function useWorkspace(): WorkspaceApi {
       message.streaming ? { ...message, streaming: false } : message,
     ),
   )
-  const [trace, setTrace] = useState<Trace | null>(null)
-  const [runs, setRuns] = useState<Trace[]>(persisted?.runs ?? [])
   const [stage, setStage] = useState<PipelineStage>('idle')
   const [stageStates, setStageStates] = useState<Record<StageId, StageState>>({
     A: 'idle',
@@ -199,8 +198,21 @@ export function useWorkspace(): WorkspaceApi {
   const [sourceMode, setSourceMode] = useState(false)
   const [commandInput, setCommandInput] = useState('')
   const { toast, notify, dismissToast } = useToasts()
-  const [traceOpen, setTraceOpen] = useState(false)
-  const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null)
+  const {
+    trace,
+    setTrace,
+    traceRef,
+    runs,
+    setRuns,
+    runsRef,
+    rejectedTraces,
+    setRejectedTraces,
+    selectedTrace,
+    traceOpen,
+    openTrace,
+    closeTrace,
+    resetTraces,
+  } = useWorkspaceTraces({ persisted })
   const [demoRunning, setDemoRunning] = useState(false)
   const { elapsedSeconds, nowTick } = useSessionClock()
   const { runtimeHealth, healthRef, refreshRuntime } = useRuntimeHealth()
@@ -209,9 +221,6 @@ export function useWorkspace(): WorkspaceApi {
   const [mode, setModeState] = useState<RunMode>(() => loadRunMode())
   const [asrBusy, setAsrBusy] = useState(false)
   const [ttsBusy, setTtsBusy] = useState(false)
-  const [rejectedTraces, setRejectedTraces] = useState<RejectedTraceRecord[]>(
-    persisted?.rejectedTraces ?? [],
-  )
   // Reloaded pendings pass through pending.ts's defensive per-entry
   // validation — a malformed entry drops out instead of bricking the queue.
   const [pendingEdits, setPendingEdits] = useState<PendingEdit[]>(() =>
@@ -219,8 +228,6 @@ export function useWorkspace(): WorkspaceApi {
   )
   const pendingEditsRef = useRef<PendingEdit[]>(pendingEdits)
 
-  const runsRef = useRef<Trace[]>(runs)
-  const traceRef = useRef<Trace | null>(null)
   const busyRef = useRef(false)
   const speakerOnRef = useRef(speakerOn)
   const flowModelRef = useRef<ActiveModel>(null)
@@ -969,10 +976,7 @@ export function useWorkspace(): WorkspaceApi {
     chatAbortRef.current?.abort()
     chatAbortRef.current = null
     setMessages(initialMessages())
-    runsRef.current = []
-    setRuns([])
-    setSelectedTraceId(null)
-    setTrace(null)
+    resetTraces()
     setStage('idle')
     setStageStates({ A: 'idle', B: 'idle', C: 'idle' })
     setFlowModel(null)
@@ -982,24 +986,7 @@ export function useWorkspace(): WorkspaceApi {
       'The conversation and decision traces were cleared. The note and its snapshots stay.',
       'success',
     )
-  }, [notify, stopMic, stopSpeech])
-
-  const openTrace = useCallback(
-    (id?: string) => {
-      setSelectedTraceId(id ?? traceRef.current?.id ?? null)
-      setTraceOpen(true)
-    },
-    [],
-  )
-
-  const closeTrace = useCallback(() => setTraceOpen(false), [])
-
-  const selectedTrace = useMemo(() => {
-    if (selectedTraceId) {
-      return runs.find((run) => run.id === selectedTraceId) ?? (trace?.id === selectedTraceId ? trace : null)
-    }
-    return trace
-  }, [runs, selectedTraceId, trace])
+  }, [notify, resetTraces, stopMic, stopSpeech])
 
   const suggestions = useMemo(() => buildSuggestions(note), [note])
 
