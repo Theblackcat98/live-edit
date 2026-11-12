@@ -41,7 +41,7 @@ const OMNI_INTERFACE: ModelInfo = {
 const D1_CHECK: ModelInfo = {
   id: 'd1',
   flow: 'd1',
-  role: 'Supervisor',
+  role: 'Safety check',
   shortName: 'd1 Omni 2B',
   name: 'd1-Omni-2B',
   params: '2.17B',

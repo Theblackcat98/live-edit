@@ -6,7 +6,7 @@
  *
  *   LFM3-Omni-2B   :8083  chat + ASR (/v1/audio/transcriptions)
  *   LFM3-1.7B      :8080  worker XML tool calls (text mutations, -c 128000)
- *   d1-Omni-2B     :8085  routing / critic decisions (/v1/systemone)
+ *   d1-Omni-2B     :8085  safety-check decisions (/v1/systemone)
  *
  * LFM3-VL-2B (:8081) was removed from the runtime in 2026-11-08: the 1.7B plus
  * the deterministic emitter cover every tool, and probing an optional fourth
@@ -29,7 +29,7 @@ export interface EndpointSpec {
 
 export const ENDPOINTS: EndpointSpec[] = [
   { id: 'omni', name: 'LFM3-Omni-2B', role: 'Interface · chat + ASR + TTS', port: 8083, alias: 'lfm3-omni-2b' },
-  { id: 'd1omni', name: 'd1-Omni-2B', role: 'Supervisor · route/critic', port: 8085, alias: 'd1-omni-2b' },
+  { id: 'd1omni', name: 'd1-Omni-2B', role: 'Safety check · d1', port: 8085, alias: 'd1-omni-2b' },
   { id: 'text', name: 'LFM3-1.7B', role: 'Worker · tool calls', port: 8080, alias: 'lfm3-1.7b' },
   { id: 'audio', name: 'LFM3-Audio-2B', role: 'Interface · chat + ASR + TTS', port: 8086, alias: 'lfm3-audio-2b' },
 ]
