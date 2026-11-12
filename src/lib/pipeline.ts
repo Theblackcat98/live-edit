@@ -35,37 +35,20 @@ import type {
   TurnHold,
   WorkerCall,
 } from '../types'
-import { NOTE_PATH } from '../data/note'
-import { TOOL_BY_NAME, TOOL_DEFS } from '../data/tools'
-import {
-  buildPacketWorkerMessages,
-  buildWorkerRetryMessages,
-  numberNoteLines,
-  renderToolCallXml,
-  PACKET_WORKER_SAMPLER,
-  type PacketWorkerPromptInput,
-} from './worker'
+import { numberNoteLines, renderToolCallXml } from './worker'
 import { executeTool } from './tools'
-import { recoverDictatedText } from './dictation'
-import { scaffoldTemplateBrief } from './templateScaffold'
 import { sectionScaleCollapse } from './blastGate'
 import { checkExecutionOutcome } from './executionCheck'
+import type { ParsedToolCall } from './xml'
 import { runOmniTurn } from './omni'
 import { runWorkerChatTurn, WORKER_CHAT_SAMPLER, type WorkerChatTurnResult } from './workerChat'
 import { chatModelName } from './runmode'
 import type { RunMode } from './runmode'
-import { buildD1State, buildWorkerPacket, noteHash } from './context'
+import { buildD1State, noteHash } from './context'
 import { runHardGates } from './gates'
 import { runD1Check } from './d1check'
 import { createPendingEdit } from './pending'
-import { parseToolCallXml, type ParsedToolCall } from './xml'
-import { captureExchange, workerExchangeTarget } from './exchange'
-import {
-  chatComplete,
-  d1Decide,
-  endpointUp,
-  type ChatResult,
-} from './bridge'
+import { d1Decide, endpointUp } from './bridge'
 import { splitLines } from './doc'
 
 export type { PipelineDeps, RunResultSnapshot } from './flow/turnContext'
@@ -75,6 +58,12 @@ import {
   type PipelineDeps,
   type TurnContext,
 } from './flow/turnContext'
+export { buildDictationCall } from './flow/buildCall'
+import {
+  buildDictationCall,
+  buildEffectiveDirective,
+  buildPacketCall,
+} from './flow/buildCall'
 import { createStreamBubble } from './flow/bubble'
 import { runSnapshotDirective, snapshotPrecheck } from './flow/snapshotStage'
 
@@ -190,58 +179,6 @@ export async function runPipelineTurn(
 
 export { buildOmniHistory } from './flow/history'
 import { buildOmniHistory, CHAT_MEMORY_TURNS, conversationTurns, lastEditRun } from './flow/history'
-
-function packetWorkerCall(
-  parsed: ParsedToolCall,
-  reasoning: string,
-  ms: number,
-  usagePromptTokens: number,
-  usageOutputTokens: number,
-  sampler: { temperature: number; maxTokens: number | null },
-  note: string,
-): WorkerCall {
-  return {
-    name: parsed.name,
-    params: parsed.params,
-    thought: parsed.think ?? reasoning ?? `Worker emitted ${parsed.name} from the Audio directive.`,
-    xml: renderToolCallXml(parsed.name, parsed.params),
-    rawTokens: usageOutputTokens,
-    promptHints: [
-      `Decoded by LFM3-1.7B · ${(ms / 1000).toFixed(1)}s · ${usagePromptTokens} prompt tokens`,
-      `Sent sampler: temperature=${sampler.temperature} · max_tokens=${sampler.maxTokens}`,
-      'Audio directive + full line-numbered note + recent edit turns (design.md §6 packet); worker grounds the span itself',
-    ],
-    toolSchemasInjected: 3,
-    noteView: numberNoteLines(note),
-    sampler,
-  }
-}
-
-/**
- * The dictation exception (design.md §11): when Audio's directive carries
- * `verbatim` — exact words the user dictated — the harness builds the
- * add_text call itself. The worker never re-authors dictated text; the
- * call flows through the same gates and d1 check as a worker call.
- */
-export function buildDictationCall(directive: Directive, note: string): WorkerCall {
-  const heading = directive.target?.heading ?? null
-  const params: Record<string, string> = {
-    file_path: NOTE_PATH,
-    position: heading ? 'under_heading' : 'append',
-    ...(heading ? { anchor: heading } : {}),
-    content: directive.verbatim as string,
-  }
-  return {
-    name: 'add_text',
-    params,
-    thought: 'User-dictated exact text — harness-built call (dictation exception); no worker decode.',
-    xml: renderToolCallXml('add_text', params),
-    rawTokens: 0,
-    promptHints: ['Dictation exception: user-quoted exact text, inserted verbatim'],
-    toolSchemasInjected: 0,
-    noteView: numberNoteLines(note),
-  }
-}
 
 /** Rejected-trace record for a worker-authored call the harness refused. */
 function recordOmniRejection(
@@ -438,48 +375,12 @@ async function runOmniFirstTurn(
   deps.setStage('generating')
   deps.setFlowModel('worker')
 
-  // --- dictation exception (design.md §11): exact user-dictated text is
-  // built by the harness, never authored by the worker. The call still
-  // flows through the hard gates and the d1 check like any other; the
-  // trace records the provenance honestly (runtime.worker = 'dictation').
-  // Backstop (battery case 8f): when the model omits `verbatim` but the
-  // user's own command carries the quoted span, recover it
-  // deterministically — the dictated text must never depend on the model
-  // remembering to label it.
-  const recovered = recoverDictatedText(command, directive)
-  const rawEffective = recovered ? { ...directive, verbatim: recovered } : directive
-  // Template scaffold (battery cases 27/27b/12/12d — design.md §13.1): a
-  // README-template command needs the standard section list in the brief,
-  // and the model echoes the command instead of packing it (measured live:
-  // instruction == command, worker authors 1–3 of the 5 barred sections).
-  // The scaffold appends the fixed section vocabulary to the instruction —
-  // scaffolding, not content: the worker still authors every word. Only
-  // fires on create-task README-template commands without a section
-  // already named, so real user briefs are never rewritten.
-  const scaffolded = scaffoldTemplateBrief(command, rawEffective, noteAtStart)
-  const scaffoldNote =
-    scaffolded !== rawEffective
-      ? 'Template scaffold: the §13.1 section vocabulary appended to the brief (the model echoed the command instead of packing it).'
-      : null
-  // Verbatim is insert-shaped: exact words to put into the note. A
-  // MODEL-set verbatim on edit/remove tasks is a mislabel (battery case
-  // 6: a "$1.45M Final" value update packed as verbatim routes the
-  // harness-built add_text instead of the worker's edit_text, and d1
-  // rightly disapproves the mismatch) — null it and return the turn to
-  // the worker, whose instruction already quotes the values. A RECOVERED
-  // verbatim is the harness's own finding from the command's quoted span:
-  // it always routes to the dictation call, whatever the task (battery
-  // case 8f: an add-line command the model tasked as edit still carries
-  // a dictated line — the worker would paraphrase it). Dictation with a
-  // model-set verbatim on insert/create (e.g. 8f's classic shape) flows
-  // through untouched.
-  const effectiveDirective =
-    !recovered &&
-    (scaffolded.task === 'edit' || scaffolded.task === 'remove') &&
-    typeof scaffolded.verbatim === 'string' &&
-    scaffolded.verbatim.trim().length > 0
-      ? { ...scaffolded, verbatim: null }
-      : scaffolded
+  // --- dictation exception (design.md §11) and scaffold/verbatim shaping ---
+  const {
+    directive: effectiveDirective,
+    recovered,
+    scaffoldNote,
+  } = buildEffectiveDirective(command, directive, noteAtStart)
   if (effectiveDirective !== directive) {
     traceLocal.directive = effectiveDirective
     publish()
@@ -516,110 +417,14 @@ async function runOmniFirstTurn(
     return
   }
 
-  const packet = buildWorkerPacket(effectiveDirective, deps.runsRef.current, noteAtStart)
-  const packetInput: PacketWorkerPromptInput = {
+  const decoded = await buildPacketCall({
     directive: effectiveDirective,
-    contextPacket: packet,
     note: noteAtStart,
-  }
-  const workerStarted = performance.now()
-  let call: WorkerCall | null = null
-  let attemptError = ''
-  let attemptText = ''
-  let attemptedTool: ToolName | null = null
-  let attemptedParsed: ParsedToolCall | null = null
-  for (const sampler of [PACKET_WORKER_SAMPLER.attempt1, PACKET_WORKER_SAMPLER.retry]) {
-    // Turn-budget guard (battery case 12b): a slow first attempt (a 6,000-
-    // token deliberation can eat most of a turn) must not be followed by a
-    // second equally slow one — fail with the concrete error instead of
-    // blowing past any sane turn timeout.
-    if (attemptText !== '' && performance.now() - workerStarted > 45_000) break
-    const messages =
-      call === null && attemptText === ''
-        ? buildPacketWorkerMessages(packetInput)
-        : buildWorkerRetryMessages({
-            original: packetInput,
-            attemptText,
-            error: attemptError,
-            attemptedTool,
-            anchorCorrection: anchorCorrectionFor(noteAtStart, attemptedParsed),
-          })
-    const label = attemptText === '' ? 'packet decode · attempt 1' : 'packet decode · retry'
-    let completion: ChatResult
-    try {
-      completion = await chatComplete('text', messages, sampler)
-    } catch (error) {
-      // Transport failure (incl. the bridge's 90s timeout): retrying the
-      // same dead/slow endpoint inside this turn buys nothing.
-      attemptError = error instanceof Error ? error.message : 'worker request failed'
-      ctx.recordExchange(
-        captureExchange({
-          role: 'worker',
-          label,
-          ...workerExchangeTarget(),
-          messages,
-          stream: false,
-          temperature: sampler.temperature,
-          maxTokens: sampler.maxTokens,
-          tools: TOOL_DEFS.map((tool) => tool.name),
-          completion: null,
-          error: attemptError,
-        }),
-      )
-      break
-    }
-    const recordPacketExchange = (error?: string) => {
-      ctx.recordExchange(
-        captureExchange({
-          role: 'worker',
-          label,
-          ...workerExchangeTarget(),
-          messages,
-          stream: false,
-          temperature: sampler.temperature,
-          maxTokens: sampler.maxTokens,
-          tools: TOOL_DEFS.map((tool) => tool.name),
-          completion,
-          ...(error ? { error } : {}),
-        }),
-      )
-    }
-    attemptText = completion.text
-    const xmlInput = /<think>/.test(completion.text)
-      ? completion.text
-      : completion.reasoning
-        ? `<think>${completion.reasoning}</think>\n${completion.text}`
-        : completion.text
-    const parsed = parseToolCallXml(xmlInput)
-    attemptedTool = parsed?.name ?? null
-    attemptedParsed = parsed
-    if (!parsed) {
-      attemptError = 'The reply did not contain one parseable tool call in the repo XML format.'
-      recordPacketExchange(attemptError)
-      continue
-    }
-    const required = TOOL_BY_NAME[parsed.name].params
-      .filter((param) => param.required)
-      .map((param) => param.name)
-    const missing = required.filter((name) => !(parsed.params[name] ?? '').trim())
-    if (missing.length > 0) {
-      attemptError = `The ${parsed.name} call is missing required parameter(s): ${missing.join(', ')}.`
-      recordPacketExchange(attemptError)
-      continue
-    }
-    recordPacketExchange()
-    call = packetWorkerCall(
-      parsed,
-      completion.reasoning ?? '',
-      completion.ms,
-      completion.usage.promptTokens,
-      completion.usage.outputTokens,
-      sampler,
-      noteAtStart,
-    )
-    break
-  }
-  traceLocal.timings.generate = Number((performance.now() - workerStarted).toFixed(1))
+    runs: deps.runsRef.current,
+    recordExchange: ctx.recordExchange,
+  })
+  traceLocal.timings.generate = decoded.ms
+  const call = decoded.call
 
   if (!call) {
     deps.setStageStates({ A: 'done', B: 'failed', C: 'idle' })
@@ -627,10 +432,10 @@ async function runOmniFirstTurn(
       role: 'assistant',
       author: 'harness',
       kind: 'error',
-      text: `The worker could not produce a valid tool call for that edit (${attemptError || 'no parseable call'}). Nothing was written to the note, and no fallback content was substituted.`,
+      text: `The worker could not produce a valid tool call for that edit (${decoded.error || 'no parseable call'}). Nothing was written to the note, and no fallback content was substituted.`,
       runId: traceLocal.id,
     })
-    deps.notify('Worker call invalid', attemptError || 'No parseable tool call.', 'error')
+    deps.notify('Worker call invalid', decoded.error || 'No parseable tool call.', 'error')
     finish('failed')
     return
   }
@@ -1234,27 +1039,4 @@ async function verifyAndExecute(
   deps.speakReply(execution.message)
   finish('verified')
   deps.scheduleHighlightClear()
-}
-
-/**
- * Anchor correction for a worker retry: when an edit_text attempt's
- * `old_text_anchor` doesn't match the note at its own range, hand the retry
- * the note's actual text there (the E4 anchor near-miss class — the one
- * class a retry reliably fixes).
- */
-function anchorCorrectionFor(
-  note: string,
-  parsed: ParsedToolCall | null,
-): { startLine: number; endLine: number; actualText: string } | null {
-  if (!parsed || parsed.name !== 'edit_text') return null
-  const startLine = Number(parsed.params.start_line)
-  const endLine = Number(parsed.params.end_line)
-  if (!Number.isInteger(startLine) || !Number.isInteger(endLine) || startLine < 1 || endLine < startLine) {
-    return null
-  }
-  const actualText = splitLines(note)
-    .slice(startLine - 1, endLine)
-    .join('\n')
-  if (!actualText || actualText === parsed.params.old_text_anchor) return null
-  return { startLine, endLine, actualText }
 }
