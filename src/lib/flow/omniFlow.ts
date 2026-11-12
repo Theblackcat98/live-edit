@@ -39,6 +39,7 @@ export async function runOmniFirstTurn(
   // model (legacy `omni` really is served by LFM3-Omni-2B :8083).
   const chatAuthor = chatModelName(mode)
   const chatEndpoint = mode === 'omni' ? 'omni' : 'audio'
+  traceLocal.runMode = mode
   deps.setFlowModel('omni')
   deps.setStage('routing')
 
