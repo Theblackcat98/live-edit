@@ -19,7 +19,7 @@ import { DEMO_SEQUENCE, INITIAL_NOTE, NOTE_PATH, NOTE_TITLE } from '../data/note
 import { speak, stopSpeaking, cleanSpeechText, speechSynthesisAvailable, VoiceRecorder } from '../lib/speech'
 import { buildSuggestions } from '../lib/suggestions'
 import { loadWorkspaceState, saveWorkspaceState, type PersistedWorkspace } from '../lib/storage'
-import { ENDPOINTS, endpointUp, probeRuntime, synthesizeSpeech, transcribeAudio } from '../lib/bridge'
+import { ENDPOINTS, endpointUp, synthesizeSpeech, transcribeAudio } from '../lib/bridge'
 import {
   loadRunMode,
   saveRunMode,
@@ -40,6 +40,7 @@ import {
 } from '../lib/pending'
 import { noteHash } from '../lib/context'
 import { executeTool } from '../lib/tools'
+import { useRuntimeHealth } from './useRuntimeHealth'
 import { useToasts } from './useToasts'
 
 const initialNoteTokens = estimateTokens(INITIAL_NOTE)
@@ -223,7 +224,7 @@ export function useWorkspace(): WorkspaceApi {
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const [nowTick, setNowTick] = useState(Date.now())
   const [sessionStart] = useState(() => Date.now())
-  const [runtimeHealth, setRuntimeHealth] = useState<RuntimeHealth | null>(null)
+  const { runtimeHealth, healthRef, refreshRuntime } = useRuntimeHealth()
   const [pendingSwitch, setPendingSwitch] = useState<ModelSwitchPlan | null>(null)
   const [switchingModels, setSwitchingModels] = useState(false)
   const [mode, setModeState] = useState<RunMode>(() => loadRunMode())
@@ -253,7 +254,6 @@ export function useWorkspace(): WorkspaceApi {
   const speechTokenRef = useRef(0)
   const demoRunningRef = useRef(false)
   const demoStopRef = useRef(false)
-  const healthRef = useRef<RuntimeHealth | null>(null)
   const modeRef = useRef<RunMode>(mode)
   /** Hands-free toggle mirror: capture callbacks outlive the render they began in. */
   const micOnRef = useRef(false)
@@ -323,20 +323,6 @@ export function useWorkspace(): WorkspaceApi {
     setElapsedSeconds(Math.floor((Date.now() - sessionStart) / 1000))
     return () => window.clearInterval(timer)
   }, [sessionStart])
-
-  const refreshRuntime = useCallback(async () => {
-    const health = await probeRuntime()
-    healthRef.current = health
-    setRuntimeHealth(health)
-  }, [])
-
-  useEffect(() => {
-    void refreshRuntime()
-    const timer = window.setInterval(() => {
-      void refreshRuntime()
-    }, 10_000)
-    return () => window.clearInterval(timer)
-  }, [refreshRuntime])
 
   const addMessage = useCallback(
     (message: Omit<Message, 'id' | 'at'> & { at?: number; id?: string }) => {
@@ -459,10 +445,8 @@ export function useWorkspace(): WorkspaceApi {
           let missing = plan.toStart
           while (missing.length && Date.now() < deadline) {
             await sleep(2000)
-            const health = await probeRuntime()
-            healthRef.current = health
-            setRuntimeHealth(health)
-            missing = plan.toStart.filter((id) => !endpointUp(health, id))
+            await refreshRuntime()
+            missing = plan.toStart.filter((id) => !endpointUp(healthRef.current, id))
           }
           applyMode(plan.mode)
           if (missing.length) {
