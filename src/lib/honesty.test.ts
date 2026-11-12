@@ -19,6 +19,7 @@ import verifySource from './flow/verify.ts?raw'
 import workerFlowSource from './flow/workerFlow.ts?raw'
 import docSource from './doc.ts?raw'
 import gatesSource from './gates.ts?raw'
+import modesSource from './modes.ts?raw'
 import omniSource from './omni.ts?raw'
 import pendingSource from './pending.ts?raw'
 import pipelineSource from './pipeline.ts?raw'
@@ -52,6 +53,7 @@ describe('runtime honesty (static)', () => {
       workerFlow: workerFlowSource,
       doc: docSource,
       gates: gatesSource,
+      modes: modesSource,
       omni: omniSource,
       pending: pendingSource,
       pipeline: pipelineSource,

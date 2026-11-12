@@ -7,7 +7,7 @@ import type { ModelInfo } from '../types'
 // the models serving the active mode.
 
 /** The default interface: LFM3-Audio-2B on :8086 (-c 128000). */
-const AUDIO_INTERFACE: ModelInfo = {
+export const AUDIO_INTERFACE: ModelInfo = {
   id: 'audio',
   flow: 'omni',
   role: 'Interface',
@@ -23,7 +23,7 @@ const AUDIO_INTERFACE: ModelInfo = {
 }
 
 /** The legacy interface: LFM3-Omni-2B on :8083 (-c 32000). */
-const OMNI_INTERFACE: ModelInfo = {
+export const OMNI_INTERFACE: ModelInfo = {
   id: 'omni',
   flow: 'omni',
   role: 'Interface · legacy',
@@ -38,7 +38,7 @@ const OMNI_INTERFACE: ModelInfo = {
     'The legacy omni-mode front door (chats, ASR, TTS). Not part of the default roster.',
 }
 
-const D1_CHECK: ModelInfo = {
+export const D1_CHECK: ModelInfo = {
   id: 'd1',
   flow: 'd1',
   role: 'Safety check',
@@ -53,7 +53,7 @@ const D1_CHECK: ModelInfo = {
 }
 
 /** LFM3-1.7B on :8080 (-c 128000). */
-const WORKER: ModelInfo = {
+export const WORKER: ModelInfo = {
   id: 'worker',
   flow: 'worker',
   role: 'Worker',
@@ -68,7 +68,7 @@ const WORKER: ModelInfo = {
 }
 
 /** The worker-chat role label: the 1.7B answers chat AND authors calls there. */
-const WORKER_CHAT: ModelInfo = { ...WORKER, role: 'Chat + Worker' }
+export const WORKER_CHAT: ModelInfo = { ...WORKER, role: 'Chat + Worker' }
 
 /** The models a run mode actually runs, display order. */
 export function rosterFor(mode: RunMode): ModelInfo[] {

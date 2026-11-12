@@ -6,10 +6,11 @@
  * stopping a loaded member is always opt-in.
  */
 
-import type { EndpointHealth, RuntimeHealth } from '../types'
+import type { RuntimeHealth } from '../types'
+import type { EndpointId } from './modes'
 import type { RunMode } from './runmode'
 
-export type EndpointId = EndpointHealth['id']
+export type { EndpointId }
 
 /** Manager member names (scripts/model-manager.mjs); ids differ only for d1. */
 const MANAGER_NAMES: Record<EndpointId, string> = {
