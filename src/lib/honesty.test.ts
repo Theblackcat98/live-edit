@@ -8,8 +8,18 @@ import bridgeSource from './bridge.ts?raw'
 import contextSource from './context.ts?raw'
 import d1checkSource from './d1check.ts?raw'
 import directiveSource from './directive.ts?raw'
+import bubbleSource from './flow/bubble.ts?raw'
+import buildCallSource from './flow/buildCall.ts?raw'
+import chatTurnSource from './flow/chatTurn.ts?raw'
+import historySource from './flow/history.ts?raw'
+import omniFlowSource from './flow/omniFlow.ts?raw'
+import snapshotStageSource from './flow/snapshotStage.ts?raw'
+import turnContextSource from './flow/turnContext.ts?raw'
+import verifySource from './flow/verify.ts?raw'
+import workerFlowSource from './flow/workerFlow.ts?raw'
 import docSource from './doc.ts?raw'
 import gatesSource from './gates.ts?raw'
+import modesSource from './modes.ts?raw'
 import omniSource from './omni.ts?raw'
 import pendingSource from './pending.ts?raw'
 import pipelineSource from './pipeline.ts?raw'
@@ -32,8 +42,18 @@ describe('runtime honesty (static)', () => {
       context: contextSource,
       d1check: d1checkSource,
       directive: directiveSource,
+      bubble: bubbleSource,
+      buildCall: buildCallSource,
+      chatTurn: chatTurnSource,
+      history: historySource,
+      omniFlow: omniFlowSource,
+      snapshotStage: snapshotStageSource,
+      turnContext: turnContextSource,
+      verify: verifySource,
+      workerFlow: workerFlowSource,
       doc: docSource,
       gates: gatesSource,
+      modes: modesSource,
       omni: omniSource,
       pending: pendingSource,
       pipeline: pipelineSource,

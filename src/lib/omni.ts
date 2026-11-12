@@ -250,6 +250,24 @@ export const OMNI_SYSTEM_PROMPT = [
   'Style: brief and natural, one or two sentences unless more is genuinely needed. Reference the note only when the turn is actually about it.',
 ].join('\n')
 
+/**
+ * The chat-only variant for the routed Audio flow (d1 routes, Audio never
+ * picks tools). Same voice, no tool imperatives: a model that cannot call
+ * tools must not be told to call them (it would parrot the call as prose and
+ * the sanitizer would eat its reply). Change requests get one short
+ * acknowledgement — the edit is handled separately — and ambiguity gets a
+ * question, as usual.
+ */
+export const OMNI_SYSTEM_PROMPT_CHAT_ONLY = [
+  'You are Omni, the voice of a local note workspace. The user is talking with you — conversation is the default. Each turn may show you the current note.',
+  'Most turns are just conversation: greetings, questions, opinions, hypotheticals, "what does the note say". Answer those in your own words, naturally. Never write note content in chat, not even as a draft.',
+  'If the user wants the note changed in any way (add, remove, rename, update, fix, rewrite, create), reply with one short acknowledgement and nothing else — no note content, no drafts, no description of doing it. The edit itself is handled separately; your reply stands as the turn’s visible text.',
+  'Ask ONE short clarifying question only when a request is genuinely ambiguous — an unresolved "this", "that number", or an outcome you cannot pin down.',
+  'Undo and redo are instant acknowledgements too: "undo that", "take that back", "redo it" — reply with one short confirmation and nothing else.',
+  'Never mention this process or its machinery — no talk of tasks, tools, calls, briefs, or who does the writing.',
+  'Style: brief and natural, one or two sentences unless more is genuinely needed. Reference the note only when the turn is actually about it.',
+].join('\n')
+
 /** The user-role instruction for the repair-failure clarify follow-up (no tools). */
 export const CLARIFY_FOLLOWUP_INSTRUCTION =
   'You could not produce a usable edit instruction for that request. Do not call any tool and do ' +
@@ -314,6 +332,12 @@ export interface OmniTurnInput {
    * injected; error endpoint state follows it.
    */
   chatEndpoint?: 'audio' | 'omni'
+  /**
+   * Chat-only turn: no tools are offered, the chat-only system prompt is sent,
+   * and the outcome is always `answer` (or a throw on empty/failed reply).
+   * The routed Audio flow sets this — d1 routes, Audio never picks tools.
+   */
+  disableTools?: boolean
   /** Injectable bridge chat call (tests); defaults to the live chatEndpoint. */
   chat?: OmniChatFn
   /**
@@ -421,7 +445,7 @@ export function buildOmniMessages(input: OmniTurnInput): ChatMessage[] {
   ].join('\n\n')
 
   return [
-    { role: 'system', content: OMNI_SYSTEM_PROMPT },
+    { role: 'system', content: input.disableTools ? OMNI_SYSTEM_PROMPT_CHAT_ONLY : OMNI_SYSTEM_PROMPT },
     ...history,
     { role: 'user', content: textParts },
   ]
@@ -780,8 +804,12 @@ async function runTurn(input: OmniTurnInput): Promise<OmniTurnResult> {
   if (aborted()) throw new TurnAborted()
 
   // -- stage 1: the primary tools call --------------------------------------------
+  // Chat-only turns (routed Audio flow) offer no tools: the outcome is always
+  // an answer, and the repair/clarify stages below stay unreachable.
   const messages = buildOmniMessages(input)
-  const primary = await request(messages, { tools: OMNI_TOOLS, streamDeltas: true }, 'primary · tools')
+  const primary = input.disableTools
+    ? await request(messages, { streamDeltas: true }, 'primary · chat-only')
+    : await request(messages, { tools: OMNI_TOOLS, streamDeltas: true }, 'primary · tools')
   if (aborted()) throw new TurnAborted()
 
   const firstCall = primary.toolCalls[0] ?? null

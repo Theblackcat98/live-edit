@@ -207,7 +207,6 @@ export default function App() {
             note={workspace.note}
             title={workspace.title}
             path={workspace.path}
-            span={workspace.span}
             diff={workspace.diff}
             busy={workspace.busy}
             sourceMode={workspace.sourceMode}

@@ -446,10 +446,30 @@
   min-width: 0;
 }
 
+/* The head is the collapse toggle (live decisions open, resolutions close) —
+   a real button, restyled to read as the card's title row. */
 .pending-head {
   display: flex;
   align-items: center;
   gap: 5px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pending-head:hover {
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+
+.pending-head > svg {
+  flex-shrink: 0;
+  color: var(--ink-3);
 }
 
 .pending-icon {
@@ -480,6 +500,9 @@
 }
 
 .pending-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 10px;
   font-weight: 500;
   color: var(--ink);
@@ -503,6 +526,30 @@
 
 .pending-verdict.is-orange {
   color: var(--orange);
+}
+
+/* Collapsed card = the head row plus this one summary line; resolutions
+   default here so a queue of decided edits never eats the transcript. */
+.pending-collapsed-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 2px;
+  padding-left: 16px;
+  color: var(--ink-3);
+  font-size: 9.5px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.pending-collapsed-meta .mono {
+  flex-shrink: 0;
+}
+
+.pending-collapsed-asked {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pending-tool {
@@ -546,13 +593,17 @@
 }
 
 /* The proposed change itself. Dashed hairline = proposal, not committed
-   change (the applied diff in the note is a solid green fill + flash). */
+   change (the applied diff in the note is a solid green fill + flash).
+   Tall diffs scroll inside a capped window — the card states the full
+   +/− counts; the body never grows past a few lines of chat. */
 .pending-diff {
   margin-top: 5px;
+  max-height: 128px;
+  overflow-y: auto;
   border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--line));
   border-radius: var(--radius-chip);
   background: var(--inset);
-  overflow: hidden;
+  overscroll-behavior: contain;
 }
 
 .pending-diff-line {

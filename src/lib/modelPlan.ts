@@ -6,10 +6,11 @@
  * stopping a loaded member is always opt-in.
  */
 
-import type { EndpointHealth, RuntimeHealth } from '../types'
+import type { RuntimeHealth } from '../types'
+import { modeDef, type EndpointId } from './modes'
 import type { RunMode } from './runmode'
 
-export type EndpointId = EndpointHealth['id']
+export type { EndpointId }
 
 /** Manager member names (scripts/model-manager.mjs); ids differ only for d1. */
 const MANAGER_NAMES: Record<EndpointId, string> = {
@@ -24,14 +25,12 @@ export function managerNameFor(id: EndpointId): string {
 }
 
 /**
- * The endpoints a mode actually runs — rosterFor(mode) (src/data/models.ts)
- * mapped to the servers behind it.
+ * The endpoints a mode actually runs — the registry row's `endpoints`, which
+ * is the same roster the Runtime rail shows, mapped to the servers behind it.
+ * Kept as a named helper for the switch-planning tests.
  */
 export function endpointsForMode(mode: RunMode): EndpointId[] {
-  if (mode === 'audio') return ['audio', 'd1omni', 'text']
-  if (mode === 'omni') return ['omni', 'd1omni', 'text']
-  if (mode === 'worker-d1') return ['text', 'd1omni']
-  return ['text']
+  return modeDef(mode).endpoints
 }
 
 export interface ModelSwitchPlan {

@@ -3,29 +3,27 @@ import type { ToolDefinition, ToolName } from '../types'
 export const TOOL_DEFS: ToolDefinition[] = [
   {
     name: 'add_text',
-    description:
-      'Insert new text or Markdown at a precise position: append, prepend, after a line, or under a heading.',
     params: [
       { name: 'file_path', type: 'string', required: true, description: 'Target note path.' },
       {
         name: 'position',
         type: 'enum: append | prepend | after_line | under_heading',
         required: true,
-        description: 'Where the content is inserted.',
+        description:
+          "where the content is inserted — under_heading inserts at the END of that heading's section (after its existing content); after_line inserts immediately after line N",
       },
       {
         name: 'anchor',
         type: 'string | integer',
         required: false,
-        description: 'Line number or exact heading supplied by the supervisor.',
+        description:
+          'line number or exact heading text to anchor the insertion (required for after_line and under_heading)',
       },
       { name: 'content', type: 'string', required: true, description: 'Markdown to insert.' },
     ],
   },
   {
     name: 'edit_text',
-    description:
-      'Replace a grounded line span with updated text. The old anchor must match the current note.',
     params: [
       { name: 'file_path', type: 'string', required: true, description: 'Target note path.' },
       { name: 'start_line', type: 'integer', required: true, description: '1-based first line.' },
@@ -41,8 +39,6 @@ export const TOOL_DEFS: ToolDefinition[] = [
   },
   {
     name: 'remove_text',
-    description:
-      'Delete a grounded line span, bullet, row or section after the critic verifies the target.',
     params: [
       { name: 'file_path', type: 'string', required: true, description: 'Target note path.' },
       { name: 'start_line', type: 'integer', required: true, description: '1-based first line.' },

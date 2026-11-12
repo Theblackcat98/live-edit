@@ -73,18 +73,10 @@ export class WorkerChatError extends Error {
 // --- tool catalog (adapted from worker.ts's packet catalog) ---------------------
 
 /**
- * TOOL_DEFS descriptions assume a supervisor supplied the anchor. In this
- * mode there is no supervisor — the chat turn grounds itself — so the
- * parameter text is rewritten once, here, and nowhere else.
+ * TOOL_DEFS descriptions are worker-first already (data/tools.ts): the chat
+ * turn grounds itself, so the catalog is rendered as-is, with only the note
+ * path substituted.
  */
-const PARAM_DESCRIPTION_FIXES: Record<string, string> = {
-  'Target note path.': `the target note: ${NOTE_PATH}`,
-  'Line number or exact heading supplied by the supervisor.':
-    'line number or exact heading text to anchor the insertion (required for after_line and under_heading)',
-  'Where the content is inserted.':
-    "where the content is inserted — under_heading inserts at the END of that heading's section (after its existing content); after_line inserts immediately after line N",
-}
-
 const TOOL_USE_WHEN: Record<ToolName, string> = {
   add_text:
     'adding NEW lines — a new bullet, paragraph, section, or whole document — without replacing or deleting existing lines',
@@ -102,9 +94,7 @@ export function renderWorkerChatToolCatalog(notePath: string = NOTE_PATH): strin
   return TOOL_DEFS.map((tool) => {
     const params = tool.params
       .map((param) => {
-        const description =
-          PARAM_DESCRIPTION_FIXES[param.description] ??
-          param.description.replace('Target note path.', `the target note: ${notePath}`)
+        const description = param.description.replace('Target note path.', `the target note: ${notePath}`)
         return `  ${param.name} (${param.type}${param.required ? ', required' : ', optional'}): ${description}`
       })
       .join('\n')

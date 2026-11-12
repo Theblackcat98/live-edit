@@ -10,11 +10,33 @@
  * outright (the app seeds fresh) — the loader never guesses.
  */
 
-import type { Message, PendingEdit, RejectedTraceRecord, Snapshot, Trace } from '../types'
+import type { Message, PendingEdit, RejectedTraceRecord, Snapshot, Trace, TraceTimings } from '../types'
 
 const STORAGE_KEY = 'liquidscribe.workspace.v1'
 export const SCHEMA_VERSION = 2
 const MAX_PERSISTED_RUNS = 12
+
+/**
+ * Supervisor-first traces persisted before the stage-1 refactor carry fields
+ * nothing produces or renders any more (route, span, grounding, critic) and a
+ * `ground` timing. Drop them on load so a reloaded session never resurrects a
+ * dead contract; every surviving field loads verbatim.
+ */
+const LEGACY_TRACE_FIELDS = ['route', 'span', 'grounding', 'critic'] as const
+
+function stripLegacyTrace(trace: Trace): Trace {
+  const legacy = { ...trace } as Record<string, unknown>
+  for (const field of LEGACY_TRACE_FIELDS) delete legacy[field]
+  const timings = { ...trace.timings } as TraceTimings & { ground?: number }
+  delete timings.ground
+  return { ...(legacy as unknown as Trace), timings }
+}
+
+function stripLegacyRejection(record: RejectedTraceRecord): RejectedTraceRecord {
+  const legacy = { ...record } as Record<string, unknown>
+  delete legacy.spanCandidates
+  return legacy as unknown as RejectedTraceRecord
+}
 
 export interface PersistedWorkspace {
   version: 2
@@ -53,9 +75,9 @@ export function loadWorkspaceState(): PersistedWorkspace | null {
       note: parsed.note,
       snapshots: Array.isArray(parsed.snapshots) ? (parsed.snapshots as Snapshot[]) : [],
       messages: Array.isArray(parsed.messages) ? (parsed.messages as Message[]) : [],
-      runs: Array.isArray(parsed.runs) ? (parsed.runs as Trace[]) : [],
+      runs: Array.isArray(parsed.runs) ? (parsed.runs as Trace[]).map(stripLegacyTrace) : [],
       rejectedTraces: Array.isArray(parsed.rejectedTraces)
-        ? (parsed.rejectedTraces as RejectedTraceRecord[])
+        ? (parsed.rejectedTraces as RejectedTraceRecord[]).map(stripLegacyRejection)
         : [],
       // v1 payloads carry none; a v2 payload with an absent or non-array list
       // loads as [] rather than throwing (same defensive discipline as above).

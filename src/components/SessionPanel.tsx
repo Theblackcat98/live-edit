@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import type { FormEvent } from 'react'
 import {
   ArrowUp,
@@ -15,6 +15,7 @@ import {
   Table2,
 } from 'lucide-react'
 import type { Message, Suggestion } from '../types'
+import { modeDef } from '../lib/modes'
 import { cx, formatElapsed } from '../lib/utils'
 import type { RunMode } from '../lib/runmode'
 import type { PendingEdit } from '../types'
@@ -50,6 +51,11 @@ interface SessionPanelProps {
    * surface renders the same form as a persistent command bar instead. */
   showComposer?: boolean
 }
+
+/** One chronological transcript entry — a chat bubble or a pending-edit card. */
+type TimelineItem =
+  | { kind: 'message'; at: number; message: Message }
+  | { kind: 'pending'; at: number; edit: PendingEdit }
 
 interface SessionComposerProps {
   busy: boolean
@@ -113,6 +119,20 @@ export function SessionPanel({
 }: SessionPanelProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const stickToBottom = useRef(true)
+
+  // The transcript is one timeline: chat bubbles and pending-edit cards
+  // interleave by when they happened (message.at / edit.createdAt), so a held
+  // edit sits where it occurred instead of piling up at the bottom. Stable
+  // sort keeps same-timestamp entries in insertion order.
+  const timeline = useMemo<TimelineItem[]>(
+    () =>
+      [
+        ...messages.map((message) => ({ kind: 'message' as const, at: message.at, message })),
+        ...pendingEdits.map((edit) => ({ kind: 'pending' as const, at: edit.createdAt, edit })),
+      ].sort((a, b) => a.at - b.at),
+    [messages, pendingEdits],
+  )
+  const recentIds = useMemo(() => new Set(messages.slice(-2).map((message) => message.id)), [messages])
 
   useEffect(() => {
     const element = scrollRef.current
@@ -184,24 +204,25 @@ export function SessionPanel({
         ref={scrollRef}
         onScroll={handleScroll}
       >
-        {messages.map((message, index) => (
-          <MessageBubble
-            key={message.id}
-            message={message}
-            recent={index >= messages.length - 2}
-            onAction={onSubmit}
-            onOpenTrace={onOpenTrace}
-          />
-        ))}
-        {pendingEdits.map((edit) => (
-          <PendingEditCard
-            key={edit.id}
-            edit={edit}
-            busy={busy}
-            onApply={onApplyPending}
-            onDiscard={onDismissPending}
-          />
-        ))}
+        {timeline.map((item) =>
+          item.kind === 'message' ? (
+            <MessageBubble
+              key={item.message.id}
+              message={item.message}
+              recent={recentIds.has(item.message.id)}
+              onAction={onSubmit}
+              onOpenTrace={onOpenTrace}
+            />
+          ) : (
+            <PendingEditCard
+              key={item.edit.id}
+              edit={item.edit}
+              busy={busy}
+              onApply={onApplyPending}
+              onDiscard={onDismissPending}
+            />
+          ),
+        )}
       </div>
 
       <div className="session-compose">
@@ -265,7 +286,9 @@ export function SessionComposer({
   const isMac =
     typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
   const shortcut = isMac ? '⌘K' : 'Ctrl K'
-  const voiceAvailable = mode !== 'lowram'
+  // Capability check through the registry: a mode with no speech endpoint has
+  // no microphone path (low-RAM keeps the text composer only).
+  const voiceAvailable = modeDef(mode).speech !== null
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault()

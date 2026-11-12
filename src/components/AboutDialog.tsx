@@ -1,8 +1,8 @@
 import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { Boxes, CloudOff, Keyboard, ShieldCheck, X } from 'lucide-react'
-import { rosterFor } from '../data/models'
-import { runModeInfo, chatModelName, type RunMode } from '../lib/runmode'
+import { modeDef } from '../lib/modes'
+import type { RunMode } from '../lib/runmode'
 import { LogoMark } from './LogoMark'
 
 interface AboutDialogProps {
@@ -33,6 +33,8 @@ export function AboutDialog({ open, onClose, mode }: AboutDialogProps) {
 
   if (!open) return null
 
+  const def = modeDef(mode)
+
   return createPortal(
     <div className="about-overlay">
       <div className="about-backdrop" onClick={onClose} aria-hidden="true" />
@@ -57,7 +59,7 @@ export function AboutDialog({ open, onClose, mode }: AboutDialogProps) {
 
         <div className="about-body">
           <p className="about-lede">
-            A local-first note workspace where you talk to {chatModelName(mode)} and watch the
+            A local-first note workspace where you talk to {def.chat.author} and watch the
             1.7B author each edit, checked by d1 before it touches a line.
           </p>
 
@@ -68,7 +70,7 @@ export function AboutDialog({ open, onClose, mode }: AboutDialogProps) {
             <div>
               <strong>Local LFM3 runtime</strong>
               <p>
-                Chat replies ({chatModelName(mode)}), worker XML calls (LFM3-1.7B) and the d1
+                Chat replies ({def.chat.author}), worker XML calls (LFM3-1.7B) and the d1
                 safety check (d1-Omni-2B over /v1/systemone) run against local llama.cpp servers
                 on 127.0.0.1, started by scripts/start-models.sh. The Runtime truth card in the
                 rail probes them live. The worker grounds its own span; the diff engine,
@@ -83,7 +85,7 @@ export function AboutDialog({ open, onClose, mode }: AboutDialogProps) {
             <span className="mono">The trinity</span>
           </div>
           <div className="about-models">
-            {rosterFor(mode).map((model) => (
+            {def.roster.map((model) => (
               <div className="about-model" key={model.id}>
                 <span className={`status-dot is-${model.color}`} />
                 <div>
@@ -114,7 +116,7 @@ export function AboutDialog({ open, onClose, mode }: AboutDialogProps) {
             <ShieldCheck size={12} />
             <span>
               The app does not upload audio or note state: every model call stays on 127.0.0.1.
-              Active mode: {runModeInfo(mode).label}. LFM Open License v1.0 applies to the model
+              Active mode: {def.info.label}. LFM Open License v1.0 applies to the model
               family; this interface is a local demonstration build.
             </span>
           </div>

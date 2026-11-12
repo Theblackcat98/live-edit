@@ -28,7 +28,7 @@ const run: Trace = {
   at: AT,
   command: 'Add a Q3 total row.',
   source: 'text',
-  timings: { route: 12, ground: 34, generate: 88, critic: 21, execute: 9, total: 164 },
+  timings: { route: 12, generate: 88, critic: 21, execute: 9, total: 130 },
   status: 'verified',
   outputTokens: 64,
   promptTokens: 512,
@@ -40,8 +40,7 @@ const rejectedTrace: RejectedTraceRecord = {
   at: AT,
   command: 'Delete the Q3 block.',
   route: { tool: 'remove_text', provenance: 'local-router' },
-  spanCandidates: [{ startLine: 3, endLine: 4, excerpt: '## Q3' }],
-  grounding: { source: 'fallback-keyword', chosenLine: 3 },
+  grounding: { source: 'worker-self', chosenLine: 3 },
   workerXml: '<tool name="remove_text"><param name="startLine">3</param></tool>',
   critic: { verdict: 'rejected', reason: 'row-count check failed', pCorrect: null },
 }
@@ -269,5 +268,44 @@ describe('loader discipline on unknown payloads (unchanged from v1)', () => {
 
   it('an empty store loads as null', () => {
     expect(loadWorkspaceState()).toBeNull()
+  })
+})
+
+describe('legacy supervisor trace fields (stage-1 cleanup)', () => {
+  it('strips dead route/span/grounding/critic fields and the ground timing on load', () => {
+    const legacyRun = {
+      ...run,
+      route: { action: 'file_mutation' },
+      span: { startLine: 1, endLine: 1, excerpt: '# Ledger', confidence: 0.9, reason: 'legacy' },
+      grounding: { source: 'd1-span' },
+      critic: { verdict: 'verified', pCorrect: 0.9, pSafe: 0.9, checks: [] },
+      timings: { ...run.timings, ground: 34 },
+    }
+    const legacyRejection = {
+      ...rejectedTrace,
+      spanCandidates: [{ startLine: 1, endLine: 1, excerpt: '# Ledger' }],
+    }
+
+    installStorage({
+      [STORAGE_KEY]: JSON.stringify({
+        ...v1Payload,
+        version: 2,
+        runs: [legacyRun],
+        rejectedTraces: [legacyRejection],
+        pendingEdits: [],
+      }),
+    })
+
+    const loaded = expectLoaded()
+    const loadedRun = loaded.runs[0] as unknown as Record<string, unknown>
+    expect(loadedRun).not.toHaveProperty('route')
+    expect(loadedRun).not.toHaveProperty('span')
+    expect(loadedRun).not.toHaveProperty('grounding')
+    expect(loadedRun).not.toHaveProperty('critic')
+    expect(loaded.runs[0]?.timings).not.toHaveProperty('ground')
+    expect(loaded.rejectedTraces[0]).not.toHaveProperty('spanCandidates')
+    // The live contract survives untouched.
+    expect(loaded.runs[0]?.id).toBe(run.id)
+    expect(loaded.runs[0]?.timings.route).toBe(run.timings.route)
   })
 })

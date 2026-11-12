@@ -192,6 +192,14 @@ describe('buildOmniMessages', () => {
     expect(typeof last.content === 'string' && last.content).toContain('User: update the Q3 revenue row')
   })
 
+  it('sends the chat-only prompt when tools are disabled (routed Audio flow)', async () => {
+    const { OMNI_SYSTEM_PROMPT_CHAT_ONLY } = await import('./omni')
+    const messages = buildOmniMessages(baseInput({ disableTools: true }))
+    expect(messages[0].role).toBe('system')
+    expect(messages[0].content).toBe(OMNI_SYSTEM_PROMPT_CHAT_ONLY)
+    expect(messages[0].content).not.toMatch(/delegate_edit/)
+  })
+
   it('replays answer turns as user/assistant text pairs', () => {
     const messages = buildOmniMessages(
       baseInput({
@@ -323,6 +331,15 @@ describe('runOmniTurn — answer', () => {
       name: 'OmniTurnError',
       kind: 'empty-reply',
     })
+  })
+
+  it('offers no tools on a chat-only turn (routed Audio flow)', async () => {
+    const { chat, calls } = fakeChat([completion({ text: 'On it.' })])
+    const result = await runOmniTurn(baseInput({ chat, disableTools: true }))
+    expect(result?.outcome).toBe('answer')
+    expect(result?.text).toBe('On it.')
+    expect(calls).toHaveLength(1)
+    expect(calls[0].options.tools).toBeUndefined()
   })
 })
 

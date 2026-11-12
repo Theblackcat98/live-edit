@@ -5,11 +5,6 @@ export type ToolName =
   | 'edit_text'
   | 'remove_text'
 
-export type ActionClass =
-  | 'conversational_only'
-  | 'file_mutation'
-  | 'ambiguous_request'
-
 export type RunStatus =
   | 'running'
   | 'clarify'
@@ -19,15 +14,14 @@ export type RunStatus =
   | 'failed'
   /**
    * The run produced a pending edit (design.md §9) that awaits user
-   * adjudication; the turn is paused, not over. Phase-1 contract only —
-   * nothing produces this status yet.
+   * adjudication; the turn is paused, not over. The pipeline settles this
+   * status when a gate-passing call is held for the user.
    */
   | 'pending'
 
 export type PipelineStage =
   | 'idle'
   | 'routing'
-  | 'grounding'
   | 'generating'
   | 'verifying'
   | 'executing'
@@ -46,7 +40,6 @@ export interface ToolParam {
 
 export interface ToolDefinition {
   name: ToolName
-  description: string
   params: ToolParam[]
 }
 
@@ -60,72 +53,12 @@ export interface ToolDefinition {
  */
 export type Probability = number | null
 
-export interface ToolScore {
-  name: ToolName
-  /** d1's measured probability, the local router's flat heuristic, or null (unreported). */
-  p: Probability
-}
-
-export interface RouteDecision {
-  action: ActionClass
-  /** d1's measured confidence, the local router's flat heuristic, or null (unreported). */
-  actionConfidence: Probability
-  allowedTools: ToolScore[]
-  primaryTool?: ToolName
-  reason: string
-  directive?: 'undo' | 'redo'
-}
-
-export interface SpanTarget {
-  startLine: number
-  endLine: number
-  excerpt: string
-  /** Heuristic (deterministic search) or d1-measured; null when d1 chose without reporting one. */
-  confidence: Probability
-  reason: string
-  phrase?: string
-}
-
 /**
- * Which path resolved the target span: d1-Omni's typed span question over
- * /v1/systemone (`d1-span`), or the deterministic supervisor search
- * (`fallback-keyword` — keyword/quote/ordinal/line reference, or the literal
- * pre-empts that never need a model call). The trace records it so a run's
- * provenance is auditable.
+ * Who produced a rejected-call record: the worker itself (its call failed the
+ * gates or the safety check) or the user at pending-edit adjudication. The
+ * rejected-traces log records it so each refusal's provenance is auditable.
  */
-export type GroundingSource = 'd1-span' | 'fallback-keyword' | 'worker-self' | 'pending-adjudication'
-
-export interface GroundingRecord {
-  source: GroundingSource
-  /** d1-Omni probability for the chosen candidate (live path only); null when unreported. */
-  p?: Probability
-  /** 1-based first line of the resolved span. */
-  chosenLine?: number
-  /** Structural candidates the grounding question offered. */
-  candidateCount?: number
-  /** Why the deterministic fallback ran, when it did. */
-  detail?: string
-}
-
-export interface CriticCheck {
-  label: string
-  pass: boolean
-  detail?: string
-}
-
-export interface CriticResult {
-  verdict: 'verified' | 'rejected'
-  /**
-   * d1's measured semantic score (live overlay only). The local critic never
-   * invents one: null means unreported, and the verdict tracks the local
-   * checks alone — numbers never gate a local decision.
-   */
-  pCorrect: Probability
-  /** Same semantics as pCorrect; no local path measures a safety probability. */
-  pSafe: Probability
-  checks: CriticCheck[]
-  feedback?: string
-}
+export type GroundingSource = 'worker-self' | 'pending-adjudication'
 
 /** Sampler settings actually sent with a live worker decode. */
 export interface WorkerSampler {
@@ -143,7 +76,7 @@ export interface WorkerCall {
   promptHints: string[]
   toolSchemasInjected: number
   noteView: string
-  /** Present only when a live decode produced this call; absent for template calls. */
+  /** Present only when a live decode produced this call; absent for the harness-built dictation call. */
   sampler?: WorkerSampler
 }
 
@@ -169,7 +102,6 @@ export interface RejectedTraceRecord {
   at: number
   command: string
   route: { tool?: ToolName; provenance: string }
-  spanCandidates: Array<{ startLine: number; endLine: number; excerpt: string }>
   grounding: { source: GroundingSource; chosenLine?: number; p?: Probability }
   workerXml: string
   critic: { verdict: 'rejected'; reason?: string; pCorrect: Probability }
@@ -181,7 +113,6 @@ export interface RejectedTraceRecord {
 
 export interface TraceTimings {
   route: number
-  ground: number
   generate: number
   critic: number
   execute: number
@@ -255,13 +186,8 @@ export interface Trace {
   runMode?: RunMode
   /** Omni's typed delegation directive (P2+; absent on legacy/supervisor-first traces). */
   directive?: Directive
-  route?: RouteDecision
-  span?: SpanTarget
-  /** How the span was resolved (d1 typed question vs deterministic search). */
-  grounding?: GroundingRecord
   call?: WorkerCall
-  critic?: CriticResult
-  /** The d1 safety-check result (P4+; Omni-first traces only — legacy traces carry `critic`). */
+  /** The d1 safety-check result (Omni-first traces; absent on worker-chat and legacy traces). */
   d1Check?: D1CheckResult
   /** Omni tool-call repair diagnostics (Omni-first traces only; mirrors OmniTurnResult.repair). */
   omniRepair?: { error: string; rawArguments: string }
@@ -324,9 +250,9 @@ export interface DelegationInfo {
   runId: string
   tool: ToolName
   /**
-   * Phase-1 additions: `checking` (hard gates / d1 check in flight) and
-   * `pending` (the edit awaits user adjudication, design.md §9). Nothing
-   * produces them yet — the old pipeline still emits only the original four.
+   * `checking` covers hard gates and the d1 check in flight; `pending` means
+   * the edit awaits user adjudication (design.md §9). Both are produced by
+   * verifyAndExecute.
    */
   status: 'generating' | 'checking' | 'pending' | 'verified' | 'executed' | 'rejected'
   /** d1's measured critic score; null/undefined hides the P chip (never invented). */
@@ -341,9 +267,9 @@ export interface Message {
   role: 'user' | 'assistant' | 'system' | 'tool'
   text: string
   at: number
-  /** Who authored an assistant bubble: the chat model's name for model text, 'harness' for pipeline templates. Absent only on legacy persisted messages. */
+  /** Who authored an assistant bubble: the chat model's name for model text, 'harness' for harness-built notices, confirmations and error copy. Absent only on legacy persisted messages. */
   author?: string
-  kind?: 'greeting' | 'ack' | 'result' | 'clarify' | 'error' | 'notice'
+  kind?: 'greeting' | 'result' | 'error' | 'notice'
   source?: 'voice' | 'text' | 'demo'
   durationSec?: number
   runId?: string
@@ -389,11 +315,11 @@ export interface TraceRuntime {
   asr?: RuntimeSource
   /** Route decision: d1-Omni /v1/systemone, or local heuristics. */
   route: RuntimeSource
-  /** Worker XML: LFM3-1.7B /v1/chat/completions, the template emitter, or the dictation exception (harness-built call, design.md §11). */
+  /** Worker XML: LFM3-1.7B /v1/chat/completions, or the dictation exception (harness-built call, design.md §11). */
   worker: RuntimeSource | 'dictation'
-  /** Critic verdict: d1-Omni semantic pass + local checks, or local checks only. */
+  /** Safety check: d1-Omni's verdict, or local checks only when d1 is unavailable. */
   critic: RuntimeSource
-  /** Conversational reply: Omni /v1/chat/completions, or canned templates. */
+  /** Conversational reply: the mode's front-door model, or the harness error path. */
   chat: RuntimeSource
 }
 
@@ -441,31 +367,10 @@ export interface PendingClarification {
   options: MessageAction[]
 }
 
-export interface WorkspaceState {
-  note: string
-  title: string
-  path: string
-  history: Snapshot[]
-  historyIndex: number
-  messages: Message[]
-  trace: Trace | null
-  runs: Trace[]
-  stage: PipelineStage
-  stageStates: Record<StageId, StageState>
-  busy: boolean
-  span: SpanTarget | null
-  diff: ExecutionDiff | null
-  contextUsage: ContextUsage
-  sourceMode: boolean
-  speakerOn: boolean
-  micOn: boolean
-  activityTab: 'supervisor' | 'context'
-}
-
-// --- Phase-1 pipeline contracts (architecture-refactor.md §5.1) ----------------
-// Additive only: these types describe the Omni-first pipeline (design.md) so
-// later phases are type-led. Nothing produces or consumes them yet; the legacy
-// types above stay until their phase deletes them.
+// --- Omni-first pipeline contracts (architecture-refactor.md §5.1) -------------
+// These types describe the Omni-first pipeline (design.md) and are the live
+// contracts of the turn path: directives, d1 checks, pending edits, the worker
+// packet and recorded exchanges.
 
 /**
  * The Omni → worker delegation contract (design.md §5). Omni resolves the
@@ -568,14 +473,27 @@ export interface ContextPacket {
  * verdict: d1 down, malformed answer, or an otherwise unusable response is
  * never silently mapped to approval (or to rejection) — it means the user
  * decides instead.
+ *
+ * Beyond the calibrated pair (`does_call_match_directive` + `destructive_safety`),
+ * three advisory questions separate confident disapproval from uncertainty:
+ * `intent_clarity` (is the request unambiguous?), `target_support` (does the
+ * note contain what the call targets?) and `execution_confidence` (will the
+ * call execute as rendered?). Any of the five failing holds the edit for the
+ * user — the failing question names the reason.
  */
 export interface D1CheckResult {
-  /** approved: noul ≥ threshold and destructive_safety = safe; disapproved otherwise; unavailable per above. */
+  /** approved: every question passes its threshold; disapproved otherwise; unavailable per above. */
   verdict: 'approved' | 'disapproved' | 'unavailable'
   /** d1's measured `does_call_match_directive` score; null when unreported/unavailable. */
   noul: number | null
   /** d1's `destructive_safety` choice; null when unreported/unavailable. */
   destructiveSafety: 'safe' | 'unintended_data_loss' | null
+  /** d1's measured `intent_clarity` score; null when unreported/unavailable. */
+  intentClarity: number | null
+  /** d1's `target_support` choice; null when unreported/unavailable. */
+  targetSupport: 'supported' | 'unsupported' | null
+  /** d1's measured `execution_confidence` score; null when unreported/unavailable. */
+  executionConfidence: number | null
   /** Which typed question failed the verdict (shown to the user on a pending card). */
   failingQuestion?: string
   /** Human-readable reason (bridge error detail, threshold explanation). */
@@ -628,6 +546,9 @@ export interface PendingEdit {
     verdict: 'approved' | 'disapproved' | 'unavailable'
     noul: number | null
     destructiveSafety: 'safe' | 'unintended_data_loss' | null
+    intentClarity?: number | null
+    targetSupport?: 'supported' | 'unsupported' | null
+    executionConfidence?: number | null
     reason?: string
   }
   /** pending: awaiting adjudication; applied/discarded: resolved by the user; stale: gates failed on ✓ (drifted anchor). */

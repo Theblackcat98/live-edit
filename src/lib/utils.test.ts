@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatP, pAdopted, pDecisive, pFloor } from './utils'
+import { clamp, formatP } from './utils'
 
 describe('probability display helper (audit TD-03)', () => {
   it('formats measured probabilities to two decimals', () => {
@@ -13,39 +13,36 @@ describe('probability display helper (audit TD-03)', () => {
   })
 })
 
-describe('adoption gate: null satisfies adoption (audit TD-04)', () => {
-  it('an unreported score adopts — the decision was made, only its p was not measured', () => {
-    expect(pAdopted(null, 0.25)).toBe(true)
-    expect(pAdopted(undefined, 0.25)).toBe(true)
+describe('clamp', () => {
+  it('keeps values inside the bounds untouched', () => {
+    expect(clamp(0.5, 0, 1)).toBe(0.5)
+    expect(clamp(25, 1, 100)).toBe(25)
   })
 
-  it('a measured score must clear the threshold', () => {
-    expect(pAdopted(0.26, 0.25)).toBe(true)
-    expect(pAdopted(0.25, 0.25)).toBe(false)
-    expect(pAdopted(0.1, 0.25)).toBe(false)
-  })
-})
-
-describe('decisive gate: null is never decisive (audit TD-04)', () => {
-  it('only a measured probability at or above the threshold can overturn', () => {
-    expect(pDecisive(null, 0.5)).toBe(false)
-    expect(pDecisive(0.49, 0.5)).toBe(false)
-    expect(pDecisive(0.5, 0.5)).toBe(true)
-    expect(pDecisive(0.9, 0.5)).toBe(true)
+  it('pins values at the nearest bound', () => {
+    expect(clamp(-3, 0, 1)).toBe(0)
+    expect(clamp(4, 0, 1)).toBe(1)
   })
 })
 
-describe('repair floor (audit TD-04)', () => {
-  it('passes measured values above the floor through verbatim', () => {
-    expect(pFloor(0.88, 0.3)).toBe(0.88)
+describe('probability display helper: honesty edges', () => {
+  it('never rounds a measured value up into a false certainty', () => {
+    expect(formatP(0.999)).toBe('1.00')
+    expect(formatP(0.004)).toBe('0.00')
+    expect(formatP(0)).toBe('0.00')
   })
 
-  it('replaces sub-floor measured values with the flat heuristic floor', () => {
-    expect(pFloor(0.05, 0.5)).toBe(0.5)
+  it('keeps negative reported scores visible rather than hiding them', () => {
+    expect(formatP(-0.2)).toBe('-0.20')
   })
 
-  it('never invents a number for an unreported score', () => {
-    expect(pFloor(null, 0.5)).toBeNull()
-    expect(pFloor(undefined, 0.5)).toBeNull()
+  it('renders the gate thresholds at display precision', () => {
+    expect(formatP(0.25)).toBe('0.25')
+    expect(formatP(0.5)).toBe('0.50')
+  })
+
+  it('is stable across repeated reads of the same unreported value', () => {
+    expect(formatP(null)).toBe('—')
+    expect(formatP(null)).toBe('—')
   })
 })

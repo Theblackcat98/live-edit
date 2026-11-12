@@ -1,4 +1,4 @@
-import type { ExecutionDiff, ExecutionResult, SpanTarget, WorkerCall } from '../types'
+import type { ExecutionDiff, ExecutionResult, WorkerCall } from '../types'
 import {
   collapseBlankLines,
   findHeading,
@@ -109,14 +109,12 @@ function insertAfterLine(note: string, anchorLine: number, content: string): Not
 export function executeTool(
   note: string,
   call: WorkerCall,
-  span?: SpanTarget,
   options: { overrideBlastRadius?: boolean } = {},
 ): ExecutionResult {
   const started = performance.now()
   const finish = (
     result: Omit<ExecutionResult, 'durationMs'>,
   ): ExecutionResult => ({ ...result, durationMs: performance.now() - started })
-  const spanNote = span ? ` (grounded span lines ${span.startLine}–${span.endLine})` : ''
 
   if (call.name === 'edit_text') {
     const start = Number(call.params.start_line)
@@ -147,7 +145,7 @@ export function executeTool(
     if (!options.overrideBlastRadius && retained < current.length * EDIT_RETENTION_RATIO) {
       return finish({
         ok: false,
-        message: `Replacement collapses the target: ${retained} of ${current.length} characters retained${spanNote}.`,
+        message: `Replacement collapses the target: ${retained} of ${current.length} characters retained.`,
         tool: call.name,
         note,
       })
@@ -214,7 +212,7 @@ export function executeTool(
     if (!options.overrideBlastRadius && removed >= removalCapFor(lines.length)) {
       return finish({
         ok: false,
-        message: `Removal exceeds the blast-radius limit: ${removed} of ${lines.length} lines${spanNote}.`,
+        message: `Removal exceeds the blast-radius limit: ${removed} of ${lines.length} lines.`,
         tool: call.name,
         note,
       })

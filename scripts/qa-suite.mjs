@@ -597,11 +597,10 @@ async function main() {
       const last = runs[0] ?? null // runs are stored newest-first
       return { count: runs.length, status: last ? last.status : null, command: last ? last.command : null,
                id: last ? last.id ?? null : null,
-               critic: last ? last.critic ?? null : null, runtime: last ? last.runtime ?? null : null,
-               span: last ? last.span ?? null : null, grounding: last ? last.grounding ?? null : null,
+               runtime: last ? last.runtime ?? null : null,
                directive: last ? last.directive ?? null : null, call: last ? last.call ?? null : null,
                omniRepair: last ? last.omniRepair ?? null : null,
-               d1Check: last ? last.d1Check ?? null : null, route: last ? last.route ?? null : null }
+               d1Check: last ? last.d1Check ?? null : null }
     })()`)
   }
 
@@ -652,18 +651,13 @@ async function main() {
    * - `call.sampler` present: a live 1.7B decode authored the call — the
    *   deleted template emitter's calls carry no sampler (types.ts WorkerCall);
    * - `call.toolSchemasInjected === 3`: the full tool catalog traveled with
-   *   the prompt (design.md §6), not the supervisor's single-schema handoff;
-   * - `route`/`grounding` absent: no supervisor-era RouteDecision and no
-   *   d1-span/fallback-keyword grounding record — grounding is the worker's
-   *   job now (plan §7.3 deletes findSpanForMutation & friends).
+   *   the prompt (design.md §6), not a single-schema handoff.
    */
   function workerAuthored(run) {
     return Boolean(
       run?.directive &&
       run?.call?.sampler &&
-      run?.call?.toolSchemasInjected === 3 &&
-      run?.route == null &&
-      run?.grounding == null,
+      run?.call?.toolSchemasInjected === 3,
     )
   }
 
@@ -1437,7 +1431,7 @@ async function main() {
       /^\d+$/.test(String(info.call?.params?.end_line ?? ''))
     record('23', 'vague "remove that section about API keys" → worker grounds the Security section (directive + live call, no supervisor fields)',
       info.status === 'verified' && sectionGone && neighboursKept && workerGrounded && info.d1Check?.verdict === 'approved',
-      `status=${info.status}, sectionGone=${sectionGone}, neighboursKept=${neighboursKept}, workerGrounded=${workerGrounded}, task=${info.directive?.task ?? '-'}, span=${info.call?.params?.start_line ?? '-'}-${info.call?.params?.end_line ?? '-'}, tool=${info.call?.name ?? '-'}, sampler=${info.call?.sampler ? 'live' : '-'}, grounding=${JSON.stringify(info.grounding)}, d1=${info.d1Check?.verdict ?? '-'}${run.timedOut ? ', TIMEOUT' : ''}`)
+      `status=${info.status}, sectionGone=${sectionGone}, neighboursKept=${neighboursKept}, workerGrounded=${workerGrounded}, task=${info.directive?.task ?? '-'}, span=${info.call?.params?.start_line ?? '-'}-${info.call?.params?.end_line ?? '-'}, tool=${info.call?.name ?? '-'}, sampler=${info.call?.sampler ? 'live' : '-'}, d1=${info.d1Check?.verdict ?? '-'}${run.timedOut ? ', TIMEOUT' : ''}`)
   }
 
   await seedWorkspace(null)
@@ -1458,7 +1452,7 @@ async function main() {
       /^\d+$/.test(String(info.call?.params?.end_line ?? ''))
     record('24', 'vague "delete the bullet about the audit" → worker grounds the SSO list item (directive + live call, no supervisor fields)',
       info.status === 'verified' && bulletGone && neighboursKept && workerGrounded && info.d1Check?.verdict === 'approved',
-      `status=${info.status}, bulletGone=${bulletGone}, neighboursKept=${neighboursKept}, workerGrounded=${workerGrounded}, task=${info.directive?.task ?? '-'}, span=${info.call?.params?.start_line ?? '-'}-${info.call?.params?.end_line ?? '-'}, tool=${info.call?.name ?? '-'}, sampler=${info.call?.sampler ? 'live' : '-'}, grounding=${JSON.stringify(info.grounding)}, d1=${info.d1Check?.verdict ?? '-'}${run.timedOut ? ', TIMEOUT' : ''}`)
+      `status=${info.status}, bulletGone=${bulletGone}, neighboursKept=${neighboursKept}, workerGrounded=${workerGrounded}, task=${info.directive?.task ?? '-'}, span=${info.call?.params?.start_line ?? '-'}-${info.call?.params?.end_line ?? '-'}, tool=${info.call?.name ?? '-'}, sampler=${info.call?.sampler ? 'live' : '-'}, d1=${info.d1Check?.verdict ?? '-'}${run.timedOut ? ', TIMEOUT' : ''}`)
   }
 
   // --- Group F: P2 gates — delegation hygiene + ambiguous → Audio clarify -

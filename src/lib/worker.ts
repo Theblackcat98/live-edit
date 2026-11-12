@@ -128,17 +128,6 @@ function packetToolExample(tool: ToolName, notePath: string): string {
 }
 
 /**
- * TOOL_DEFS description fixes for the packet rendering (data/tools.ts keeps
- * its shipped text; the worker packet must not teach supervisor vocabulary).
- */
-const PARAM_DESCRIPTION_FIXES: Record<string, string> = {
-  'Line number or exact heading supplied by the supervisor.':
-    'line number or exact heading text to anchor the insertion (required for after_line and under_heading)',
-  'Where the content is inserted.':
-    'where the content is inserted — under_heading inserts at the END of that heading\'s section (after its existing content); after_line inserts immediately after line N',
-}
-
-/**
  * The full 3-tool catalog, one schema block per tool, each with its OWN
  * parameter list and a complete example call in the repo XML contract — so a
  * function name and its parameter vocabulary are welded together (E4's
@@ -148,9 +137,7 @@ export function renderPacketToolCatalog(notePath: string = NOTE_PATH): string {
   return TOOL_DEFS.map((tool) => {
     const params = tool.params
       .map((param) => {
-        const description =
-          PARAM_DESCRIPTION_FIXES[param.description] ??
-          param.description.replace('Target note path.', `the target note: ${notePath}`)
+        const description = param.description.replace('Target note path.', `the target note: ${notePath}`)
         return `  ${param.name} (${param.type}${param.required ? ', required' : ', optional'}): ${description}`
       })
       .join('\n')

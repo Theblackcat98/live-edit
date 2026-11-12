@@ -1,7 +1,7 @@
 import { AudioLines } from 'lucide-react'
 import type { PipelineStage } from '../types'
+import { modeDef } from '../lib/modes'
 import type { RunMode } from '../lib/runmode'
-import { chatModelShort } from '../lib/runmode'
 import { cx, formatElapsed } from '../lib/utils'
 import { Waveform, type WaveMode } from './Waveform'
 
@@ -29,7 +29,6 @@ export function VisualPanel({
 }: VisualPanelProps) {
   const stageActive =
     stage === 'routing' ||
-    stage === 'grounding' ||
     stage === 'generating' ||
     stage === 'verifying' ||
     stage === 'executing'
@@ -70,7 +69,7 @@ export function VisualPanel({
             {micActive
               ? 'Listening'
               : speaking
-                ? `${chatModelShort(mode)} speaking`
+                ? `${modeDef(mode).chat.short} speaking`
                 : stageActive
                   ? 'Working'
                   : micOn

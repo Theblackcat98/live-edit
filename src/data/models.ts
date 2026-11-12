@@ -1,13 +1,12 @@
-import type { RunMode } from '../lib/runmode'
 import type { ModelInfo } from '../types'
 
 // Specs are ground truth from scripts/start-models.sh: quant files, mmproj
 // adapters, and each server's -c context window. The roster a mode actually
-// runs is rosterFor(mode) — never a static trinity, so the Runtime rail shows
-// the models serving the active mode.
+// runs is `MODES[mode].roster` in src/lib/modes.ts — never a static trinity,
+// so the Runtime rail shows the models serving the active mode.
 
 /** The default interface: LFM3-Audio-2B on :8086 (-c 128000). */
-const AUDIO_INTERFACE: ModelInfo = {
+export const AUDIO_INTERFACE: ModelInfo = {
   id: 'audio',
   flow: 'omni',
   role: 'Interface',
@@ -23,7 +22,7 @@ const AUDIO_INTERFACE: ModelInfo = {
 }
 
 /** The legacy interface: LFM3-Omni-2B on :8083 (-c 32000). */
-const OMNI_INTERFACE: ModelInfo = {
+export const OMNI_INTERFACE: ModelInfo = {
   id: 'omni',
   flow: 'omni',
   role: 'Interface · legacy',
@@ -38,10 +37,10 @@ const OMNI_INTERFACE: ModelInfo = {
     'The legacy omni-mode front door (chats, ASR, TTS). Not part of the default roster.',
 }
 
-const D1_CHECK: ModelInfo = {
+export const D1_CHECK: ModelInfo = {
   id: 'd1',
   flow: 'd1',
-  role: 'Supervisor',
+  role: 'Safety check',
   shortName: 'd1 Omni 2B',
   name: 'd1-Omni-2B',
   params: '2.17B',
@@ -53,7 +52,7 @@ const D1_CHECK: ModelInfo = {
 }
 
 /** LFM3-1.7B on :8080 (-c 128000). */
-const WORKER: ModelInfo = {
+export const WORKER: ModelInfo = {
   id: 'worker',
   flow: 'worker',
   role: 'Worker',
@@ -68,15 +67,7 @@ const WORKER: ModelInfo = {
 }
 
 /** The worker-chat role label: the 1.7B answers chat AND authors calls there. */
-const WORKER_CHAT: ModelInfo = { ...WORKER, role: 'Chat + Worker' }
-
-/** The models a run mode actually runs, display order. */
-export function rosterFor(mode: RunMode): ModelInfo[] {
-  if (mode === 'audio') return [AUDIO_INTERFACE, D1_CHECK, WORKER]
-  if (mode === 'omni') return [OMNI_INTERFACE, D1_CHECK, WORKER]
-  if (mode === 'worker-d1') return [WORKER_CHAT, D1_CHECK]
-  return [WORKER_CHAT]
-}
+export const WORKER_CHAT: ModelInfo = { ...WORKER, role: 'Chat + Worker' }
 
 /** Weights+adapter footprint of a roster (each model counted once). */
 export function rosterMemoryGB(models: ModelInfo[]): number {

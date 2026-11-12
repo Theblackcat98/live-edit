@@ -45,7 +45,7 @@ function makeEditRun(
       verbatim: null,
       constraints: [],
     },
-    timings: { route: 1, ground: 1, generate: 1, critic: 1, execute: 1, total: 5 },
+    timings: { route: 1, generate: 1, critic: 1, execute: 1, total: 4 },
     status: 'verified',
     outputTokens: 10,
     promptTokens: 100,

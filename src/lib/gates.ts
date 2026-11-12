@@ -1,4 +1,4 @@
-import type { SpanTarget, ToolDefinition, WorkerCall } from '../types'
+import type { ToolDefinition, WorkerCall } from '../types'
 import { TOOL_DEFS } from '../data/tools'
 import { normalizeWhitespace, splitLines } from './doc'
 
@@ -117,32 +117,24 @@ export function checkBounds(note: string, call: WorkerCall): GateCheckResult | n
 /**
  * Anchor-exactness gate (design.md §8): the call's anchor (`old_text_anchor`
  * for `edit_text`, `target_excerpt` for `remove_text`) must match the current
- * lines at the stated range, whitespace-normalized.
- *
- * `expected` overrides the comparison source: the supervisor path passes its
- * grounded span excerpt so a self-consistent invented range (worker invents a
- * range and copies its own text) still fails — today's span-validated
- * semantics, audit TD-01. Without it the note's own lines at the range are the
- * source (the worker-grounds-itself world of design.md §8). Other tools have
- * no range anchor — null means "no check applies".
+ * lines at the stated range, whitespace-normalized. The worker grounds its own
+ * span, so the note's own lines are always the comparison source. Other tools
+ * have no range anchor — null means "no check applies".
  */
-export function checkAnchor(note: string, call: WorkerCall, expected?: string): GateCheckResult | null {
+export function checkAnchor(note: string, call: WorkerCall): GateCheckResult | null {
   if (call.name !== 'edit_text' && call.name !== 'remove_text') return null
   const lines = splitLines(note)
   const start = Number(call.params.start_line)
   const end = Number(call.params.end_line)
   const current = lines.slice(start - 1, end).join('\n')
   const anchor = call.name === 'edit_text' ? call.params.old_text_anchor : call.params.target_excerpt
-  const source = expected !== undefined ? expected : current
-  const pass = normalizeWhitespace(source) === normalizeWhitespace(anchor)
+  const pass = normalizeWhitespace(current) === normalizeWhitespace(anchor)
   return {
     gate: 'anchor_exact',
     pass,
     detail: pass
-      ? expected !== undefined
-        ? 'old_text_anchor matches the grounded span exactly.'
-        : 'old_text_anchor matches the current lines exactly.'
-      : 'Anchor drifted from the grounded span.',
+      ? 'old_text_anchor matches the current lines exactly.'
+      : 'Anchor drifted from the note lines at the stated range.',
   }
 }
 
@@ -192,19 +184,15 @@ export function checkBlastRadius(note: string, call: WorkerCall): GateCheckResul
  * gates are skipped; then bounds — anchor and blast radius read the note
  * through the call's range, so they run only against an in-bounds range (the
  * same short-circuit the critic path has always used).
- *
- * `span` (when a caller has a grounded span, as the supervisor path does)
- * makes the anchor gate compare against the span excerpt — audit TD-01
- * semantics — rather than the call's own range.
  */
-export function runHardGates(note: string, call: WorkerCall, span?: SpanTarget): HardGateResult {
+export function runHardGates(note: string, call: WorkerCall): HardGateResult {
   const checks: GateCheckResult[] = [...checkSchema(call)]
   if (checks.every((check) => check.pass)) {
     const bounds = checkBounds(note, call)
     if (bounds) {
       checks.push(bounds)
       if (bounds.pass) {
-        const anchor = checkAnchor(note, call, span?.excerpt)
+        const anchor = checkAnchor(note, call)
         if (anchor) checks.push(anchor)
         const blast = checkBlastRadius(note, call)
         if (blast) checks.push(blast)

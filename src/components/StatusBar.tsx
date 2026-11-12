@@ -1,7 +1,7 @@
 import { ShieldCheck } from 'lucide-react'
 import type { PipelineStage, RuntimeHealth, Trace } from '../types'
+import { modeDef } from '../lib/modes'
 import type { RunMode } from '../lib/runmode'
-import { transcribingModel } from '../lib/runmode'
 import { cx } from '../lib/utils'
 interface StatusBarProps {
   stage: PipelineStage
@@ -16,10 +16,9 @@ interface StatusBarProps {
 
 const STAGE_LABEL: Record<PipelineStage, string> = {
   idle: 'Ready',
-  routing: 'd1 · routing intent',
-  grounding: 'd1 · grounding span',
+  routing: 'Reading the command',
   generating: '1.7B · generating call',
-  verifying: 'd1 · critic pass',
+  verifying: 'd1 · safety check',
   executing: 'Engine · applying diff',
   complete: 'Committed',
 }
@@ -29,7 +28,8 @@ function statusLabel(stage: PipelineStage, trace: Trace | null): string {
   if (stage === 'complete' && trace) {
     if (trace.status === 'clarify') return 'Clarification requested'
     if (trace.status === 'conversational') return 'Conversation only'
-    if (trace.status === 'rejected') return 'Call held by d1'
+    if (trace.status === 'pending') return 'Waiting for your decision'
+    if (trace.status === 'rejected') return 'Held before writing'
     if (trace.status === 'failed') return 'Run stopped'
     return 'Committed · verified'
   }
@@ -40,7 +40,7 @@ function statusTone(stage: PipelineStage, trace: Trace | null): string {
   if (stage === 'idle') return 'is-green'
   if (stage === 'complete' && trace) {
     if (trace.status === 'rejected' || trace.status === 'failed') return 'is-red'
-    if (trace.status === 'clarify') return 'is-orange'
+    if (trace.status === 'clarify' || trace.status === 'pending') return 'is-orange'
     return 'is-green'
   }
   return 'is-accent is-pulsing'
@@ -57,7 +57,7 @@ export function StatusBar({ stage, trace, micOn, micActive, asrBusy, runtimeHeal
   const totalEndpoints = runtimeHealth?.endpoints.length ?? 4
   const liveTone =
     !runtimeHealth ? 'statusbar-muted' : upCount === totalEndpoints ? 'is-green' : 'is-orange'
-  const asrModel = transcribingModel(mode)
+  const asrModel = modeDef(mode).chat.transcriber
   // Honest three-state: a turn between utterances is not a live capture.
   const micLabel = asrBusy
     ? `${asrModel ?? 'ASR'} · transcribing`
@@ -109,10 +109,7 @@ export function StatusBar({ stage, trace, micOn, micActive, asrBusy, runtimeHeal
           route <span className="mono">{formatMs(trace?.timings.route)}</span>
         </span>
         <span className="statusbar-metric">
-          ground <span className="mono">{formatMs(trace?.timings.ground)}</span>
-        </span>
-        <span className="statusbar-metric">
-          critic <span className="mono">{formatMs(trace?.timings.critic)}</span>
+          check <span className="mono">{formatMs(trace?.timings.critic)}</span>
         </span>
         <span className="statusbar-sep">/</span>
         <span className="statusbar-version mono">v0.9.0</span>

@@ -32,7 +32,7 @@ function run(partial: Partial<Trace>): Trace {
     promptTokens: 0,
     noteTokensAtStart: 0,
     workerNoteView: '',
-    timings: { route: 0, ground: 0, generate: 0, critic: 0, execute: 0, total: 0 },
+    timings: { route: 0, generate: 0, critic: 0, execute: 0, total: 0 },
     ...partial,
   } as Trace
 }
