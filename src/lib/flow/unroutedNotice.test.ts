@@ -14,7 +14,7 @@ describe('unroutedEditNotice', () => {
   it('says nothing changed when d1 saw an edit below the confidence threshold', () => {
     const notice = unroutedEditNotice({ intent: 'edit', confidence: 0.42 })
     expect(notice).toMatch(/^Nothing was changed/)
-    expect(notice).toMatch(/edit request but with low confidence \(0\.42, needs 0\.50\)/)
+    expect(notice).toMatch(/an edit request but with low confidence \(0\.42, needs 0\.50\)/)
   })
 
   it('says nothing changed for an ambiguous turn', () => {

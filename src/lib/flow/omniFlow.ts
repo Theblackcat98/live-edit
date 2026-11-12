@@ -363,7 +363,8 @@ export function unroutedEditNotice(route: {
   }
   if (route.intent !== ROUTE_CONVERSATIONAL) {
     const conf = route.confidence === null ? 'unreported' : route.confidence.toFixed(2)
-    return `Nothing was changed: d1 read this as a ${route.intent} request but with low confidence (${conf}, needs ${ROUTE_CONFIDENCE_MIN.toFixed(2)}). Say exactly what to change to try again.`
+    const article = /^[aeiou]/.test(route.intent) ? 'an' : 'a'
+    return `Nothing was changed: d1 read this as ${article} ${route.intent} request but with low confidence (${conf}, needs ${ROUTE_CONFIDENCE_MIN.toFixed(2)}). Say exactly what to change to try again.`
   }
   return null
 }

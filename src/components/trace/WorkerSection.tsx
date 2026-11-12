@@ -111,9 +111,11 @@ export function WorkerSection({ trace }: { trace: Trace }) {
         </div>
       ) : (
         <p className="trace-muted">
-          {trace.status === 'conversational' || trace.status === 'clarify'
-            ? 'No edit was requested, so the worker did not run.'
-            : 'No worker call — the run stopped before generation.'}
+          {trace.d1Route && !trace.d1Route.routesToWorker
+            ? 'd1 did not route this turn to the worker (see Routing), so it did not run.'
+            : trace.status === 'conversational' || trace.status === 'clarify'
+              ? 'No edit was requested, so the worker did not run.'
+              : 'No worker call — the run stopped before generation.'}
         </p>
       )}
     </TraceSection>
