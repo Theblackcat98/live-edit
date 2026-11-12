@@ -40,6 +40,7 @@ import {
 } from '../lib/pending'
 import { noteHash } from '../lib/context'
 import { executeTool } from '../lib/tools'
+import { useToasts } from './useToasts'
 
 const initialNoteTokens = estimateTokens(INITIAL_NOTE)
 const INITIAL_CONTEXT: ContextUsage = {
@@ -215,7 +216,7 @@ export function useWorkspace(): WorkspaceApi {
   const [contextUsage, setContextUsage] = useState<ContextUsage>(INITIAL_CONTEXT)
   const [sourceMode, setSourceMode] = useState(false)
   const [commandInput, setCommandInput] = useState('')
-  const [toast, setToast] = useState<Toast | null>(null)
+  const { toast, notify, dismissToast } = useToasts()
   const [traceOpen, setTraceOpen] = useState(false)
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null)
   const [demoRunning, setDemoRunning] = useState(false)
@@ -248,8 +249,6 @@ export function useWorkspace(): WorkspaceApi {
   const flowModelRef = useRef<ActiveModel>(null)
   const idleTimerRef = useRef<number | null>(null)
   const highlightTimerRef = useRef<number | null>(null)
-  const toastTimerRef = useRef<number | null>(null)
-  const toastCounter = useRef(0)
   const recorderRef = useRef<VoiceRecorder | null>(null)
   const speechTokenRef = useRef(0)
   const demoRunningRef = useRef(false)
@@ -325,15 +324,6 @@ export function useWorkspace(): WorkspaceApi {
     return () => window.clearInterval(timer)
   }, [sessionStart])
 
-  useEffect(() => {
-    if (!toast) return
-    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current)
-    toastTimerRef.current = window.setTimeout(() => setToast(null), 4600)
-    return () => {
-      if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current)
-    }
-  }, [toast])
-
   const refreshRuntime = useCallback(async () => {
     const health = await probeRuntime()
     healthRef.current = health
@@ -347,16 +337,6 @@ export function useWorkspace(): WorkspaceApi {
     }, 10_000)
     return () => window.clearInterval(timer)
   }, [refreshRuntime])
-
-  const notify = useCallback(
-    (title: string, detail?: string, tone: Toast['tone'] = 'neutral') => {
-      toastCounter.current += 1
-      setToast({ id: toastCounter.current, title, detail, tone })
-    },
-    [],
-  )
-
-  const dismissToast = useCallback(() => setToast(null), [])
 
   const addMessage = useCallback(
     (message: Omit<Message, 'id' | 'at'> & { at?: number; id?: string }) => {
@@ -1218,7 +1198,6 @@ export function useWorkspace(): WorkspaceApi {
       stopSpeaking()
       if (idleTimerRef.current) window.clearTimeout(idleTimerRef.current)
       if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current)
-      if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current)
     }
   }, [])
 
