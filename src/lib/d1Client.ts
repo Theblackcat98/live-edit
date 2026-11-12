@@ -6,7 +6,7 @@
 import type { D1Answer } from '../types'
 import { isRecord, readNumber, readString } from './utils'
 import { BridgeError, ENDPOINTS, fetchJson, modelUrl } from './endpoints'
-import { usageOf, type TokenUsage } from './chatClient'
+import { usageOf, type TokenUsage } from './completion'
 
 export type D1Question =
   | { type: 'choice'; instructions: string; criteria: Record<string, string> }

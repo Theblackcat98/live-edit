@@ -5,7 +5,7 @@
 
 import { isRecord, readString } from './utils'
 import { BridgeError, ENDPOINTS, fetchJson, modelUrl } from './endpoints'
-import { usageOf, type TokenUsage } from './chatClient'
+import { usageOf, type TokenUsage } from './completion'
 
 export interface TranscriptResult {
   text: string
