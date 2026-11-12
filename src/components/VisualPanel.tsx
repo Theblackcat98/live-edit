@@ -29,7 +29,6 @@ export function VisualPanel({
 }: VisualPanelProps) {
   const stageActive =
     stage === 'routing' ||
-    stage === 'grounding' ||
     stage === 'generating' ||
     stage === 'verifying' ||
     stage === 'executing'

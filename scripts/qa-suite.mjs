@@ -652,18 +652,13 @@ async function main() {
    * - `call.sampler` present: a live 1.7B decode authored the call — the
    *   deleted template emitter's calls carry no sampler (types.ts WorkerCall);
    * - `call.toolSchemasInjected === 3`: the full tool catalog traveled with
-   *   the prompt (design.md §6), not the supervisor's single-schema handoff;
-   * - `route`/`grounding` absent: no supervisor-era RouteDecision and no
-   *   d1-span/fallback-keyword grounding record — grounding is the worker's
-   *   job now (plan §7.3 deletes findSpanForMutation & friends).
+   *   the prompt (design.md §6), not a single-schema handoff.
    */
   function workerAuthored(run) {
     return Boolean(
       run?.directive &&
       run?.call?.sampler &&
-      run?.call?.toolSchemasInjected === 3 &&
-      run?.route == null &&
-      run?.grounding == null,
+      run?.call?.toolSchemasInjected === 3,
     )
   }
 

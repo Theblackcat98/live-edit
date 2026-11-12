@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatP, pAdopted } from './utils'
+import { clamp, formatP } from './utils'
 
 describe('probability display helper (audit TD-03)', () => {
   it('formats measured probabilities to two decimals', () => {
@@ -13,16 +13,15 @@ describe('probability display helper (audit TD-03)', () => {
   })
 })
 
-describe('adoption gate: null satisfies adoption (audit TD-04)', () => {
-  it('an unreported score adopts — the decision was made, only its p was not measured', () => {
-    expect(pAdopted(null, 0.25)).toBe(true)
-    expect(pAdopted(undefined, 0.25)).toBe(true)
+describe('clamp', () => {
+  it('keeps values inside the bounds untouched', () => {
+    expect(clamp(0.5, 0, 1)).toBe(0.5)
+    expect(clamp(25, 1, 100)).toBe(25)
   })
 
-  it('a measured score must clear the threshold', () => {
-    expect(pAdopted(0.26, 0.25)).toBe(true)
-    expect(pAdopted(0.25, 0.25)).toBe(false)
-    expect(pAdopted(0.1, 0.25)).toBe(false)
+  it('pins values at the nearest bound', () => {
+    expect(clamp(-3, 0, 1)).toBe(0)
+    expect(clamp(4, 0, 1)).toBe(1)
   })
 })
 

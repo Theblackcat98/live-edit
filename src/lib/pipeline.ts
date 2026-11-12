@@ -205,7 +205,7 @@ function makeTrace(command: string, source: 'text' | 'voice' | 'demo', note: str
     at: Date.now(),
     command,
     source,
-    timings: { route: 0, ground: 0, generate: 0, critic: 0, execute: 0, total: 0 },
+    timings: { route: 0, generate: 0, critic: 0, execute: 0, total: 0 },
     status: 'running',
     outputTokens: 0,
     promptTokens: estimateTokens(note) + 180,
@@ -318,7 +318,6 @@ export async function runPipelineTurn(
     traceLocal.timings.total = Number(
       (
         traceLocal.timings.route +
-        traceLocal.timings.ground +
         traceLocal.timings.generate +
         traceLocal.timings.critic +
         traceLocal.timings.execute +

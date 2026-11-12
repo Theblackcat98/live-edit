@@ -17,7 +17,6 @@ interface StatusBarProps {
 const STAGE_LABEL: Record<PipelineStage, string> = {
   idle: 'Ready',
   routing: 'd1 · routing intent',
-  grounding: 'd1 · grounding span',
   generating: '1.7B · generating call',
   verifying: 'd1 · critic pass',
   executing: 'Engine · applying diff',
@@ -107,9 +106,6 @@ export function StatusBar({ stage, trace, micOn, micActive, asrBusy, runtimeHeal
       <div className="statusbar-right">
         <span className="statusbar-metric">
           route <span className="mono">{formatMs(trace?.timings.route)}</span>
-        </span>
-        <span className="statusbar-metric">
-          ground <span className="mono">{formatMs(trace?.timings.ground)}</span>
         </span>
         <span className="statusbar-metric">
           critic <span className="mono">{formatMs(trace?.timings.critic)}</span>

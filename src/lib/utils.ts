@@ -12,16 +12,6 @@ export function formatP(value: number | null | undefined): string {
   return typeof value === 'number' ? value.toFixed(2) : '—'
 }
 
-/**
- * Adoption-level gate: does this score justify keeping the choice it belongs
- * to? An unreported score (`null`) satisfies adoption — the decision was made,
- * only its probability was not measured — while a measured score must clear
- * the threshold. Heuristic floors use the same check.
- */
-export function pAdopted(p: number | null | undefined, threshold: number): boolean {
-  return p == null ? true : p > threshold
-}
-
 export function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }

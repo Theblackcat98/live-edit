@@ -5,11 +5,6 @@ export type ToolName =
   | 'edit_text'
   | 'remove_text'
 
-export type ActionClass =
-  | 'conversational_only'
-  | 'file_mutation'
-  | 'ambiguous_request'
-
 export type RunStatus =
   | 'running'
   | 'clarify'
@@ -27,7 +22,6 @@ export type RunStatus =
 export type PipelineStage =
   | 'idle'
   | 'routing'
-  | 'grounding'
   | 'generating'
   | 'verifying'
   | 'executing'
@@ -59,62 +53,12 @@ export interface ToolDefinition {
  */
 export type Probability = number | null
 
-export interface ToolScore {
-  name: ToolName
-  /** d1's measured probability, the local router's flat heuristic, or null (unreported). */
-  p: Probability
-}
-
-export interface RouteDecision {
-  action: ActionClass
-  /** d1's measured confidence, the local router's flat heuristic, or null (unreported). */
-  actionConfidence: Probability
-  allowedTools: ToolScore[]
-  primaryTool?: ToolName
-  reason: string
-  directive?: 'undo' | 'redo'
-}
-
 /**
- * Which path resolved the target span: d1-Omni's typed span question over
- * /v1/systemone (`d1-span`), or the deterministic supervisor search
- * (`fallback-keyword` — keyword/quote/ordinal/line reference, or the literal
- * pre-empts that never need a model call). The trace records it so a run's
- * provenance is auditable.
+ * Who produced a rejected-call record: the worker itself (its call failed the
+ * gates or the safety check) or the user at pending-edit adjudication. The
+ * rejected-traces log records it so each refusal's provenance is auditable.
  */
-export type GroundingSource = 'd1-span' | 'fallback-keyword' | 'worker-self' | 'pending-adjudication'
-
-export interface GroundingRecord {
-  source: GroundingSource
-  /** d1-Omni probability for the chosen candidate (live path only); null when unreported. */
-  p?: Probability
-  /** 1-based first line of the resolved span. */
-  chosenLine?: number
-  /** Structural candidates the grounding question offered. */
-  candidateCount?: number
-  /** Why the deterministic fallback ran, when it did. */
-  detail?: string
-}
-
-export interface CriticCheck {
-  label: string
-  pass: boolean
-  detail?: string
-}
-
-export interface CriticResult {
-  verdict: 'verified' | 'rejected'
-  /**
-   * d1's measured semantic score (live overlay only). The local critic never
-   * invents one: null means unreported, and the verdict tracks the local
-   * checks alone — numbers never gate a local decision.
-   */
-  pCorrect: Probability
-  /** Same semantics as pCorrect; no local path measures a safety probability. */
-  pSafe: Probability
-  checks: CriticCheck[]
-  feedback?: string
-}
+export type GroundingSource = 'worker-self' | 'pending-adjudication'
 
 /** Sampler settings actually sent with a live worker decode. */
 export interface WorkerSampler {
@@ -169,7 +113,6 @@ export interface RejectedTraceRecord {
 
 export interface TraceTimings {
   route: number
-  ground: number
   generate: number
   critic: number
   execute: number
@@ -243,11 +186,7 @@ export interface Trace {
   runMode?: RunMode
   /** Omni's typed delegation directive (P2+; absent on legacy/supervisor-first traces). */
   directive?: Directive
-  route?: RouteDecision
-  /** How the span was resolved (d1 typed question vs deterministic search). */
-  grounding?: GroundingRecord
   call?: WorkerCall
-  critic?: CriticResult
   /** The d1 safety-check result (P4+; Omni-first traces only — legacy traces carry `critic`). */
   d1Check?: D1CheckResult
   /** Omni tool-call repair diagnostics (Omni-first traces only; mirrors OmniTurnResult.repair). */

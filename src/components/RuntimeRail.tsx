@@ -26,7 +26,7 @@ import type {
 } from '../types'
 import { rosterFor, rosterMemoryGB, MEMORY_BUDGET_GB } from '../data/models'
 import { runModeInfo, chatModelName, transcribingModel, type RunMode } from '../lib/runmode'
-import { cx, formatP, relativeTime } from '../lib/utils'
+import { cx, relativeTime } from '../lib/utils'
 import { ModeSwitch } from './ModeSwitch'
 
 interface RuntimeRailProps {
@@ -441,14 +441,6 @@ function SupervisorCard({
   stageStates: Record<StageId, StageState>
   openTrace: () => void
 }) {
-  const route = trace?.route
-  const critic = trace?.critic
-  const actionTone =
-    route?.action === 'file_mutation'
-      ? 'chip-accent'
-      : route?.action === 'ambiguous_request'
-        ? 'chip-orange'
-        : 'chip-green'
   const running = Object.values(stageStates).some((state) => state === 'running')
 
   return (
@@ -483,36 +475,7 @@ function SupervisorCard({
           state={stageStates.A}
           timing={trace?.timings.route}
         >
-          {route ? (
-            <div className="sup-stage-data">
-              <div className="sup-chip-row">
-                <span className={cx('chip', actionTone)}>{route.action.replace(/_/g, ' ')}</span>
-                <span
-                  className="chip chip-ghost mono"
-                  title="measured by d1 · heuristic (local) · — unreported"
-                >
-                  P {formatP(route.actionConfidence)}
-                </span>
-              </div>
-              {route.allowedTools.length > 0 && (
-                <div className="sup-tools">
-                  {route.allowedTools.slice(0, 2).map((tool) => (
-                    <span key={tool.name} className="sup-tool mono">
-                      {tool.name}
-                      <span>{formatP(tool.p)}</span>
-                    </span>
-                  ))}
-                </div>
-              )}
-              <span className="sup-muted mono">
-                {route.actionConfidence === null && route.allowedTools.every((tool) => tool.p === null)
-                  ? 'unreported'
-                  : trace?.runtime?.route === 'live'
-                    ? 'measured by d1'
-                    : 'local heuristic'}
-              </span>
-            </div>
-          ) : stageStates.A === 'running' ? (
+          {stageStates.A === 'running' ? (
             <span className="sup-running">Classifying action_required…</span>
           ) : stageStates.A === 'skipped' ? (
             <span className="sup-muted">No routing pass for this turn.</span>
@@ -525,7 +488,6 @@ function SupervisorCard({
           letter="B"
           title="GROUND"
           state={stageStates.B}
-          timing={trace?.timings.ground}
         >
           {stageStates.B === 'running' ? (
             <span className="sup-running">Extracting span…</span>
@@ -543,36 +505,7 @@ function SupervisorCard({
           timing={trace?.timings.critic}
           last
         >
-          {critic ? (
-            <div className="sup-stage-data">
-              <div className="sup-prob-row">
-                <span className="sup-prob">
-                  <span className="mono">P(correct)</span>
-                  <strong className="mono">{formatP(critic.pCorrect)}</strong>
-                </span>
-                <span className="sup-prob">
-                  <span className="mono">safe</span>
-                  <strong className="mono">{formatP(critic.pSafe)}</strong>
-                </span>
-                <span
-                  className={cx(
-                    'chip',
-                    critic.verdict === 'verified' ? 'chip-green' : 'chip-red',
-                  )}
-                >
-                  {critic.verdict === 'verified' ? 'verified' : 'held'}
-                </span>
-              </div>
-              <div className="sup-checks mono">
-                {critic.checks.filter((check) => check.pass).length}/{critic.checks.length} checks pass
-              </div>
-              <span className="sup-muted mono">
-                {critic.pCorrect === null
-                  ? 'local gates only · p unreported'
-                  : 'p measured by d1'}
-              </span>
-            </div>
-          ) : stageStates.C === 'running' ? (
+          {stageStates.C === 'running' ? (
             <span className="sup-running">Scoring proposed XML call…</span>
           ) : stageStates.C === 'skipped' ? (
             <span className="sup-muted">Critic bypassed — no worker call.</span>
