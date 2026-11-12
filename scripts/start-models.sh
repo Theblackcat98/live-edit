@@ -1,5 +1,6 @@
 #!/bin/bash
-# Start the four llama.cpp servers LiquidScribe needs, headless (--no-webui),
+# Start all four llama.cpp servers LiquidScribe can use (each run mode needs a
+# subset; pass member names to model-manager.mjs to start fewer), headless (--no-webui),
 # in the background. Idempotent: a member already answering is left alone.
 #
 #   LFM3-Omni-2B   :8083  chat + ASR (legacy front door)
