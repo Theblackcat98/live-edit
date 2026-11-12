@@ -13,11 +13,14 @@ import {
   Sparkles,
   X,
 } from 'lucide-react'
-import type { ExchangeMessage, RejectedTraceRecord, Trace, TurnExchange, TurnHold } from '../types'
+import type { ExchangeMessage, RejectedTraceRecord, Trace, TurnExchange } from '../types'
 import { modeDef } from '../lib/modes'
 import type { RunMode } from '../lib/runmode'
 import { cx, pad, truncate } from '../lib/utils'
 import { Download } from 'lucide-react'
+import { TraceSummaryCells } from './trace/TraceSummaryCells'
+import { D1CheckSection } from './trace/D1CheckSection'
+import { HoldSection } from './trace/HoldSection'
 
 interface TraceDrawerProps {
   rejectedTraces: RejectedTraceRecord[]
@@ -100,17 +103,6 @@ function XmlView({ xml }: { xml: string }) {
       })}
     </div>
   )
-}
-
-/** Head-line for a turn that stopped or was held before execution (§8/§9). */
-const HOLD_TITLES: Record<TurnHold['kind'], string> = {
-  'hard-gate': 'Stopped by a hard gate — not overridable',
-  'blast-radius': 'Blast-radius limit — held for your decision',
-  'blast-collapse': 'Section-scale collapse (§8) — held for your decision',
-  'no-decision-model': 'No decision model in this mode — held for your decision',
-  engine: 'The engine refused this call',
-  outcome: 'Outcome check failed — nothing was written',
-  d1: 'Safety check — held for your decision',
 }
 
 function ExchangeMessagesView({ messages }: { messages: ExchangeMessage[] }) {
@@ -423,61 +415,11 @@ export function TraceDrawer({ open, trace, runs, rejectedTraces, mode, onSelectR
             </div>
             {tab === 'decision' ? (
               <>
-            <div className="trace-summary-grid">
-              <div className="trace-summary-cell">
-                <span className="mono">tool</span>
-                <strong>{trace.call?.name ?? '—'}</strong>
-              </div>
-              <div className="trace-summary-cell">
-                <span className="mono">d1 check</span>
-                <strong>{trace.d1Check?.verdict ?? '—'}</strong>
-              </div>
-              <div className="trace-summary-cell">
-                <span className="mono">total</span>
-                <strong>{trace.timings.total ? `${Math.round(trace.timings.total)} ms` : '—'}</strong>
-              </div>
-            </div>
+            <TraceSummaryCells trace={trace} />
 
-            {trace.d1Check && trace.d1Check.verdict !== 'approved' && (
-              <div className="trace-verdict">
-                <span className="trace-verdict-icon" aria-hidden="true">
-                  <X size={11} />
-                </span>
-                <div>
-                  <strong>
-                    {trace.d1Check.verdict === 'unavailable'
-                      ? 'Safety check unavailable — held for your decision'
-                      : 'Safety check disapproved — held for your decision'}
-                  </strong>
-                  <p>{trace.d1Check.reason}</p>
-                  <span className="trace-verdict-meta mono">
-                    match {trace.d1Check.noul === null ? 'unreported' : trace.d1Check.noul.toFixed(2)} ·
-                    safety {trace.d1Check.destructiveSafety ?? 'unreported'} · pending edit · note untouched
-                  </span>
-                </div>
-              </div>
-            )}
+            {trace.d1Check && <D1CheckSection check={trace.d1Check} />}
 
-            {trace.hold && trace.hold.kind !== 'd1' && (
-              <div className="trace-verdict">
-                <span className="trace-verdict-icon" aria-hidden="true">
-                  {trace.hold.kind === 'blast-radius' || trace.hold.kind === 'blast-collapse' ? (
-                    <Gauge size={11} />
-                  ) : (
-                    <X size={11} />
-                  )}
-                </span>
-                <div>
-                  <strong>{HOLD_TITLES[trace.hold.kind]}</strong>
-                  <p>{trace.hold.reason}</p>
-                  <span className="trace-verdict-meta mono">
-                    {trace.status === 'pending'
-                      ? 'waiting under Pending edits · note untouched'
-                      : 'note untouched'}
-                  </span>
-                </div>
-              </div>
-            )}
+            {trace.hold && <HoldSection hold={trace.hold} status={trace.status} />}
 
             {trace.directive && (
               // Audio's typed delegation directive (design.md §5), recorded on
