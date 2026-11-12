@@ -14,8 +14,8 @@ export type RunStatus =
   | 'failed'
   /**
    * The run produced a pending edit (design.md §9) that awaits user
-   * adjudication; the turn is paused, not over. Phase-1 contract only —
-   * nothing produces this status yet.
+   * adjudication; the turn is paused, not over. The pipeline settles this
+   * status when a gate-passing call is held for the user.
    */
   | 'pending'
 
@@ -76,7 +76,7 @@ export interface WorkerCall {
   promptHints: string[]
   toolSchemasInjected: number
   noteView: string
-  /** Present only when a live decode produced this call; absent for template calls. */
+  /** Present only when a live decode produced this call; absent for the harness-built dictation call. */
   sampler?: WorkerSampler
 }
 
@@ -187,7 +187,7 @@ export interface Trace {
   /** Omni's typed delegation directive (P2+; absent on legacy/supervisor-first traces). */
   directive?: Directive
   call?: WorkerCall
-  /** The d1 safety-check result (P4+; Omni-first traces only — legacy traces carry `critic`). */
+  /** The d1 safety-check result (Omni-first traces; absent on worker-chat and legacy traces). */
   d1Check?: D1CheckResult
   /** Omni tool-call repair diagnostics (Omni-first traces only; mirrors OmniTurnResult.repair). */
   omniRepair?: { error: string; rawArguments: string }
@@ -250,9 +250,9 @@ export interface DelegationInfo {
   runId: string
   tool: ToolName
   /**
-   * Phase-1 additions: `checking` (hard gates / d1 check in flight) and
-   * `pending` (the edit awaits user adjudication, design.md §9). Nothing
-   * produces them yet — the old pipeline still emits only the original four.
+   * `checking` covers hard gates and the d1 check in flight; `pending` means
+   * the edit awaits user adjudication (design.md §9). Both are produced by
+   * verifyAndExecute.
    */
   status: 'generating' | 'checking' | 'pending' | 'verified' | 'executed' | 'rejected'
   /** d1's measured critic score; null/undefined hides the P chip (never invented). */
@@ -267,7 +267,7 @@ export interface Message {
   role: 'user' | 'assistant' | 'system' | 'tool'
   text: string
   at: number
-  /** Who authored an assistant bubble: the chat model's name for model text, 'harness' for pipeline templates. Absent only on legacy persisted messages. */
+  /** Who authored an assistant bubble: the chat model's name for model text, 'harness' for harness-built notices, confirmations and error copy. Absent only on legacy persisted messages. */
   author?: string
   kind?: 'greeting' | 'result' | 'error' | 'notice'
   source?: 'voice' | 'text' | 'demo'
@@ -315,11 +315,11 @@ export interface TraceRuntime {
   asr?: RuntimeSource
   /** Route decision: d1-Omni /v1/systemone, or local heuristics. */
   route: RuntimeSource
-  /** Worker XML: LFM3-1.7B /v1/chat/completions, the template emitter, or the dictation exception (harness-built call, design.md §11). */
+  /** Worker XML: LFM3-1.7B /v1/chat/completions, or the dictation exception (harness-built call, design.md §11). */
   worker: RuntimeSource | 'dictation'
-  /** Critic verdict: d1-Omni semantic pass + local checks, or local checks only. */
+  /** Safety check: d1-Omni's verdict, or local checks only when d1 is unavailable. */
   critic: RuntimeSource
-  /** Conversational reply: Omni /v1/chat/completions, or canned templates. */
+  /** Conversational reply: the mode's front-door model, or the harness error path. */
   chat: RuntimeSource
 }
 
@@ -367,10 +367,10 @@ export interface PendingClarification {
   options: MessageAction[]
 }
 
-// --- Phase-1 pipeline contracts (architecture-refactor.md §5.1) ----------------
-// Additive only: these types describe the Omni-first pipeline (design.md) so
-// later phases are type-led. Nothing produces or consumes them yet; the legacy
-// types above stay until their phase deletes them.
+// --- Omni-first pipeline contracts (architecture-refactor.md §5.1) -------------
+// These types describe the Omni-first pipeline (design.md) and are the live
+// contracts of the turn path: directives, d1 checks, pending edits, the worker
+// packet and recorded exchanges.
 
 /**
  * The Omni → worker delegation contract (design.md §5). Omni resolves the
