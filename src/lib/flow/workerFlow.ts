@@ -209,7 +209,6 @@ export async function runWorkerChatFirstTurn(
     instruction: command,
   }
   traceLocal.directive = directive
-  deps.setStageStates({ A: 'done', B: 'done', C: 'idle' })
   deps.setStage('generating')
   deps.setFlowModel('worker')
   const call = workerChatCall(
