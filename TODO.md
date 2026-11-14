@@ -6,14 +6,14 @@ and LFM3-1.7B (tool-call worker, :8080). Turns are text-only; no video or
 frames are resolved or attached. (LFM3-Omni-2B :8083 is the legacy front door;
 LFM3-VL-2B :8081 was removed from the runtime on 2026-11-08.)
 
-**Design correction (2026-11-09, interface renamed 2026-11-10):**
+**Design correction (2026-11-09, interface renamed 2026-11-10, d1 router added 2026-11-11):**
 [`docs/design.md`](docs/design.md) is the authoritative spec — **Audio-first**:
-Audio (LFM3-Audio-2B) converses and silently delegates with a typed directive,
-the 1.7B worker authors edits, d1-Omni is a safety check only, and d1
-rejections become user-adjudicated pending edits. The roles in the paragraph
-above describe the *shipped* supervisor-first pipeline, not the target design;
-the refactor is the top item under Next implementation work, and design.md
-§12/§13 are its scope and acceptance criteria.
+Audio (LFM3-Audio-2B) converses, d1-Omni routes edit turns to the worker and
+safety-checks the finished call, the 1.7B worker authors edits from the routed
+typed directive, and d1 rejections become user-adjudicated pending edits. The
+roles in the paragraph above describe the *shipped* supervisor-first pipeline,
+not the target design; the Audio-first turn loop has landed as the default
+`audio` run mode, and design.md §13 is its acceptance criteria.
 
 Landed: streaming chat with multi-turn memory and barge-in, d1 typed grounding
 (structural span extraction, 2026-11-08), persistent workspace, rejected-trace
@@ -21,8 +21,9 @@ JSONL export, "New note", §10 MVP hardening (b1693ab), the phone-width command
 surface (≤780px Session/Note/Runtime tabs + persistent composer), the
 floor-adaptive VAD gate (2026-11-08), the Omni-first pipeline (default `audio`
 run mode), user-selectable run modes (`audio` / `omni` legacy / `worker-d1` /
-`lowram`, 2026-11-09), the persistent hands-free mic toggle with barge-in, and
-the video/frame drop (text-only turns, audio-only panel, 2026-11-10).
+`lowram`, 2026-11-09), the persistent hands-free mic toggle with barge-in, the
+video/frame drop (text-only turns, audio-only panel, 2026-11-10), and the d1
+turn router that routes `audio` turns to the worker (2026-11-11).
 `npm run typecheck`, `npm run build` and `npm test` pass. The QA battery is
 **RED** — see the first item under Next implementation work; plan.md §9.6 is
 the authoritative build status for the pre-run-mode pipeline, and the §7 phase
@@ -72,13 +73,25 @@ Tracked as GitHub Issues #7 (real-mic pass) and #8 (real-speaker pass).
       27, 27b, 28, 29, 30, 31, 32, 33, 34. Last fully-green battery: 2026-11-08, 33/33,
       against the then-shipped supervisor-first pipeline — not current
       evidence. Acceptance: design.md §13 green on the current `audio` default.
-- [ ] **Close out the Audio-first refactor** (docs/design.md; phased plan:
-      docs/architecture-refactor.md). The Audio-first turn loop has landed and is
+      That 2026-11-10 run pre-dates the 2026-11-11 d1 turn router, which
+      restructured the `audio` turn (Audio answers in plain chat with tools
+      disabled; d1 routes edit turns to the worker) — its cause (1) describes
+      the pre-router flow, so the battery needs a fresh run for current
+      failures.
+- [ ] **Close out the Audio-first refactor** (docs/design.md; the phased plan
+      doc docs/architecture-refactor.md was removed 2026-11-09 and filed as
+      GitHub issues). The Audio-first turn loop has landed and is
       the default `audio` run mode: typed delegation directives (native tool
-      call + one repair retry), the worker packet (directive + last-3-edit
+      call + one repair retry on the legacy `omni` path), the worker packet
+      (directive + last-3-edit
       context packet + full line-numbered note), d1 reduced to the §7 safety
       check, the pending-edit store + ✓ / ✗ adjudication UI, and the
-      deterministic layer demoted to hard gates. What remains is acceptance:
+      deterministic layer demoted to hard gates. On 2026-11-11 the `audio`
+      turn gained the d1 route: Audio answers in plain chat (tools disabled),
+      d1 routes edit turns to the worker, and the harness builds the directive
+      from the route verdict; the §7 check itself grew to five typed questions
+      (intent clarity, target support, execution confidence joined the original
+      two). What remains is acceptance:
       the §13 battery is red (see the first item). The legacy supervisor-first
       path, `supervisor.ts`, and the `OMNI_FIRST` flag were deleted 2026-11-09
       (ahead of the green battery, at the user's call) together with the
@@ -143,15 +156,16 @@ Tracked as GitHub Issues #7 (real-mic pass) and #8 (real-speaker pass).
 - `scripts/hardware-voice-check.mjs` automates the two hardware passes over
       real mic/speakers (no fake media; `--skip-mic` / `--skip-speaker` split;
       artifacts in `/tmp/lscribe-voice/`).
-- llama.cpp servers run `--reasoning on`. The 1.7B worker gets a 3000-token
+- The 1.7B (:8080) and Audio (:8086) servers run
+      `--reasoning on --reasoning-preserve`; Omni (:8083) and d1 (:8085) do not. The 1.7B worker gets a 6000-token
       budget and two attempts because it reasons at length inside `<think>`.
       The old VL `chat_template_kwargs: {"enable_thinking": false}` path was
       removed with VL-2B; revisit that knob only if a future worker cannot
       close `<think>`.
-- The 1.7B worker decodes ~7–14 s per mutation at a 3000-token budget —
-      expected, not a hang. Two malformed attempts fall back to the
-      deterministic template emitter, so a run never fails on worker
-      availability.
+- The 1.7B worker decodes ~7–14 s per mutation —
+      expected, not a hang. Two malformed attempts end the turn with an honest
+      error and nothing written: the deterministic template emitter was deleted
+      (2026-11-09), so no fallback authors content.
 - The Vite dev server occasionally serves stale transforms after external or
       rapid file writes; `touch` the edited files or restart `npm run dev`.
 

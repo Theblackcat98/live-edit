@@ -10,7 +10,9 @@ edit the user adjudicates — plus the model-free undo lane. This supersedes the
 2026-11-08 flowchart of the shipped supervisor-first pipeline (d1 routing,
 deterministic span/content authoring). Mermaid flowchart, validated with
 `mermaid.parse()` (Mermaid 11, diagram type: flowchart-v2) on 2026-11-09. The
-target design is **not yet implemented** (design.md §12).
+target design is implemented as the default `audio` run mode; the 2026-11-10
+text-only decision and the 2026-11-11 d1 turn router amend the details below —
+see the dated notes at the top of design.md.
 
 ```mermaid
 flowchart TD

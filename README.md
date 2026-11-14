@@ -2,20 +2,22 @@
 
 > **Design: [`docs/design.md`](./docs/design.md) (2026-11-09, Audio-first per the 2026-11-10 decision) is the authoritative design spec.**
 > It corrects the architecture this README originally described: the intended design is
-> **Audio-first** — Audio converses and silently delegates, the 1.7B worker authors edits, and
-> d1-Omni is a safety check whose rejections go to the user as pending edits (✓ / ✗). That
-> Audio-first turn loop is implemented and is the default run mode; the earlier supervisor-first
+> **Audio-first** — Audio converses, d1-Omni routes edit turns to the worker and safety-checks
+> the finished call, and the 1.7B worker authors the edit; d1 rejections and unavailable checks
+> go to the user as pending edits (✓ / ✗). That routed Audio-first turn loop is implemented and
+> is the default run mode (the d1 turn router landed 2026-11-11); the earlier supervisor-first
 > pipeline and its `OMNI_FIRST` flag were deleted (2026-11-09) — there is no legacy path.
 > design.md §13 is still the acceptance target — its QA battery is not yet green (see Verification).
 
 A local-first note workspace built around the local model trinity — **LFM3-Audio-2B** as the
-only model the user talks to (conversation, ASR/TTS, and silent delegation), **LFM3-1.7B** as the
-worker that authors edits and tool calls from Audio's typed directives, and **d1-Omni-2B** as a
-zero-output-token safety check on proposed tool calls. (LFM3-Omni-2B :8083 is the legacy front
+only model the user talks to (conversation, ASR/TTS), **LFM3-1.7B** as the
+worker that authors edits and tool calls from a typed directive, and **d1-Omni-2B** as a
+zero-output-token turn router and safety check on proposed tool calls. (LFM3-Omni-2B :8083 is the legacy front
 door.) All turns are text-only; no video or frames are resolved or attached.
 
 Talk and watch the note change. In the default run mode every turn goes to Audio first;
-a delegated edit is authored by the worker as an XML tool call, checked by d1, and then applied
+when d1 routes the turn as an edit, the worker authors the edit as an XML tool call, d1's
+safety check approves it, and it is applied
 atomically to a snapshot stack — or, when d1 disapproves, shown to the user as a pending edit to
 accept or discard. The other run modes swap the chat model or drop the safety check; see
 [Run modes](#run-modes).
@@ -41,8 +43,8 @@ npm run typecheck
   diffs, document/source views, a real source editor with commit/discard, and a snapshot history.
 - **Runtime rail** — the model roster, live chat / worker / safety-check state, context budgets
   for all three views, clickable snapshots, and the run-mode switch.
-- **Decision trace** — the run mode, Audio's typed directive, the worker's thinking + raw XML,
-  the d1 check matrix, execution diff, and a timing bar.
+- **Decision trace** — the run mode, d1's route verdict (audio mode), the typed directive, the
+  worker's thinking + raw XML, the d1 check scores and verdict, execution diff, and a timing bar.
 - **Execution engine** — real `add_text`, `edit_text` and `remove_text`
   tools with anchor checks, blast-radius checks, XML round-tripping and undo/redo.
 - **Inputs** — typed commands, voice, or the guided demo.
@@ -50,9 +52,10 @@ npm run typecheck
 ## Runtime honesty
 
 > **Run modes change the roster.** The bullets below describe the default `audio` mode — the
-> Audio-first turn loop from [`docs/design.md`](./docs/design.md): Audio is the front door and
-> silently delegates, the worker authors and grounds its own call from a typed directive, and
-> d1-Omni only checks the finished proposal (a disapproval or an unavailable check becomes a
+> routed Audio-first turn loop from [`docs/design.md`](./docs/design.md): Audio is the front door
+> and answers in plain chat, d1-Omni routes edit turns to the worker (the harness builds the
+> typed directive from the route verdict), the worker authors and grounds its own call, and
+> d1-Omni safety-checks the finished proposal (a disapproval or an unavailable check becomes a
 > pending edit). In `worker-d1` the 1.7B also answers chat; in `lowram` d1 and the audio servers are
 > absent entirely. See [Run modes](#run-modes) for the per-mode endpoints.
 
@@ -76,12 +79,13 @@ switch lands immediately and offline stages degrade honestly, as before:
   `worker-d1` and `lowram` chat with `LFM3-1.7B` instead (XML tool-call protocol,
   streamed, ` thinking` stripped, one invalid-format retry); their replies are
   labelled with that author.
-- **Safety check** — `d1-Omni-2B` answers one zero-output-token approval
-  question over `/v1/systemone` for each finished tool call (directive, context
-  packet, call/diff — text only). It does not route or author
-  content.
+- **Safety check** — `d1-Omni-2B` answers five zero-output-token typed
+  questions over `/v1/systemone` for each finished tool call (directive, context
+  packet, call/diff — text only): call↔directive fit, destructive safety, intent
+  clarity, target support, execution confidence. It never authors content; in
+  `audio` it is also the turn router.
 - **Worker** — `LFM3-1.7B` authors every text-mutation XML tool call live from
-  Audio's typed directive and the context packet; the parser round-trips its
+  the typed directive and the context packet; the parser round-trips its
   output.
 - **Hard gates** — deterministic local gates (anchor exactness, blast radius,
   range bounds) are non-overridable; a refusal cannot be adjudicated. When they
@@ -97,8 +101,9 @@ endpoints (10 s cadence, refresh button) and labels each surface LIVE,
 FALLBACK or ENGINE. It also shows the active run mode and carries the same
 three-state mode switch as the TopBar — on the phone surface (≤780px) it is the
 only switch. The decision trace records which path each stage took per run. If a
-model server is down, the affected stage falls back to a local deterministic
-layer and the UI says so — nothing silently fakes a model call. Stage timings
+model server is down, the affected stage degrades honestly — the turn fails, or
+the edit is held for the user — and the trace says so; nothing silently fakes a
+model call. Stage timings
 are measured, and context budgets show real prompt-token usage when models
 answer. All turns are text-only; no camera, screen, or synthetic frames are
 resolved or attached.
@@ -107,9 +112,9 @@ resolved or attached.
 
 | Say / type | What happens |
 | --- | --- |
-| `Update the Q3 revenue row to $1.45M Final` | Audio delegates; the worker authors `edit_text`; d1 approves; the table row changes. |
+| `Update the Q3 revenue row to $1.45M Final` | d1 routes the turn to the worker; the worker authors `edit_text`; d1's check approves; the table row changes. |
 | `Remove the bullet about Redis` | Destructive safety check, then one exact line removed. |
-| `Delete that part` | Ambiguity gate: Audio asks which span, with quick reply chips. |
+| `Delete that part` | Ambiguity gate: d1 will not guess an edit; nothing is routed and the turn settles with a say-exactly-what-to-change notice. |
 | `Undo that` | Snapshot rollback bypasses the worker entirely. |
 | `Add a note about the support backlog` | Pinned insertion at the document tail. |
 | `Change the deadline in the second paragraph to Friday` | The safety check holds an over-broad replacement; nothing is written. |
@@ -131,11 +136,11 @@ Use the **Demo** button in the Live session header to run a two-command guided s
 
 ```
 src/
-  components/   visual stage, session, note workspace, runtime rail, trace drawer
-  data/         seed note, synthetic scene, model roster, tool catalog
-  lib/          run modes, Audio/worker turns, tool engine, markdown parser, speech,
+  components/   audio context panel, session, note workspace, runtime rail, trace drawer
+  data/         seed note, demo sequence, model roster, tool catalog
+  lib/          run modes, Audio/worker turns, d1 turn router, tool engine, markdown parser, speech,
                 hard gates, d1 check, pending-edit store
-  state/        orchestrator hook, history stack, context accounting
+  state/        orchestrator hook, history stack, voice and speech state
   styles/       design tokens + application styles
 ```
 
@@ -157,7 +162,7 @@ notice naming the mode and its endpoints.
 
 | Mode | Chat | Tool calls | Safety / speech |
 | --- | --- | --- | --- |
-| `audio` (default) | `LFM3-Audio-2B` :8086 | `LFM3-1.7B` :8080 authors from Audio's typed directive | `d1-Omni-2B` :8085 checks; disapproval or unavailability → pending edit. ASR/TTS :8086. |
+| `audio` (default) | `LFM3-Audio-2B` :8086 | `LFM3-1.7B` :8080 authors from the d1-routed directive | `d1-Omni-2B` :8085 routes the turn and checks; disapproval or unavailability → pending edit. ASR/TTS :8086. |
 | `omni` (legacy) | `LFM3-Omni-2B` :8083 | `LFM3-1.7B` :8080 authors from Omni's typed directive | `d1-Omni-2B` :8085 checks; disapproval or unavailability → pending edit. ASR/TTS :8083. |
 | `worker-d1` | `LFM3-1.7B` :8080 | the same 1.7B authors (XML protocol) | d1-Omni decides edit safety: approve → execute; disapprove or unavailable → pending edit. ASR/TTS ride :8085. |
 | `lowram` | `LFM3-1.7B` :8080 only | the 1.7B; deterministic hard gates + engine dry-run, then held as a pending edit | no d1 — with no decision model running, no edit executes silently, so the user approves each one. Mic disabled ("Voice needs an audio server"); TTS uses the browser voice. |
@@ -178,9 +183,10 @@ notice naming the mode and its endpoints.
   `audio` run mode, but its §13 acceptance battery is **not yet green** — the decision-quality and
   schema/validator failures recorded under Verification pre-date the run-mode work. §13 remains
   the acceptance target.
-- The repo starts the trinity with `scripts/start-models.sh` (idempotent: Audio `:8086`,
-  d1-Omni `:8085`, `LFM3-1.7B` `:8080`; `scripts/stop-models.sh` stops them). Without them the
-  affected stages run their local deterministic fallbacks and the rail's Runtime truth card shows
+- The repo starts the four model servers with `scripts/start-models.sh` (idempotent:
+  `LFM3-1.7B` `:8080`, legacy `LFM3-Omni-2B` `:8083`, d1-Omni `:8085`, Audio `:8086`;
+  `scripts/stop-models.sh` stops them). Without them the
+  affected stages degrade honestly and the rail's Runtime truth card shows
   what is down.
 - All turns are text-only. No camera, screen frames, or synthetic slides exist in the build;
   the Audio context panel shows capture status and the waveform only.
@@ -202,7 +208,8 @@ notice naming the mode and its endpoints.
 
 ## Verification
 
-`npm run typecheck`, `npm run build` and `npm test` pass. On 2026-11-08 the live
+`npm run typecheck`, `npm run build` and `npm test` pass (2026-11-13: typecheck and build clean,
+31 test files, 399 tests). On 2026-11-08 the live
 bridge was exercised in headless Chrome (CDP-driven) against the running trinity servers:
 
 - Conversational turn answered by Omni-2B (no canned-template reply).
@@ -223,7 +230,7 @@ evidence for `main`. It covered natural-phrasing template creation, chat hygiene
 phrasing, and vague-reference span grounding over live d1.
 
 See [`plan.md`](./plan.md) for the build history and [`docs/design.md`](./docs/design.md) for the
-authoritative design. The battery now targets the design.md pipeline (45 assertions); design.md
+authoritative design. The battery now targets the design.md pipeline (43 assertions); design.md
 §13 remains the acceptance target, including the README-template case on a non-empty note.
 
 On 2026-11-09, after the run-mode/mic/video drop, `npm run typecheck`, `npm run build` and
@@ -261,5 +268,5 @@ page exceptions.
 design.md §13 remains the acceptance target; no green battery is claimed here.
 
 The workspace is optimised for a desktop viewport around 1280–1600px wide. Narrower viewports collapse
-the supervisor rail first, then the visual/session column; at ≤780px the phone tab layout keeps voice
+the runtime rail first, then the visual/session column; at ≤780px the phone tab layout keeps voice
 capture and note edits one thumb away.
