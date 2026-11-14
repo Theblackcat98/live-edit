@@ -9,7 +9,9 @@ through silent delegation to the worker, the hard gates and the d1 check, and
 supersedes the 2026-11-08 state diagram of the shipped supervisor-first
 pipeline (Routing / Grounding / Critic gate states). Mermaid stateDiagram-v2,
 validated with `mermaid.parse()` (Mermaid 11, diagram type: stateDiagram) on
-2026-11-09. The target design is **not yet implemented** (design.md §12).
+2026-11-09. The target design is implemented as the default `audio` run mode;
+the 2026-11-10 text-only decision and the 2026-11-11 d1 turn router amend the
+details below — see the dated notes at the top of design.md.
 
 ```mermaid
 stateDiagram-v2

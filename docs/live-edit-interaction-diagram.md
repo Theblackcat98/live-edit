@@ -9,7 +9,9 @@ no camera or screen frames). Sequence diagram in Mermaid, validated with
 supersedes the 2026-11-08 diagram of the shipped supervisor-first pipeline:
 there is no supervisor participant in this design — the harness is plumbing
 (parsing, packets, hard gates, execution), and it never routes intent or
-authors content. The target design is **not yet implemented** (design.md §12).
+authors content. The target design is implemented as the default `audio` run
+mode; the 2026-11-10 text-only decision and the 2026-11-11 d1 turn router
+amend the details below — see the dated notes at the top of design.md.
 
 ```mermaid
 sequenceDiagram

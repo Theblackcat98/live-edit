@@ -8,7 +8,10 @@
 > supervisor-first design (d1 routing/grounding, deterministic pre-authoring) and
 > are superseded wherever they conflict with design.md.** §7 is the original
 > roadmap; §9–§10 remain valid as the build record of what actually shipped.
-> See §11 below for the correction summary.
+> See §11 below for the correction summary. (Amended since: the 2026-11-10
+> decision renames the interface to LFM3-Audio-2B and makes all turns text-only;
+> the 2026-11-11 d1 turn router routes `audio` turns to the worker — see the
+> dated notes at the top of design.md.)
 
 ## 1. Executive Summary & Core Concept
 

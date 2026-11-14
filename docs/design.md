@@ -7,23 +7,42 @@
   and the three `docs/live-edit-*.md` diagrams, wherever they conflict. Those
   documents described a **supervisor-first** pipeline (d1-Omni + a deterministic
   layer route and pre-author content; Audio chats only when nothing is edited).
-  That pipeline is what the current code implements — and it is **not** this
-  design. `plan.md` §9–§10 and `docs/repository-audit.md` remain valid as
-  historical records of the shipped build.
-- **Implementation status:** NOT yet implemented. §12 is the delta between this
-  spec and the code on `main`.
-- **Implementation plan:** [`architecture-refactor.md`](./architecture-refactor.md)
-  — the phased refactor plan (spikes first, then one stage swap per phase)
-  that executes §12. Two of its recorded decisions refine this spec: D2 adds a
-  `frame_extract` field to the §5 directive schema for `extract` tasks (to be
-  mirrored into §5 when Phase 3 lands), and D3 answers Q5 — pending edits
-  persist across reloads.
+  That pipeline was what the code implemented when this spec was written — and it is
+  **not** this design; the §12 refactor has since landed (see Implementation
+  status). `plan.md` §9–§10 remain valid as
+  historical records of the shipped build (`docs/repository-audit.md` was
+  removed on 2026-11-09 and its findings filed as issues).
+- **Implementation status:** the §12 delta has landed on `main` (the supervisor
+  pipeline, `supervisor.ts` and the `OMNI_FIRST` flag were deleted 2026-11-09;
+  the Audio-first turn loop is the default `audio` run mode; pending-edit
+  adjudication, the worker packet and the hard-gate engine are in place). What
+  remains is acceptance: the §13 QA battery is not yet green.
+- **Implementation plan:** the phased refactor plan
+  (`architecture-refactor.md`) was removed on 2026-11-09 and its items filed as
+  GitHub issues. Two of its recorded decisions refined this spec: D2's
+  `frame_extract` directive field died with the text-only decision below, and
+  D3's answer to Q5 — pending edits persist across reloads — is implemented.
 - **2026-11-10 decision — Audio-first, text-only.** The front-door model is
   LFM3-Audio-2B (:8086); LFM3-Omni-2B (:8083) is the legacy path. All turns
   are text-only: no frame is resolved or attached, `extract_visual_to_note`
   is removed from the tool contract (3 tools), and the d1 packet carries no
   image. Where this spec says "Omni", read the Audio front door unless a
   legacy `omni` run mode is named.
+- **2026-11-11 change — d1 routes the audio turn.** In the default `audio` run
+  mode the front door answers in plain chat (tools disabled) and d1-Omni (:8085)
+  routes the turn: an edit intent at/above the confidence threshold goes to the
+  worker as a harness-built directive (`instruction` is the verbatim command;
+  the worker grounds the span). Ambiguity and low confidence never route, and
+  there is still no deterministic pre-router — d1 routes *after* Audio has
+  answered, so §2.1 stands. On this path the spec's "d1 is a safety check and
+  nothing else" statements (§1, §2.4, §3's d1 row) and the Audio-authored
+  delegation (§2.2, §4's "silently delegates" edge, §5's emission mechanism)
+  apply only to the legacy `omni` run mode. The §7 check grew to five typed
+  questions —
+  `intent_clarity`, `target_support` and `execution_confidence` join the
+  original two — and approval requires all five to pass. Evidence:
+  `src/lib/d1route.ts`, `src/lib/flow/omniFlow.ts`, commits 358c428, f280645,
+  3821d5e (all merged to `main` 2026-11-11).
 
 ---
 
@@ -150,7 +169,8 @@ packet is corroboration, not the primary channel.
 
 ```jsonc
 {
-  "task": "create",            // create | insert | edit | remove | extract
+  "task": "create",            // create | insert | edit | remove (the 2026-11-10
+                               // text-only decision removed extract)
   "instruction": "Write a README template document to begin the note: title it README and give it the standard sections — overview, getting started, usage, contributing, license. The note currently holds a Q3 review; the user wants the template at the top.",
   "target": {                  // optional; the worker grounds the exact span
     "description": "top of the note, before the Q3 Business Review heading",
